@@ -9,6 +9,7 @@ from app.api.deps import get_current_user
 from app.core.permissions import can_caller_create_role
 from app.core.permissions import resolve_target_store_id
 from app.core.security import create_access_token
+from app.core.security import get_dummy_password_hash
 from app.core.security import hash_password
 from app.core.security import verify_password
 from app.db.models import Store
@@ -43,8 +44,19 @@ def register_user() -> None:
 
 @router.post("/login", response_model=TokenResponse)
 def login_user(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    user = db.scalar(select(User).where(User.email == str(payload.email).lower()))
-    if not user or not verify_password(payload.password, user.password_hash):
+    normalized_email = str(payload.email).lower()
+    user = db.scalar(select(User).where(User.email == normalized_email))
+
+    # Always run a bcrypt verify so the response timing for "user not found"
+    # matches "user found, wrong password" and we don't leak account existence.
+    if user is None:
+        verify_password(payload.password, get_dummy_password_hash())
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    if not verify_password(payload.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -56,7 +68,7 @@ def login_user(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenRes
             detail="User account is inactive",
         )
 
-    token = create_access_token(str(user.id))
+    token = create_access_token(user.id)
     return TokenResponse(access_token=token)
 
 

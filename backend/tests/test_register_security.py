@@ -134,7 +134,10 @@ class TestPublicRegisterDisabled:
 class TestCreateUserRequiresAuth:
     def test_anonymous_cannot_create_user(self, client: TestClient):
         resp = client.post("/auth/users", json=_create_user_payload(UserRole.staff))
-        assert resp.status_code == 403  # HTTPBearer returns 403 when missing
+        # S2.2 changed HTTPBearer to auto_error=False so missing credentials
+        # return 401 with WWW-Authenticate, not 403.
+        assert resp.status_code == 401
+        assert resp.headers.get("www-authenticate", "").lower() == "bearer"
 
     def test_invalid_token_is_rejected(self, client: TestClient):
         resp = client.post(

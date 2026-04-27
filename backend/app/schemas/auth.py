@@ -8,6 +8,20 @@ from pydantic import Field
 from app.db.models import UserRole
 
 
+class TokenPayload(BaseModel):
+    """Validated shape of a decoded NubeRush access token.
+
+    PyJWT does signature/claim validation; this model enforces the shape we
+    expect after decode (sub is a real UUID, claims are all present).
+    """
+
+    sub: UUID
+    exp: int
+    iat: int
+    iss: str
+    aud: str | list[str]
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str

@@ -53,6 +53,8 @@ class AuthSettings(CommonSettings):
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
+    jwt_issuer: str = "nuberush-api"
+    jwt_audience: str = "nuberush-client"
 
     @model_validator(mode="after")
     def _enforce_jwt_secret_policy(self) -> "AuthSettings":
