@@ -23,10 +23,13 @@ from uuid import UUID
 from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy import select
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import ComplianceStatus
+from app.db.models import InventoryItem
+from app.db.models import InventoryStatus
 from app.db.models import Product
 from app.db.models import ProductComplianceAuditLog
 from app.db.models import ProductVariant
@@ -369,6 +372,32 @@ def set_product_compliance(
         reason=payload.reason,
         changed_by_user=actor,
     )
+
+    # Compliance propagation (inventory_rules §6): banning a product
+    # cascades to status=quarantined on every InventoryItem linked to
+    # any of its variants, in the SAME transaction as the compliance
+    # update and audit log row above. We deliberately do NOT write
+    # InventoryLog rows here — this is a compliance event, not a
+    # stock movement; the regulatory trail lives in the audit row
+    # already added by write_compliance_audit_log.
+    #
+    # The reverse transition (banned -> allowed/restricted) does NOT
+    # auto-lift quarantines: a manager must review and lift each
+    # affected item via the inventory status endpoint.
+    if payload.compliance_status == ComplianceStatus.banned:
+        db.execute(
+            update(InventoryItem)
+            .where(
+                InventoryItem.variant_id.in_(
+                    select(ProductVariant.id).where(
+                        ProductVariant.product_id == product_id
+                    )
+                ),
+                InventoryItem.status != InventoryStatus.quarantined,
+            )
+            .values(status=InventoryStatus.quarantined)
+            .execution_options(synchronize_session="fetch")
+        )
 
     try:
         db.commit()
