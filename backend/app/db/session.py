@@ -1,0 +1,32 @@
+from collections.abc import Generator
+from functools import lru_cache
+
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker
+
+from app.core.config import get_db_settings
+
+
+@lru_cache
+def get_engine() -> Engine:
+    settings = get_db_settings()
+    return create_engine(settings.database_url, pool_pre_ping=True)
+
+
+@lru_cache
+def get_session_factory() -> sessionmaker[Session]:
+    return sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=get_engine(),
+    )
+
+
+def get_db() -> Generator[Session, None, None]:
+    db = get_session_factory()()
+    try:
+        yield db
+    finally:
+        db.close()
