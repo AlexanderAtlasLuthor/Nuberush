@@ -166,9 +166,14 @@ class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
         CheckConstraint("name <> ''", name="ck_products_name_non_empty"),
+        CheckConstraint(
+            "compliance_status != 'banned' OR allowed_for_sale = false",
+            name="ck_products_banned_implies_not_allowed_for_sale",
+        ),
         Index("ix_products_category", "category"),
         Index("ix_products_allowed_for_sale", "allowed_for_sale"),
         Index("ix_products_compliance_status", "compliance_status"),
+        Index("ix_products_is_active", "is_active"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -186,6 +191,9 @@ class Product(Base):
         nullable=False,
     )
     allowed_for_sale: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("true"), nullable=False
+    )
     hold_reason: Mapped[str | None] = mapped_column(Text)
     jurisdiction: Mapped[str] = mapped_column(String(50), server_default=text("'FL'"), nullable=False)
     last_compliance_check: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -193,6 +201,9 @@ class Product(Base):
     updated_at: Mapped[datetime] = timestamp_updated_at()
 
     variants: Mapped[list[ProductVariant]] = relationship(back_populates="product")
+    compliance_audits: Mapped[list[ProductComplianceAuditLog]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
 
 
 class ProductVariant(Base):
@@ -440,3 +451,66 @@ class OrderItem(Base):
 
     order: Mapped[Order] = relationship(back_populates="items")
     variant: Mapped[ProductVariant] = relationship(back_populates="order_items")
+
+
+class ProductComplianceAuditLog(Base):
+    """Append-only audit trail for compliance changes on a product.
+
+    Every transition of `Product.compliance_status` and every toggle of
+    `Product.allowed_for_sale` must produce one row here. The contract is
+    documented in `app.domain.products_rules` (section 4).
+    """
+
+    __tablename__ = "product_compliance_audit_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "reason <> ''",
+            name="ck_product_compliance_audit_logs_reason_non_empty",
+        ),
+        Index(
+            "ix_product_compliance_audit_logs_product_id",
+            "product_id",
+        ),
+        Index(
+            "ix_product_compliance_audit_logs_changed_by_user_id",
+            "changed_by_user_id",
+        ),
+        Index(
+            "ix_product_compliance_audit_logs_created_at",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    previous_compliance_status: Mapped[ComplianceStatus] = mapped_column(
+        Enum(ComplianceStatus, name="compliance_status", create_type=False),
+        nullable=False,
+    )
+    new_compliance_status: Mapped[ComplianceStatus] = mapped_column(
+        Enum(ComplianceStatus, name="compliance_status", create_type=False),
+        nullable=False,
+    )
+    previous_allowed_for_sale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False
+    )
+    new_allowed_for_sale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    product: Mapped[Product] = relationship(back_populates="compliance_audits")
+    changed_by_user: Mapped[User | None] = relationship()
