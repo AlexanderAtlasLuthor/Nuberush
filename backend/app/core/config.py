@@ -43,6 +43,25 @@ class AppSettings(CommonSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
+    @model_validator(mode="after")
+    def _enforce_cors_policy(self) -> "AppSettings":
+        is_development = self.app_env.strip().lower() == DEVELOPMENT_ENV
+        if is_development:
+            return self
+
+        if not self.backend_cors_origins:
+            raise ValueError(
+                "BACKEND_CORS_ORIGINS must declare at least one origin "
+                "outside development."
+            )
+
+        if "*" in self.backend_cors_origins:
+            raise ValueError(
+                "BACKEND_CORS_ORIGINS cannot contain '*' outside development."
+            )
+
+        return self
+
 
 class DatabaseSettings(CommonSettings):
     database_url: str
