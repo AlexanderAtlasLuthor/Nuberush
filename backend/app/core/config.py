@@ -1,9 +1,10 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import field_validator
 from pydantic import model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -28,7 +29,9 @@ class AppSettings(CommonSettings):
     app_name: str = "NubeRush API"
     app_env: str = DEVELOPMENT_ENV
     app_debug: bool = True
-    backend_cors_origins: list[str] = [
+    # NoDecode keeps pydantic-settings from JSON-parsing this env var so the
+    # field_validator below sees the raw CSV string we actually receive.
+    backend_cors_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
