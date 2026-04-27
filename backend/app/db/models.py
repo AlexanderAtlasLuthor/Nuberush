@@ -122,6 +122,9 @@ class Store(Base):
 
 
 class User(Base):
+    # store_id is nullable by design: admin users are global and have no store.
+    # Business rule (enforced in the service layer, not the DB): roles owner,
+    # manager and staff must have a store_id; role admin must have store_id NULL.
     __tablename__ = "users"
     __table_args__ = (
         Index("ix_users_store_id", "store_id"),
