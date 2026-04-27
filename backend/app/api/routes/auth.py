@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.api.deps import require_manager_or_above
 from app.core.permissions import can_caller_create_role
 from app.core.permissions import resolve_target_store_id
 from app.core.security import create_access_token
@@ -84,7 +85,11 @@ def read_current_user(current_user: User = Depends(get_current_user)) -> User:
 )
 def create_user(
     payload: CreateUserRequest,
-    current_user: User = Depends(get_current_user),
+    # require_manager_or_above is the coarse gate: it rejects staff and
+    # driver before we touch the body. can_caller_create_role still runs
+    # below to enforce the fine-grained matrix (admin->admin denied, owner
+    # can't create owner, etc.). Both layers are intentional.
+    current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
 ) -> User:
     if not can_caller_create_role(current_user.role, payload.role):
