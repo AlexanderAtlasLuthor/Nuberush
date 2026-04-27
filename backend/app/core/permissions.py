@@ -7,6 +7,47 @@ from app.db.models import User
 from app.db.models import UserRole
 
 
+def resolve_store_scope(
+    current_user: User, requested_store_id: UUID | None
+) -> UUID | None:
+    """Decide which store_id should scope a query for the current user.
+
+    Returns:
+      - admin: the requested_store_id verbatim (None means "global scope",
+        used by dashboards or aggregate endpoints).
+      - non-admin: the user's own store_id. The caller may pass
+        `requested_store_id=None` to mean "scope to my store" (default
+        for non-admin) or pass their own store_id explicitly. Any other
+        value is rejected with 403.
+
+    Raises HTTPException; this helper assumes it runs inside an HTTP
+    request, same convention as the other permission helpers.
+
+    Note: this function does NOT verify the store exists or is active.
+    Combine with `require_store_member` or an explicit lookup when those
+    guarantees are needed.
+    """
+    if current_user.role == UserRole.admin:
+        return requested_store_id
+
+    if current_user.store_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not bound to a store.",
+        )
+
+    if (
+        requested_store_id is not None
+        and requested_store_id != current_user.store_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this store.",
+        )
+
+    return current_user.store_id
+
+
 # Matrix of which caller role can create which target roles. Anything not in
 # the set on the right is rejected. driver/staff can never create users.
 USER_CREATION_MATRIX: dict[UserRole, frozenset[UserRole]] = {
