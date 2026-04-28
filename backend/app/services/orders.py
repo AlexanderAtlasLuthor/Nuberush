@@ -1,0 +1,716 @@
+"""Service layer for orders — the transaction coordinator.
+
+Materializes the rules in `app.domain.orders_rules` (FROZEN for S5).
+This module owns the order lifecycle, the totals computation, the
+audit log writes and the integration with the inventory ``_locked``
+helpers from S5.3.
+
+Transactional contract (orders_rules §9):
+
+  - This module is the COORDINATOR. It opens a single transaction per
+    write operation, calls inventory ``_locked`` helpers (which must
+    NOT commit), writes the audit log row, and commits exactly once
+    at the end.
+  - On any failure mid-flow, the coordinator rolls back the whole
+    transaction. There is no partial state — no Order row, no
+    OrderItem rows, no inventory mutations, no inventory_log rows
+    and no order_audit_log row land on disk.
+  - Concurrency is handled by the inventory row lock that
+    ``_lock_inventory_item`` already takes inside every ``_locked``
+    helper. This module does not introduce a new lock.
+
+Trust boundary (orders_rules §2):
+
+  - The frontend supplies ``variant_id`` + ``quantity`` per line and
+    an ``idempotency_key`` per request. Everything else (totals,
+    snapshots, inventory binding, lifecycle timestamps, status,
+    audit log) is computed or resolved server-side. Schemas with
+    ``extra="forbid"`` enforce that at the API boundary; this module
+    enforces it again by ignoring everything except the contract
+    fields.
+
+Money (orders_rules §5):
+
+  - All money is ``Decimal`` end-to-end. Totals are recomputed from
+    DB-resolved unit prices on every create. ``tax_amount = 0`` is
+    the MVP contract.
+
+Compliance (orders_rules §7):
+
+  - ``assert_product_sellable`` is the canonical gate. It is invoked
+    on CREATE (via ``_reserve_inventory_locked`` -> ``_assert_item_operable``)
+    and re-invoked on DELIVERED (via
+    ``_consume_reserved_inventory_locked`` -> ``_assert_item_operable``).
+    Cancel and return paths skip the gate by design.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID
+
+from fastapi import HTTPException
+from fastapi import status
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+from sqlalchemy.orm import selectinload
+
+from app.db.models import InventoryItem
+from app.db.models import Order
+from app.db.models import OrderAuditLog
+from app.db.models import OrderItem
+from app.db.models import OrderStatus
+from app.db.models import ProductVariant
+from app.db.models import Store
+from app.schemas.inventory import ReleaseReservationRequest
+from app.schemas.inventory import ReserveStockRequest
+from app.schemas.inventory import ReturnStockRequest
+from app.schemas.orders import OrderCancelRequest
+from app.schemas.orders import OrderCreate
+from app.schemas.orders import OrderReturnRequest
+from app.schemas.orders import OrderStatusUpdate
+from app.services import inventory as inv
+
+
+# Action strings written to OrderAuditLog.action. Kept here so callers
+# of the audit log API can match against them without magic strings.
+ACTION_ORDER_CREATED = "order_created"
+ACTION_STATUS_CHANGED = "status_changed"
+ACTION_ORDER_CANCELED = "order_canceled"
+ACTION_ORDER_DELIVERED = "order_delivered"
+ACTION_ORDER_RETURNED = "order_returned"
+
+
+# Allowed lifecycle transitions (orders_rules §3, §6). Mapping
+# previous_status -> set of valid new_status values. ``canceled`` and
+# ``returned`` are terminal (absent from the keys → no transition out).
+_ALLOWED_TRANSITIONS: dict[OrderStatus, frozenset[OrderStatus]] = {
+    OrderStatus.pending: frozenset(
+        {OrderStatus.accepted, OrderStatus.canceled}
+    ),
+    OrderStatus.accepted: frozenset(
+        {OrderStatus.preparing, OrderStatus.canceled}
+    ),
+    OrderStatus.preparing: frozenset(
+        {OrderStatus.ready, OrderStatus.canceled}
+    ),
+    OrderStatus.ready: frozenset(
+        {
+            OrderStatus.out_for_delivery,
+            OrderStatus.delivered,
+            OrderStatus.canceled,
+        }
+    ),
+    OrderStatus.out_for_delivery: frozenset(
+        {OrderStatus.delivered, OrderStatus.canceled}
+    ),
+    OrderStatus.delivered: frozenset({OrderStatus.returned}),
+}
+
+
+# Statuses from which a cancel is permitted. Cancel from delivered or
+# returned must use the return flow instead.
+_CANCELABLE_STATUSES: frozenset[OrderStatus] = frozenset(
+    {
+        OrderStatus.pending,
+        OrderStatus.accepted,
+        OrderStatus.preparing,
+        OrderStatus.ready,
+        OrderStatus.out_for_delivery,
+    }
+)
+
+
+# --------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------- #
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _commit_or_translate(db: Session) -> None:
+    """Commit and translate IntegrityError into a clean 4xx.
+
+    Mirrors the pattern used by inventory service. The orders module's
+    schema-layer + service-layer validations should normally catch
+    every violation first; this branch shields clients from raw
+    psycopg messages if anything slips through (e.g. a concurrent
+    duplicate idempotency_key insert).
+    """
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        message = str(exc.orig).lower() if exc.orig is not None else ""
+        if "uq_orders_store_idempotency_key" in message:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotency_key for this store.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Order mutation violates database constraints.",
+        ) from exc
+
+
+def _resolve_inventory_item(
+    db: Session, store_id: UUID, variant_id: UUID
+) -> InventoryItem:
+    """Resolve the inventory item that backs a given variant in a store.
+
+    Uses UNIQUE(store_id, variant_id) so the resolution is unambiguous.
+    Resolving by ``variant_id`` alone would be a cross-tenant bug
+    (orders_rules §1) — callers MUST pass the order's store_id.
+    """
+    stmt = select(InventoryItem).where(
+        InventoryItem.store_id == store_id,
+        InventoryItem.variant_id == variant_id,
+    )
+    item = db.scalar(stmt)
+    if item is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"No inventory item exists for variant {variant_id} "
+                f"in this store."
+            ),
+        )
+    return item
+
+
+def _calculate_order_totals(
+    order_items: list[OrderItem],
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Compute (subtotal, tax, total) from already-snapshotted lines.
+
+    ``tax_amount = 0`` in MVP (orders_rules §5). ``total_amount =
+    subtotal_amount + tax_amount``.
+    """
+    subtotal: Decimal = sum(
+        (item.line_total for item in order_items),
+        start=Decimal("0.00"),
+    )
+    tax = Decimal("0.00")
+    total = subtotal + tax
+    return subtotal, tax, total
+
+
+def _assert_valid_transition(
+    previous_status: OrderStatus, new_status: OrderStatus
+) -> None:
+    allowed = _ALLOWED_TRANSITIONS.get(previous_status, frozenset())
+    if new_status not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Invalid transition {previous_status.value} -> "
+                f"{new_status.value}."
+            ),
+        )
+
+
+def _write_order_audit_log(
+    db: Session,
+    order: Order,
+    *,
+    previous_status: OrderStatus | None,
+    new_status: OrderStatus,
+    action: str,
+    reason: str | None,
+    actor_user_id: UUID | None,
+) -> OrderAuditLog:
+    """Append one OrderAuditLog row to the session. Does NOT commit."""
+    audit = OrderAuditLog(
+        order_id=order.id,
+        store_id=order.store_id,
+        performed_by_user_id=actor_user_id,
+        previous_status=previous_status,
+        new_status=new_status,
+        action=action,
+        reason=reason,
+    )
+    db.add(audit)
+    return audit
+
+
+def _load_order(db: Session, order_id: UUID) -> Order:
+    """Load an order with its items eagerly. Raises 404 if missing."""
+    stmt = (
+        select(Order)
+        .where(Order.id == order_id)
+        .options(selectinload(Order.items))
+    )
+    order = db.scalar(stmt)
+    if order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found.",
+        )
+    return order
+
+
+def _find_existing_idempotent_order(
+    db: Session, store_id: UUID, idempotency_key: str
+) -> Order | None:
+    stmt = (
+        select(Order)
+        .where(
+            Order.store_id == store_id,
+            Order.idempotency_key == idempotency_key,
+        )
+        .options(selectinload(Order.items))
+    )
+    return db.scalar(stmt)
+
+
+# --------------------------------------------------------------------- #
+# Reads
+# --------------------------------------------------------------------- #
+
+
+def get_order(db: Session, order_id: UUID) -> Order:
+    return _load_order(db, order_id)
+
+
+def list_orders_for_store(
+    db: Session,
+    store_id: UUID,
+    *,
+    status: OrderStatus | None = None,  # noqa: A002 — public arg name
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+) -> list[Order]:
+    stmt = (
+        select(Order)
+        .where(Order.store_id == store_id)
+        .options(selectinload(Order.items))
+    )
+    if status is not None:
+        stmt = stmt.where(Order.status == status)
+    if created_from is not None:
+        stmt = stmt.where(Order.created_at >= created_from)
+    if created_to is not None:
+        stmt = stmt.where(Order.created_at <= created_to)
+    stmt = stmt.order_by(Order.created_at.desc())
+    return list(db.scalars(stmt).all())
+
+
+def list_order_audit_logs(
+    db: Session, order_id: UUID
+) -> list[OrderAuditLog]:
+    """Return every audit row for an order ordered by created_at asc.
+
+    Raises 404 if the order itself does not exist so callers do not
+    receive an empty list for a non-existent order.
+    """
+    if db.get(Order, order_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found.",
+        )
+    stmt = (
+        select(OrderAuditLog)
+        .where(OrderAuditLog.order_id == order_id)
+        .order_by(OrderAuditLog.created_at.asc())
+    )
+    return list(db.scalars(stmt).all())
+
+
+# --------------------------------------------------------------------- #
+# Reservation helpers (used by create_order)
+# --------------------------------------------------------------------- #
+
+
+def _reserve_order_items(
+    db: Session,
+    order: Order,
+    payload_items,
+    actor_user_id: UUID | None,
+) -> list[OrderItem]:
+    """Reserve every line item and create OrderItem rows.
+
+    For each line:
+      1. Resolve the inventory_item via (store_id, variant_id).
+      2. Call ``_reserve_inventory_locked`` (which validates
+         sellability, item.status and stock availability).
+      3. Snapshot ``unit_price`` from ``ProductVariant.price`` and
+         compute ``line_total = unit_price * quantity``.
+      4. Build the OrderItem row.
+
+    Does NOT commit. The caller commits once after the audit log is
+    written. If any line raises, the caller must roll back.
+    """
+    created: list[OrderItem] = []
+    for line in payload_items:
+        variant = db.get(ProductVariant, line.variant_id)
+        if variant is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Variant {line.variant_id} not found.",
+            )
+
+        item = _resolve_inventory_item(db, order.store_id, line.variant_id)
+
+        inv._reserve_inventory_locked(
+            db,
+            item.id,
+            ReserveStockRequest(
+                quantity=line.quantity,
+                reference_type="order",
+                reference_id=order.id,
+            ),
+            actor_user_id,
+        )
+
+        unit_price: Decimal = variant.price
+        line_total = unit_price * line.quantity
+
+        order_item = OrderItem(
+            order_id=order.id,
+            variant_id=line.variant_id,
+            inventory_item_id=item.id,
+            quantity=line.quantity,
+            unit_price=unit_price,
+            line_total=line_total,
+        )
+        db.add(order_item)
+        created.append(order_item)
+    return created
+
+
+def _consume_order_reservations(
+    db: Session, order: Order, actor_user_id: UUID | None
+) -> None:
+    """Consume every line item's reservation atomically (DELIVERED).
+
+    Each line uses ``_consume_reserved_inventory_locked`` so the call
+    re-checks sellability — protecting against the compliance race
+    where a product is banned between reserve and deliver
+    (orders_rules §7). Cross-store consumption is blocked via
+    ``expected_store_id``.
+    """
+    for line in order.items:
+        inv._consume_reserved_inventory_locked(
+            db,
+            line.inventory_item_id,
+            line.quantity,
+            actor_user_id=actor_user_id,
+            order_id=order.id,
+            expected_store_id=order.store_id,
+        )
+
+
+def _release_order_reservations(
+    db: Session, order: Order, actor_user_id: UUID | None
+) -> None:
+    """Release every line item's reservation (CANCEL)."""
+    for line in order.items:
+        inv._release_reservation_locked(
+            db,
+            line.inventory_item_id,
+            ReleaseReservationRequest(
+                quantity=line.quantity,
+                reference_type="order",
+                reference_id=order.id,
+            ),
+            actor_user_id,
+        )
+
+
+def _return_order_items_to_inventory(
+    db: Session,
+    order: Order,
+    actor_user_id: UUID | None,
+    *,
+    reason: str,
+) -> None:
+    """Replenish ``quantity_on_hand`` for every line (RETURN)."""
+    for line in order.items:
+        inv._return_to_inventory_locked(
+            db,
+            line.inventory_item_id,
+            ReturnStockRequest(
+                quantity=line.quantity,
+                reason=reason,
+                reference_type="order",
+                reference_id=order.id,
+            ),
+            actor_user_id,
+        )
+
+
+def _recheck_order_sellability(db: Session, order: Order) -> None:
+    """Re-run sellability gate per item before DELIVERED.
+
+    The actual gate fires inside ``_consume_reserved_inventory_locked``
+    via ``_assert_item_operable``. This helper exists for symmetry
+    with the rules document; calling it explicitly before the consume
+    loop would double-check the same items. We rely on the consume
+    loop to keep the audit log consistent (sellability failure
+    aborts the delivered transition cleanly).
+    """
+    # No-op: gate lives in the consume helper. See orders_rules §7.
+    return None
+
+
+# --------------------------------------------------------------------- #
+# Create
+# --------------------------------------------------------------------- #
+
+
+def create_order(
+    db: Session,
+    store_id: UUID,
+    payload: OrderCreate,
+    actor_user_id: UUID | None,
+    *,
+    customer_user_id: UUID | None = None,
+) -> Order:
+    """Create a pending order and reserve its inventory atomically.
+
+    Single transaction (orders_rules §9). Sequence:
+
+      1. Idempotency check: existing (store_id, idempotency_key) →
+         return existing order, no mutation.
+      2. Validate store exists.
+      3. Build the Order row with status=pending and default totals.
+      4. Reserve every line item (validates sellability + stock,
+         resolves inventory_item, snapshots unit_price).
+      5. Compute totals from snapshotted line_totals.
+      6. Write order_created audit log.
+      7. Commit once.
+
+    On any failure the whole transaction is rolled back: no Order, no
+    OrderItem, no reservation, no inventory_log, no audit_log.
+    """
+    existing = _find_existing_idempotent_order(
+        db, store_id, payload.idempotency_key
+    )
+    if existing is not None:
+        return existing
+
+    if db.get(Store, store_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Store not found.",
+        )
+
+    order = Order(
+        store_id=store_id,
+        customer_user_id=customer_user_id,
+        idempotency_key=payload.idempotency_key,
+        status=OrderStatus.pending,
+        subtotal_amount=Decimal("0.00"),
+        tax_amount=Decimal("0.00"),
+        total_amount=Decimal("0.00"),
+        notes=payload.notes,
+    )
+    db.add(order)
+    # Flush so the Order has an id we can reference from inventory
+    # logs and order items without committing.
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        message = str(exc.orig).lower() if exc.orig is not None else ""
+        if "uq_orders_store_idempotency_key" in message:
+            replay = _find_existing_idempotent_order(
+                db, store_id, payload.idempotency_key
+            )
+            if replay is not None:
+                return replay
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotency_key for this store.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Order creation violates database constraints.",
+        ) from exc
+
+    try:
+        order_items = _reserve_order_items(
+            db, order, payload.items, actor_user_id
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Order creation violates database constraints.",
+        )
+
+    subtotal, tax, total = _calculate_order_totals(order_items)
+    order.subtotal_amount = subtotal
+    order.tax_amount = tax
+    order.total_amount = total
+
+    _write_order_audit_log(
+        db,
+        order,
+        previous_status=None,
+        new_status=OrderStatus.pending,
+        action=ACTION_ORDER_CREATED,
+        reason=None,
+        actor_user_id=actor_user_id,
+    )
+
+    _commit_or_translate(db)
+    return _load_order(db, order.id)
+
+
+# --------------------------------------------------------------------- #
+# State transitions
+# --------------------------------------------------------------------- #
+
+
+def transition_order_status(
+    db: Session,
+    order_id: UUID,
+    payload: OrderStatusUpdate,
+    actor_user_id: UUID | None,
+) -> Order:
+    """Forward state transitions other than cancel/return.
+
+    Routes ``ready/out_for_delivery → delivered`` through the
+    inventory consume path; routes ``→ canceled`` callers to the
+    dedicated ``cancel_order`` endpoint with a 422 (cancel requires
+    a reason). Pure status-only transitions only set the matching
+    timestamp field.
+    """
+    if payload.new_status == OrderStatus.canceled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Use the cancel endpoint to cancel an order.",
+        )
+    if payload.new_status == OrderStatus.returned:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Use the return endpoint to return an order.",
+        )
+
+    order = _load_order(db, order_id)
+    previous_status = order.status
+    _assert_valid_transition(previous_status, payload.new_status)
+
+    if payload.new_status == OrderStatus.delivered:
+        _consume_order_reservations(db, order, actor_user_id)
+        order.delivered_at = _utcnow()
+        action = ACTION_ORDER_DELIVERED
+    else:
+        if payload.new_status == OrderStatus.accepted:
+            order.accepted_at = _utcnow()
+        action = ACTION_STATUS_CHANGED
+
+    order.status = payload.new_status
+
+    _write_order_audit_log(
+        db,
+        order,
+        previous_status=previous_status,
+        new_status=payload.new_status,
+        action=action,
+        reason=payload.reason,
+        actor_user_id=actor_user_id,
+    )
+
+    _commit_or_translate(db)
+    return _load_order(db, order.id)
+
+
+def cancel_order(
+    db: Session,
+    order_id: UUID,
+    payload: OrderCancelRequest,
+    actor_user_id: UUID | None,
+) -> Order:
+    """Cancel an order from any pre-delivered status.
+
+    Releases the reservation on every line item, sets
+    ``status = canceled``, ``canceled_at`` and ``cancel_reason``,
+    writes the audit log row and commits once.
+    """
+    order = _load_order(db, order_id)
+    previous_status = order.status
+    if previous_status not in _CANCELABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Cannot cancel an order in status "
+                f"'{previous_status.value}'."
+            ),
+        )
+    _assert_valid_transition(previous_status, OrderStatus.canceled)
+
+    _release_order_reservations(db, order, actor_user_id)
+
+    order.status = OrderStatus.canceled
+    order.canceled_at = _utcnow()
+    order.cancel_reason = payload.reason
+
+    _write_order_audit_log(
+        db,
+        order,
+        previous_status=previous_status,
+        new_status=OrderStatus.canceled,
+        action=ACTION_ORDER_CANCELED,
+        reason=payload.reason,
+        actor_user_id=actor_user_id,
+    )
+
+    _commit_or_translate(db)
+    return _load_order(db, order.id)
+
+
+def return_order(
+    db: Session,
+    order_id: UUID,
+    payload: OrderReturnRequest,
+    actor_user_id: UUID | None,
+) -> Order:
+    """Mark a delivered order as returned and replenish stock.
+
+    Only allowed from ``delivered`` (orders_rules §3). Replenishes
+    ``quantity_on_hand`` for every line via
+    ``_return_to_inventory_locked``, sets ``returned_at``, writes the
+    audit log and commits once.
+    """
+    order = _load_order(db, order_id)
+    previous_status = order.status
+    if previous_status != OrderStatus.delivered:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Cannot return an order in status "
+                f"'{previous_status.value}'."
+            ),
+        )
+    _assert_valid_transition(previous_status, OrderStatus.returned)
+
+    _return_order_items_to_inventory(
+        db, order, actor_user_id, reason=payload.reason
+    )
+
+    order.status = OrderStatus.returned
+    order.returned_at = _utcnow()
+
+    _write_order_audit_log(
+        db,
+        order,
+        previous_status=previous_status,
+        new_status=OrderStatus.returned,
+        action=ACTION_ORDER_RETURNED,
+        reason=payload.reason,
+        actor_user_id=actor_user_id,
+    )
+
+    _commit_or_translate(db)
+    return _load_order(db, order.id)
