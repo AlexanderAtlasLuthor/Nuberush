@@ -368,6 +368,8 @@ class Order(Base):
         CheckConstraint("tax_amount >= 0", name="ck_orders_tax_amount_non_negative"),
         CheckConstraint("total_amount >= 0", name="ck_orders_total_amount_non_negative"),
         CheckConstraint("total_amount >= subtotal_amount", name="ck_orders_total_amount_gte_subtotal"),
+        CheckConstraint("idempotency_key <> ''", name="ck_orders_idempotency_key_non_empty"),
+        UniqueConstraint("store_id", "idempotency_key", name="uq_orders_store_idempotency_key"),
         Index("ix_orders_store_id", "store_id"),
         Index("ix_orders_status", "status"),
         Index("ix_orders_created_at", "created_at"),
@@ -387,6 +389,7 @@ class Order(Base):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
     )
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[OrderStatus] = mapped_column(
         Enum(OrderStatus, name="order_status"),
         server_default=text("'pending'"),
@@ -400,6 +403,11 @@ class Order(Base):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
     )
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    returned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_reason: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = timestamp_created_at()
     updated_at: Mapped[datetime] = timestamp_updated_at()
@@ -414,6 +422,9 @@ class Order(Base):
         foreign_keys=[age_verified_by_user_id],
     )
     items: Mapped[list[OrderItem]] = relationship(back_populates="order")
+    audit_logs: Mapped[list[OrderAuditLog]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )
 
 
 class OrderItem(Base):
@@ -426,6 +437,7 @@ class OrderItem(Base):
         CheckConstraint("line_total >= unit_price", name="ck_order_items_line_total_gte_unit_price"),
         Index("ix_order_items_order_id", "order_id"),
         Index("ix_order_items_variant_id", "variant_id"),
+        Index("ix_order_items_inventory_item_id", "inventory_item_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -443,6 +455,11 @@ class OrderItem(Base):
         ForeignKey("product_variants.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    inventory_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inventory_items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     line_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
@@ -451,6 +468,9 @@ class OrderItem(Base):
 
     order: Mapped[Order] = relationship(back_populates="items")
     variant: Mapped[ProductVariant] = relationship(back_populates="order_items")
+    inventory_item: Mapped[InventoryItem] = relationship(
+        foreign_keys=[inventory_item_id]
+    )
 
 
 class ProductComplianceAuditLog(Base):
@@ -514,3 +534,60 @@ class ProductComplianceAuditLog(Base):
 
     product: Mapped[Product] = relationship(back_populates="compliance_audits")
     changed_by_user: Mapped[User | None] = relationship()
+
+
+class OrderAuditLog(Base):
+    """Append-only audit trail for order state transitions.
+
+    Every transition of `Order.status` and other auditable order
+    events (creation, cancellation, return) produce one row here.
+    The contract is documented in `app.domain.orders_rules` (§8).
+    """
+
+    __tablename__ = "order_audit_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "action <> ''",
+            name="ck_order_audit_logs_action_non_empty",
+        ),
+        Index("ix_order_audit_logs_order_id", "order_id"),
+        Index("ix_order_audit_logs_store_id", "store_id"),
+        Index(
+            "ix_order_audit_logs_performed_by_user_id",
+            "performed_by_user_id",
+        ),
+        Index("ix_order_audit_logs_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    performed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
+    previous_status: Mapped[OrderStatus | None] = mapped_column(
+        Enum(OrderStatus, name="order_status", create_type=False),
+    )
+    new_status: Mapped[OrderStatus] = mapped_column(
+        Enum(OrderStatus, name="order_status", create_type=False),
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    order: Mapped[Order] = relationship(back_populates="audit_logs")
+    performed_by_user: Mapped[User | None] = relationship()
