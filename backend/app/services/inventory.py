@@ -395,6 +395,24 @@ def receive_stock(
     units even into a flagged or quarantined slot in order to
     reconstitute records. quantity_reserved is untouched.
     """
+    item = _receive_stock_locked(db, item_id, payload, actor_user_id)
+    _commit_or_translate(db)
+    db.refresh(item)
+    return item
+
+
+def _receive_stock_locked(
+    db: Session,
+    item_id: UUID,
+    payload: ReceiveStockRequest,
+    actor_user_id: UUID | None,
+) -> InventoryItem:
+    """No-commit core of receive_stock. Suitable for composing inside
+    an outer transaction (e.g. orders coordinator).
+
+    Same lock + validation + log semantics as the public function;
+    the caller controls commit/rollback.
+    """
     item = _lock_inventory_item(db, item_id)
 
     item.quantity_on_hand += payload.quantity
@@ -411,8 +429,6 @@ def receive_stock(
         reference_id=payload.reference_id,
     )
 
-    _commit_or_translate(db)
-    db.refresh(item)
     return item
 
 
@@ -430,6 +446,19 @@ def adjust_stock(
     longer holds. We surface that as 422 explicitly because the DB
     CHECK would otherwise fire with a less actionable message.
     """
+    item = _adjust_stock_locked(db, item_id, payload, actor_user_id)
+    _commit_or_translate(db)
+    db.refresh(item)
+    return item
+
+
+def _adjust_stock_locked(
+    db: Session,
+    item_id: UUID,
+    payload: AdjustStockRequest,
+    actor_user_id: UUID | None,
+) -> InventoryItem:
+    """No-commit core of adjust_stock."""
     item = _lock_inventory_item(db, item_id)
 
     new_qoh = item.quantity_on_hand + payload.delta
@@ -463,9 +492,6 @@ def adjust_stock(
         reference_type=payload.reference_type,
         reference_id=payload.reference_id,
     )
-
-    _commit_or_translate(db)
-    db.refresh(item)
     return item
 
 
@@ -477,6 +503,19 @@ def record_damage(
 ) -> InventoryItem:
     """Records units lost (broken, expired, spilled). Reason
     mandatory at the schema layer. quantity_reserved is untouched."""
+    item = _record_damage_locked(db, item_id, payload, actor_user_id)
+    _commit_or_translate(db)
+    db.refresh(item)
+    return item
+
+
+def _record_damage_locked(
+    db: Session,
+    item_id: UUID,
+    payload: DamageStockRequest,
+    actor_user_id: UUID | None,
+) -> InventoryItem:
+    """No-commit core of record_damage."""
     item = _lock_inventory_item(db, item_id)
 
     new_qoh = item.quantity_on_hand - payload.quantity
@@ -511,9 +550,6 @@ def record_damage(
         reference_type=payload.reference_type,
         reference_id=payload.reference_id,
     )
-
-    _commit_or_translate(db)
-    db.refresh(item)
     return item
 
 
@@ -532,6 +568,19 @@ def sell_inventory(
     Compares requested units against (on_hand - reserved), never
     against on_hand alone (inventory_rules §10).
     """
+    item = _sell_inventory_locked(db, item_id, payload, actor_user_id)
+    _commit_or_translate(db)
+    db.refresh(item)
+    return item
+
+
+def _sell_inventory_locked(
+    db: Session,
+    item_id: UUID,
+    payload: SaleStockRequest,
+    actor_user_id: UUID | None,
+) -> InventoryItem:
+    """No-commit core of sell_inventory."""
     item = _lock_inventory_item(db, item_id)
 
     _assert_item_operable(item)
@@ -550,9 +599,6 @@ def sell_inventory(
         reference_type=payload.reference_type,
         reference_id=payload.reference_id,
     )
-
-    _commit_or_translate(db)
-    db.refresh(item)
     return item
 
 
@@ -565,6 +611,20 @@ def reserve_inventory(
     """Reserve units for a pending order. Same sellability gate as
     sale plus a quantity_available check; the reservation increases
     quantity_reserved without touching quantity_on_hand."""
+    item = _reserve_inventory_locked(db, item_id, payload, actor_user_id)
+    _commit_or_translate(db)
+    db.refresh(item)
+    return item
+
+
+def _reserve_inventory_locked(
+    db: Session,
+    item_id: UUID,
+    payload: ReserveStockRequest,
+    actor_user_id: UUID | None,
+) -> InventoryItem:
+    """No-commit core of reserve_inventory. Used by orders coordinator
+    so multi-item reservations can roll back atomically."""
     item = _lock_inventory_item(db, item_id)
 
     _assert_item_operable(item)
@@ -583,9 +643,6 @@ def reserve_inventory(
         reference_type=payload.reference_type,
         reference_id=payload.reference_id,
     )
-
-    _commit_or_translate(db)
-    db.refresh(item)
     return item
 
 
@@ -599,6 +656,20 @@ def release_reservation(
     quantity_reserved without touching quantity_on_hand. Logged as
     `cancellation` per inventory_rules §3 — the released units
     return to the available pool."""
+    item = _release_reservation_locked(db, item_id, payload, actor_user_id)
+    _commit_or_translate(db)
+    db.refresh(item)
+    return item
+
+
+def _release_reservation_locked(
+    db: Session,
+    item_id: UUID,
+    payload: ReleaseReservationRequest,
+    actor_user_id: UUID | None,
+) -> InventoryItem:
+    """No-commit core of release_reservation. Used by orders coordinator
+    on cancellation paths."""
     item = _lock_inventory_item(db, item_id)
 
     _assert_reserved_available(item, payload.quantity)
@@ -616,9 +687,6 @@ def release_reservation(
         reference_type=payload.reference_type,
         reference_id=payload.reference_id,
     )
-
-    _commit_or_translate(db)
-    db.refresh(item)
     return item
 
 
@@ -632,6 +700,20 @@ def return_to_inventory(
     quantity_on_hand increases; quantity_reserved is untouched.
     Allowed regardless of item.status (a banned product can still
     accept its inventory back)."""
+    item = _return_to_inventory_locked(db, item_id, payload, actor_user_id)
+    _commit_or_translate(db)
+    db.refresh(item)
+    return item
+
+
+def _return_to_inventory_locked(
+    db: Session,
+    item_id: UUID,
+    payload: ReturnStockRequest,
+    actor_user_id: UUID | None,
+) -> InventoryItem:
+    """No-commit core of return_to_inventory. Used by orders coordinator
+    on returned-status transitions."""
     item = _lock_inventory_item(db, item_id)
 
     item.quantity_on_hand += payload.quantity
@@ -647,7 +729,127 @@ def return_to_inventory(
         reference_type=payload.reference_type,
         reference_id=payload.reference_id,
     )
+    return item
 
+
+# --------------------------------------------------------------------- #
+# Composite movement: consume reservation (used by orders on DELIVERED)
+# --------------------------------------------------------------------- #
+
+
+def _consume_reserved_inventory_locked(
+    db: Session,
+    item_id: UUID,
+    quantity: int,
+    *,
+    actor_user_id: UUID | None,
+    order_id: UUID,
+    expected_store_id: UUID | None = None,
+    reason: str | None = None,
+) -> InventoryItem:
+    """Atomically consume `quantity` units that were previously
+    reserved for an order: decrement BOTH quantity_reserved AND
+    quantity_on_hand by the same amount.
+
+    Intended for the orders coordinator's DELIVERED transition
+    (see app.domain.orders_rules §3). Writes ONE inventory_log row
+    of movement_type=sale tied to the order via reference_id.
+
+    Validations:
+      - quantity > 0
+      - item exists (via the row lock)
+      - if expected_store_id is given, item.store_id must match
+        (defense-in-depth against cross-store consumption bugs)
+      - quantity_reserved >= quantity (cannot consume more than was
+        reserved)
+      - quantity_on_hand >= quantity (cannot push qoh negative;
+        DB CHECK is a backstop)
+      - sellability gate (compliance, variant.is_active,
+        item.status == available) — re-asserted at consume time so
+        a product banned BETWEEN reserve and delivered cannot be
+        sold (orders_rules §7).
+
+    NO commit. NO refresh. Caller controls transaction boundary.
+    """
+    if quantity <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="quantity must be greater than zero.",
+        )
+
+    item = _lock_inventory_item(db, item_id)
+
+    if expected_store_id is not None and item.store_id != expected_store_id:
+        # Defensive: the orders coordinator must resolve the right
+        # inventory_item via (store_id, variant_id) UNIQUE pair. A
+        # mismatch here means the caller picked the wrong row and
+        # would consume from another store's stock.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Inventory item does not belong to the expected store.",
+        )
+
+    _assert_item_operable(item)
+
+    if item.quantity_reserved < quantity:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Cannot consume {quantity} units: only "
+                f"{item.quantity_reserved} are reserved."
+            ),
+        )
+    if item.quantity_on_hand < quantity:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Cannot consume {quantity} units: only "
+                f"{item.quantity_on_hand} on hand."
+            ),
+        )
+
+    item.quantity_reserved -= quantity
+    item.quantity_on_hand -= quantity
+
+    _write_inventory_log(
+        db,
+        item=item,
+        movement_type=InventoryMovementType.sale,
+        quantity_delta=-quantity,
+        quantity_after=item.quantity_on_hand,
+        actor_user_id=actor_user_id,
+        reason=reason,
+        reference_type="order",
+        reference_id=order_id,
+    )
+    return item
+
+
+def consume_reserved_inventory(
+    db: Session,
+    item_id: UUID,
+    quantity: int,
+    *,
+    actor_user_id: UUID | None,
+    order_id: UUID,
+    expected_store_id: UUID | None = None,
+    reason: str | None = None,
+) -> InventoryItem:
+    """Public wrapper around `_consume_reserved_inventory_locked`
+    that commits in its own transaction. Useful for direct
+    administrative use; the orders coordinator will call the
+    locked helper instead so the consume is atomic with the order
+    state transition and the order audit log row.
+    """
+    item = _consume_reserved_inventory_locked(
+        db,
+        item_id,
+        quantity,
+        actor_user_id=actor_user_id,
+        order_id=order_id,
+        expected_store_id=expected_store_id,
+        reason=reason,
+    )
     _commit_or_translate(db)
     db.refresh(item)
     return item
