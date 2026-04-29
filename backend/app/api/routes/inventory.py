@@ -34,6 +34,7 @@ from fastapi import APIRouter
 from fastapi import Body
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi import status
 from sqlalchemy.orm import Session
 
@@ -47,6 +48,7 @@ from app.db.session import get_db
 from app.schemas.inventory import AdjustStockRequest
 from app.schemas.inventory import DamageStockRequest
 from app.schemas.inventory import InventoryItemCreate
+from app.schemas.inventory import InventoryItemListResponse
 from app.schemas.inventory import InventoryItemRead
 from app.schemas.inventory import InventoryLogRead
 from app.schemas.inventory import ReceiveStockRequest
@@ -94,17 +96,32 @@ def _assert_can_access_store(current_user: User, store_id: UUID) -> None:
 
 @router.get(
     "/stores/{store_id}/inventory",
-    response_model=list[InventoryItemRead],
+    response_model=InventoryItemListResponse,
     dependencies=[Depends(require_store_member)],
 )
 def list_store_inventory(
     store_id: UUID,
-    low_stock_only: bool = False,
+    low_stock_only: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     current_user: User = Depends(require_staff_or_above),
     db: Session = Depends(get_db),
-) -> list:
-    return svc.list_inventory_for_store(
+) -> InventoryItemListResponse:
+    items = svc.list_inventory_for_store(
+        db,
+        store_id,
+        low_stock_only=low_stock_only,
+        limit=limit,
+        offset=offset,
+    )
+    total = svc.count_inventory_for_store(
         db, store_id, low_stock_only=low_stock_only
+    )
+    return InventoryItemListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 

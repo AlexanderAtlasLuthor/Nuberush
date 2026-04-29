@@ -20,6 +20,9 @@ Style mirrors tests/test_products.py.
 """
 
 import uuid
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from decimal import Decimal
 from typing import Callable
 
@@ -140,6 +143,7 @@ def make_item(
         variant: ProductVariant | None = None,
         quantity_on_hand: int = 10,
         quantity_reserved: int = 0,
+        reorder_threshold: int = 0,
         status: InventoryStatus = InventoryStatus.available,
     ) -> InventoryItem:
         s = store if store is not None else make_store()
@@ -149,6 +153,7 @@ def make_item(
             variant_id=v.id,
             quantity_on_hand=quantity_on_hand,
             quantity_reserved=quantity_reserved,
+            reorder_threshold=reorder_threshold,
             status=status,
         )
         db_session.add(item)
@@ -165,6 +170,23 @@ def _logs_for_item(db: Session, item_id: uuid.UUID) -> list[InventoryLog]:
             select(InventoryLog).where(InventoryLog.inventory_item_id == item_id)
         ).all()
     )
+
+
+def _pin_created_at(
+    db_session: Session,
+    items: list[InventoryItem],
+    *,
+    start: datetime | None = None,
+    same_timestamp: bool = False,
+) -> None:
+    base = start or datetime(2025, 1, 1, tzinfo=UTC)
+    for index, item in enumerate(items):
+        item.created_at = (
+            base if same_timestamp else base + timedelta(minutes=index)
+        )
+    db_session.commit()
+    for item in items:
+        db_session.refresh(item)
 
 
 # --------------------------------------------------------------------- #
@@ -699,6 +721,99 @@ class TestServiceAtomicity:
         db_session.refresh(item)
         assert item.quantity_reserved == 8
         assert len(_logs_for_item(db_session, item.id)) == n_before
+
+
+# --------------------------------------------------------------------- #
+# Pagination
+# --------------------------------------------------------------------- #
+
+
+class TestServicePagination:
+    def test_list_inventory_respects_limit_offset(
+        self, db_session: Session, make_store, make_item
+    ):
+        store = make_store()
+        items = [make_item(store=store) for _ in range(4)]
+        _pin_created_at(db_session, items)
+
+        page = svc.list_inventory_for_store(
+            db_session, store.id, limit=2, offset=1
+        )
+
+        assert [item.id for item in page] == [item.id for item in items[1:3]]
+
+    def test_count_inventory_returns_full_filtered_count(
+        self, db_session: Session, make_store, make_item
+    ):
+        store = make_store()
+        other_store = make_store()
+        items = [make_item(store=store) for _ in range(5)]
+        make_item(store=other_store)
+        _pin_created_at(db_session, items)
+
+        page = svc.list_inventory_for_store(
+            db_session, store.id, limit=2, offset=0
+        )
+        total = svc.count_inventory_for_store(db_session, store.id)
+
+        assert len(page) == 2
+        assert total == 5
+
+    def test_low_stock_count_matches_filter(
+        self, db_session: Session, make_store, make_item
+    ):
+        store = make_store()
+        other_store = make_store()
+        low_a = make_item(
+            store=store,
+            quantity_on_hand=3,
+            quantity_reserved=1,
+            reorder_threshold=2,
+        )
+        not_low = make_item(
+            store=store,
+            quantity_on_hand=10,
+            quantity_reserved=1,
+            reorder_threshold=2,
+        )
+        low_b = make_item(
+            store=store,
+            quantity_on_hand=0,
+            quantity_reserved=0,
+            reorder_threshold=0,
+        )
+        make_item(
+            store=other_store,
+            quantity_on_hand=0,
+            quantity_reserved=0,
+            reorder_threshold=0,
+        )
+        _pin_created_at(db_session, [low_a, not_low, low_b])
+
+        rows = svc.list_inventory_for_store(
+            db_session, store.id, low_stock_only=True
+        )
+        total = svc.count_inventory_for_store(
+            db_session, store.id, low_stock_only=True
+        )
+
+        assert [item.id for item in rows] == [low_a.id, low_b.id]
+        assert total == 2
+
+    def test_stable_ordering_uses_created_at_then_id(
+        self, db_session: Session, make_store, make_item
+    ):
+        store = make_store()
+        items = [make_item(store=store) for _ in range(3)]
+        _pin_created_at(db_session, items, same_timestamp=True)
+
+        rows = svc.list_inventory_for_store(
+            db_session, store.id, limit=3, offset=0
+        )
+
+        assert [str(item.id) for item in rows] == sorted(
+            str(item.id) for item in items
+        )
 
 
 # --------------------------------------------------------------------- #

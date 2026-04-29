@@ -30,6 +30,32 @@ TEST_DATABASE_URL = os.environ.get(
 )
 
 
+def _get_alembic_config() -> Config:
+    return Config("alembic.ini")
+
+
+def _should_reset_test_db() -> bool:
+    return os.environ.get("RESET_TEST_DB") == "1"
+
+
+def _prepare_test_database() -> None:
+    """Prepare the test database schema for this pytest session.
+
+    Default fast path: run `alembic upgrade head` only. Alembic is
+    idempotent when the database is already current, so focused DB
+    tests avoid paying the destructive rebuild cost on every pytest
+    invocation.
+
+    Reset path: set RESET_TEST_DB=1 when a clean rebuild is needed
+    after migration churn or suspected local DB drift. That opt-in
+    path preserves the old downgrade(base) -> upgrade(head) behavior.
+    """
+    cfg = _get_alembic_config()
+    if _should_reset_test_db():
+        command.downgrade(cfg, "base")
+    command.upgrade(cfg, "head")
+
+
 @pytest.fixture(autouse=True)
 def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # Strip settings env vars per-test so each suite starts from a known state
@@ -39,34 +65,39 @@ def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(scope="session")
-def test_engine() -> Generator[Engine, None, None]:
-    """Engine bound to the test database with migrations applied once.
-
-    Uses DATABASE_URL_TEST or a local default. The schema is created by
-    running alembic against that URL so triggers and other DDL stay in sync
-    with production migrations.
-    """
+def migrated_test_db() -> Generator[str, None, None]:
+    """Ensure the configured test database is migrated for this session."""
     previous_url = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
     from app.core.config import get_db_settings
 
     get_db_settings.cache_clear()
+    _prepare_test_database()
 
-    cfg = Config("alembic.ini")
-    command.downgrade(cfg, "base")
-    command.upgrade(cfg, "head")
-
-    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True, future=True)
     try:
-        yield engine
+        yield TEST_DATABASE_URL
     finally:
-        engine.dispose()
         if previous_url is None:
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = previous_url
         get_db_settings.cache_clear()
+
+
+@pytest.fixture(scope="session")
+def test_engine(migrated_test_db: str) -> Generator[Engine, None, None]:
+    """Engine bound to the migrated test database.
+
+    Uses DATABASE_URL_TEST or a local default. The schema is prepared by
+    migrated_test_db so triggers and other DDL stay in sync with production
+    migrations.
+    """
+    engine = create_engine(migrated_test_db, pool_pre_ping=True, future=True)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

@@ -18,6 +18,9 @@ Concurrency is intentionally out of scope (S4.8).
 """
 
 import uuid
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from decimal import Decimal
 from typing import Callable
 
@@ -121,6 +124,7 @@ def make_item(
         variant: ProductVariant | None = None,
         quantity_on_hand: int = 10,
         quantity_reserved: int = 0,
+        reorder_threshold: int = 0,
         status: InventoryStatus = InventoryStatus.available,
     ) -> InventoryItem:
         s = store if store is not None else make_store()
@@ -130,6 +134,7 @@ def make_item(
             variant_id=v.id,
             quantity_on_hand=quantity_on_hand,
             quantity_reserved=quantity_reserved,
+            reorder_threshold=reorder_threshold,
             status=status,
         )
         db_session.add(item)
@@ -142,6 +147,23 @@ def make_item(
 
 def _auth(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {create_access_token(str(user.id))}"}
+
+
+def _pin_created_at(
+    db_session: Session,
+    items: list[InventoryItem],
+    *,
+    start: datetime | None = None,
+    same_timestamp: bool = False,
+) -> None:
+    base = start or datetime(2025, 1, 1, tzinfo=UTC)
+    for index, item in enumerate(items):
+        item.created_at = (
+            base if same_timestamp else base + timedelta(minutes=index)
+        )
+    db_session.commit()
+    for item in items:
+        db_session.refresh(item)
 
 
 # Forbidden substrings that would indicate a raw SQL/psycopg leak in
@@ -874,6 +896,200 @@ class TestApiIntegration:
 
 
 # --------------------------------------------------------------------- #
+# Inventory list pagination
+# --------------------------------------------------------------------- #
+
+
+class TestApiInventoryPagination:
+    def test_default_response_shape(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        make_item,
+    ):
+        store = make_store()
+        items = [make_item(store=store) for _ in range(2)]
+        _pin_created_at(db_session, items)
+        manager = make_user(UserRole.manager, store_id=store.id)
+
+        resp = client.get(
+            f"/stores/{store.id}/inventory", headers=_auth(manager)
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == {"items", "total", "limit", "offset"}
+        assert body["total"] == 2
+        assert body["limit"] == 100
+        assert body["offset"] == 0
+        assert len(body["items"]) == 2
+
+    def test_custom_limit_offset(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        make_item,
+    ):
+        store = make_store()
+        items = [make_item(store=store) for _ in range(4)]
+        _pin_created_at(db_session, items)
+        manager = make_user(UserRole.manager, store_id=store.id)
+
+        resp = client.get(
+            f"/stores/{store.id}/inventory?limit=2&offset=1",
+            headers=_auth(manager),
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["limit"] == 2
+        assert body["offset"] == 1
+        assert body["total"] == 4
+        assert [row["id"] for row in body["items"]] == [
+            str(item.id) for item in items[1:3]
+        ]
+
+    def test_total_reflects_filtered_rows_not_page_size(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        make_item,
+    ):
+        store = make_store()
+        items = [make_item(store=store) for _ in range(5)]
+        _pin_created_at(db_session, items)
+        manager = make_user(UserRole.manager, store_id=store.id)
+
+        resp = client.get(
+            f"/stores/{store.id}/inventory?limit=2",
+            headers=_auth(manager),
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert len(body["items"]) == 2
+        assert body["total"] == 5
+
+    def test_offset_beyond_total_returns_empty_items(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        make_item,
+    ):
+        store = make_store()
+        items = [make_item(store=store) for _ in range(3)]
+        _pin_created_at(db_session, items)
+        manager = make_user(UserRole.manager, store_id=store.id)
+
+        resp = client.get(
+            f"/stores/{store.id}/inventory?limit=2&offset=10",
+            headers=_auth(manager),
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["items"] == []
+        assert body["total"] == 3
+        assert body["limit"] == 2
+        assert body["offset"] == 10
+
+    def test_low_stock_only_works_with_pagination_and_total(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        make_item,
+    ):
+        store = make_store()
+        low_a = make_item(
+            store=store,
+            quantity_on_hand=3,
+            quantity_reserved=1,
+            reorder_threshold=2,
+        )
+        not_low = make_item(
+            store=store,
+            quantity_on_hand=10,
+            quantity_reserved=1,
+            reorder_threshold=2,
+        )
+        low_b = make_item(
+            store=store,
+            quantity_on_hand=0,
+            quantity_reserved=0,
+            reorder_threshold=0,
+        )
+        _pin_created_at(db_session, [low_a, not_low, low_b])
+        manager = make_user(UserRole.manager, store_id=store.id)
+
+        resp = client.get(
+            f"/stores/{store.id}/inventory"
+            "?low_stock_only=true&limit=1&offset=1",
+            headers=_auth(manager),
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total"] == 2
+        assert body["limit"] == 1
+        assert body["offset"] == 1
+        assert [row["id"] for row in body["items"]] == [str(low_b.id)]
+
+    def test_stable_ordering_across_pages(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        make_item,
+    ):
+        store = make_store()
+        items = [make_item(store=store) for _ in range(3)]
+        _pin_created_at(db_session, items, same_timestamp=True)
+        manager = make_user(UserRole.manager, store_id=store.id)
+
+        page_ids = []
+        for offset in range(3):
+            resp = client.get(
+                f"/stores/{store.id}/inventory?limit=1&offset={offset}",
+                headers=_auth(manager),
+            )
+            assert resp.status_code == 200, resp.text
+            page_ids.append(resp.json()["items"][0]["id"])
+
+        assert page_ids == sorted(str(item.id) for item in items)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "limit=0",
+            "limit=501",
+            "offset=-1",
+        ],
+    )
+    def test_invalid_pagination_params_return_422(
+        self, client: TestClient, make_store, make_user, query
+    ):
+        store = make_store()
+        manager = make_user(UserRole.manager, store_id=store.id)
+
+        resp = client.get(
+            f"/stores/{store.id}/inventory?{query}", headers=_auth(manager)
+        )
+
+        assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------- #
 # BIE: enriched response shape (variant + product summary)
 # --------------------------------------------------------------------- #
 #
@@ -918,9 +1134,10 @@ class TestApiEnrichedResponse:
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert isinstance(body, list)
-        assert len(body) == 1
-        row = body[0]
+        assert set(body.keys()) == {"items", "total", "limit", "offset"}
+        assert body["total"] == 1
+        assert len(body["items"]) == 1
+        row = body["items"][0]
         # Original fields still present.
         assert row["quantity_on_hand"] == 10
         # Enriched variant summary.

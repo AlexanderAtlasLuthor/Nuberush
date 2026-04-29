@@ -83,8 +83,8 @@ _THREAD_TIMEOUT_SECONDS = 20
 
 
 @pytest.fixture(scope="module")
-def concurrency_engine() -> Engine:
-    engine = create_engine(_TEST_DATABASE_URL, poolclass=NullPool, future=True)
+def concurrency_engine(migrated_test_db: str) -> Engine:
+    engine = create_engine(migrated_test_db, poolclass=NullPool, future=True)
     yield engine
     engine.dispose()
 

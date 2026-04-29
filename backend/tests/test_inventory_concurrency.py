@@ -66,11 +66,11 @@ _THREAD_TIMEOUT_SECONDS = 15
 
 
 @pytest.fixture(scope="module")
-def concurrency_engine() -> Engine:
+def concurrency_engine(migrated_test_db: str) -> Engine:
     """Module-scoped engine with NullPool so each Session opens a fresh
     connection. Required to simulate truly concurrent transactions.
     """
-    engine = create_engine(_TEST_DATABASE_URL, poolclass=NullPool, future=True)
+    engine = create_engine(migrated_test_db, poolclass=NullPool, future=True)
     yield engine
     engine.dispose()
 

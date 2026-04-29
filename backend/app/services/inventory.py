@@ -20,6 +20,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from fastapi import status
+from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -288,14 +289,28 @@ def get_inventory_item(db: Session, item_id: UUID) -> InventoryItem:
     return item
 
 
+def _inventory_store_filters(
+    store_id: UUID,
+    low_stock_only: bool,
+):
+    filters = [InventoryItem.store_id == store_id]
+    if low_stock_only:
+        filters.append(
+            (InventoryItem.quantity_on_hand - InventoryItem.quantity_reserved)
+            <= InventoryItem.reorder_threshold
+        )
+    return tuple(filters)
+
+
 def list_inventory_for_store(
     db: Session,
     store_id: UUID,
     *,
     low_stock_only: bool = False,
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[InventoryItem]:
-    """List every inventory item for a store with variant + product
-    pre-loaded.
+    """List inventory items for a store with variant + product pre-loaded.
 
     `low_stock_only=True` filters to items where
     `quantity_on_hand - quantity_reserved <= reorder_threshold`,
@@ -307,16 +322,27 @@ def list_inventory_for_store(
     """
     stmt = (
         select(InventoryItem)
-        .where(InventoryItem.store_id == store_id)
+        .where(*_inventory_store_filters(store_id, low_stock_only))
         .options(_inventory_item_load_options())
+        .order_by(InventoryItem.created_at.asc(), InventoryItem.id.asc())
+        .limit(limit)
+        .offset(offset)
     )
-    if low_stock_only:
-        stmt = stmt.where(
-            (InventoryItem.quantity_on_hand - InventoryItem.quantity_reserved)
-            <= InventoryItem.reorder_threshold
-        )
-    stmt = stmt.order_by(InventoryItem.created_at.asc())
     return list(db.scalars(stmt).all())
+
+
+def count_inventory_for_store(
+    db: Session,
+    store_id: UUID,
+    *,
+    low_stock_only: bool = False,
+) -> int:
+    stmt = (
+        select(func.count())
+        .select_from(InventoryItem)
+        .where(*_inventory_store_filters(store_id, low_stock_only))
+    )
+    return int(db.scalar(stmt) or 0)
 
 
 def list_inventory_logs_for_store(

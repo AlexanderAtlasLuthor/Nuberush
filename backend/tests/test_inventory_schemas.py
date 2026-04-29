@@ -26,6 +26,7 @@ from app.db.models import InventoryStatus
 from app.schemas.inventory import AdjustStockRequest
 from app.schemas.inventory import DamageStockRequest
 from app.schemas.inventory import InventoryItemCreate
+from app.schemas.inventory import InventoryItemListResponse
 from app.schemas.inventory import InventoryItemRead
 from app.schemas.inventory import InventoryItemUpdate
 from app.schemas.inventory import InventoryLogRead
@@ -429,6 +430,19 @@ class TestReadSchemas:
         assert read.variant.product.compliance_status == ComplianceStatus.banned
         dumped = read.model_dump(mode="json")
         assert dumped["variant"]["product"]["compliance_status"] == "banned"
+
+    def test_inventory_item_list_response_wraps_items(self):
+        item, _, _ = _make_orm_like_inventory_item()
+        read = InventoryItemRead.model_validate(item)
+
+        response = InventoryItemListResponse(
+            items=[read], total=1, limit=100, offset=0
+        )
+
+        assert response.items == [read]
+        assert response.total == 1
+        assert response.limit == 100
+        assert response.offset == 0
 
     def test_inventory_log_read_validates_orm_like_object(self):
         now = datetime.now(UTC)

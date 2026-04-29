@@ -172,6 +172,15 @@ class InventoryItemRead(BaseModel):
     variant: InventoryVariantSummary
 
 
+class InventoryItemListResponse(BaseModel):
+    """Paginated response for GET /stores/{store_id}/inventory."""
+
+    items: list[InventoryItemRead]
+    total: int
+    limit: int
+    offset: int
+
+
 # --------------------------------------------------------------------- #
 # Inventory log
 # --------------------------------------------------------------------- #

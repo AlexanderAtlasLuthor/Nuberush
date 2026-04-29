@@ -64,8 +64,8 @@ _TEST_DATABASE_URL = os.environ.get(
 
 
 @pytest.fixture(scope="module")
-def tx_engine() -> Engine:
-    engine = create_engine(_TEST_DATABASE_URL, poolclass=NullPool, future=True)
+def tx_engine(migrated_test_db: str) -> Engine:
+    engine = create_engine(migrated_test_db, poolclass=NullPool, future=True)
     yield engine
     engine.dispose()
 
