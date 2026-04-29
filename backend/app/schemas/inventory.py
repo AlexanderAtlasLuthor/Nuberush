@@ -31,6 +31,7 @@ from pydantic import Field
 from pydantic import field_validator
 from pydantic import model_validator
 
+from app.db.models import ComplianceStatus
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
 
@@ -108,8 +109,53 @@ class InventoryItemUpdate(BaseModel):
     status: InventoryStatus | None = None
 
 
+class InventoryProductSummary(BaseModel):
+    """Curated subset of `Product` surfaced inside an inventory response.
+
+    Only fields the inventory UI needs to render rows and pre-warn the
+    user about sellability. Description, hold_reason, jurisdiction,
+    last_compliance_check and timestamps are deliberately excluded —
+    those belong to a product-detail page.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    brand: str | None
+    category: str
+    compliance_status: ComplianceStatus
+    allowed_for_sale: bool
+    is_active: bool
+
+
+class InventoryVariantSummary(BaseModel):
+    """Curated subset of `ProductVariant` surfaced inside an inventory
+    response, with the parent product nested.
+
+    Pricing, cost, barcode, unit_count, puff_count and thc_strength
+    are deliberately excluded — variant-detail or order-line concerns.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    sku: str
+    flavor: str | None
+    size_label: str | None
+    is_active: bool
+    product: InventoryProductSummary
+
+
 class InventoryItemRead(BaseModel):
-    """Response shape for any endpoint returning an inventory item."""
+    """Response shape for any endpoint returning an inventory item.
+
+    The nested `variant` (with `variant.product`) is populated from the
+    SQLAlchemy relationships and lets the frontend render labels
+    without a follow-up call. The service layer eager-loads both legs
+    via `selectinload` to avoid N+1 on list endpoints; see
+    `app.services.inventory._inventory_item_load_options`.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -123,6 +169,7 @@ class InventoryItemRead(BaseModel):
     last_counted_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    variant: InventoryVariantSummary
 
 
 # --------------------------------------------------------------------- #

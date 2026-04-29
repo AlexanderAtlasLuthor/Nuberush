@@ -871,3 +871,132 @@ class TestApiIntegration:
         )
         assert resp.status_code == 200
         assert resp.json()["quantity_on_hand"] == 8
+
+
+# --------------------------------------------------------------------- #
+# BIE: enriched response shape (variant + product summary)
+# --------------------------------------------------------------------- #
+#
+# All endpoints sharing `response_model=InventoryItemRead` must surface
+# the nested `variant.sku` and `variant.product.name` populated by the
+# eager-load options in the service layer. We verify the read paths
+# (list + detail) and one mutation path (receive) as a proxy for "every
+# mutation returns the enriched shape" — the wiring is uniform across
+# all 11 endpoints (single _refresh_eager helper) so testing one
+# mutation is sufficient. Other mutation endpoints are exercised in
+# the existing tier-matrix tests above and would fail loudly here if
+# the response_model validation rejected an unenriched object.
+
+
+class TestApiEnrichedResponse:
+    def test_get_inventory_list_includes_enriched_variant(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+    ):
+        store = make_store()
+        product = make_product()
+        # Make the product visibly distinct so a placeholder/empty
+        # serialization would not accidentally pass the assertions.
+        product.name = "Fizzy Cola"
+        product.brand = "Acme Beverages"
+        db_session.commit()
+        variant = make_variant(product=product)
+        variant.sku = "FZ-001"
+        variant.flavor = "cherry"
+        db_session.commit()
+        make_item(store=store, variant=variant)
+
+        manager = make_user(UserRole.manager, store_id=store.id)
+        resp = client.get(
+            f"/stores/{store.id}/inventory", headers=_auth(manager)
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) == 1
+        row = body[0]
+        # Original fields still present.
+        assert row["quantity_on_hand"] == 10
+        # Enriched variant summary.
+        assert row["variant"]["id"] == str(variant.id)
+        assert row["variant"]["sku"] == "FZ-001"
+        assert row["variant"]["flavor"] == "cherry"
+        assert row["variant"]["is_active"] is True
+        # Enriched product summary nested under variant.
+        assert row["variant"]["product"]["id"] == str(product.id)
+        assert row["variant"]["product"]["name"] == "Fizzy Cola"
+        assert row["variant"]["product"]["brand"] == "Acme Beverages"
+        assert row["variant"]["product"]["compliance_status"] == "allowed"
+        assert row["variant"]["product"]["allowed_for_sale"] is True
+
+    def test_get_inventory_item_includes_enriched_variant(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+    ):
+        store = make_store()
+        product = make_product()
+        product.name = "Mint Lozenge"
+        db_session.commit()
+        variant = make_variant(product=product)
+        variant.sku = "ML-22"
+        db_session.commit()
+        item = make_item(store=store, variant=variant)
+
+        staff = make_user(UserRole.staff, store_id=store.id)
+        resp = client.get(f"/inventory/{item.id}", headers=_auth(staff))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["variant"]["sku"] == "ML-22"
+        assert body["variant"]["product"]["name"] == "Mint Lozenge"
+
+    def test_post_receive_response_includes_enriched_variant(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+    ):
+        # Mutation responses share the same InventoryItemRead schema as
+        # reads. If _refresh_eager is wired everywhere, this passes;
+        # if any mutation reverted to db.refresh(item), the lazy-loaded
+        # relationships expire post-commit and Pydantic would raise on
+        # response_model serialization.
+        store = make_store()
+        product = make_product()
+        product.name = "Bubble Tea"
+        db_session.commit()
+        variant = make_variant(product=product)
+        variant.sku = "BT-09"
+        db_session.commit()
+        item = make_item(
+            store=store, variant=variant, quantity_on_hand=5
+        )
+
+        manager = make_user(UserRole.manager, store_id=store.id)
+        resp = client.post(
+            f"/inventory/{item.id}/receive",
+            headers=_auth(manager),
+            json={"quantity": 3},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # Quantity mutation landed.
+        assert body["quantity_on_hand"] == 8
+        # Enriched variant + product survived the mutation path.
+        assert body["variant"]["sku"] == "BT-09"
+        assert body["variant"]["product"]["name"] == "Bubble Tea"

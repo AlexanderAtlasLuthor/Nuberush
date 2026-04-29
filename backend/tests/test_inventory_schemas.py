@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from app.db.models import ComplianceStatus
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
 from app.schemas.inventory import AdjustStockRequest
@@ -33,6 +34,61 @@ from app.schemas.inventory import ReleaseReservationRequest
 from app.schemas.inventory import ReserveStockRequest
 from app.schemas.inventory import ReturnStockRequest
 from app.schemas.inventory import SaleStockRequest
+
+
+def _make_orm_like_inventory_item(
+    *,
+    variant_overrides: dict | None = None,
+    product_overrides: dict | None = None,
+    item_overrides: dict | None = None,
+):
+    """Build a SimpleNamespace tree that mirrors the ORM shape needed
+    by `InventoryItemRead.model_validate(...)` after BIE.1.
+
+    Centralised so that adding/removing fields on the summary schemas
+    only changes one place. Defaults reflect a typical "available, in
+    stock, sellable" item.
+    """
+    now = datetime.now(UTC)
+    product_kwargs = {
+        "id": uuid4(),
+        "name": "ACME Vape",
+        "brand": "ACME",
+        "category": "vape",
+        "compliance_status": ComplianceStatus.allowed,
+        "allowed_for_sale": True,
+        "is_active": True,
+        **(product_overrides or {}),
+    }
+    product = SimpleNamespace(**product_kwargs)
+
+    variant_kwargs = {
+        "id": uuid4(),
+        "sku": "ACME-001",
+        "flavor": "mint",
+        "size_label": "2ml",
+        "is_active": True,
+        "product": product,
+        **(variant_overrides or {}),
+    }
+    variant = SimpleNamespace(**variant_kwargs)
+
+    item_kwargs = {
+        "id": uuid4(),
+        "store_id": uuid4(),
+        "variant_id": variant.id,
+        "quantity_on_hand": 10,
+        "quantity_reserved": 2,
+        "reorder_threshold": 3,
+        "status": InventoryStatus.available,
+        "last_counted_at": None,
+        "created_at": now,
+        "updated_at": now,
+        "variant": variant,
+        **(item_overrides or {}),
+    }
+    item = SimpleNamespace(**item_kwargs)
+    return item, variant, product
 
 
 # --------------------------------------------------------------------- #
@@ -326,23 +382,53 @@ class TestReferencePairRule:
 
 class TestReadSchemas:
     def test_inventory_item_read_validates_orm_like_object(self):
-        now = datetime.now(UTC)
-        item = SimpleNamespace(
-            id=uuid4(),
-            store_id=uuid4(),
-            variant_id=uuid4(),
-            quantity_on_hand=10,
-            quantity_reserved=2,
-            reorder_threshold=3,
-            status=InventoryStatus.available,
-            last_counted_at=None,
-            created_at=now,
-            updated_at=now,
-        )
+        # BIE.1 added a non-optional `variant` (with nested product).
+        # The helper builds the full ORM-like tree; assertions below
+        # cover the original quantity/status fields that this test
+        # was guarding before enrichment.
+        item, _, _ = _make_orm_like_inventory_item()
         read = InventoryItemRead.model_validate(item)
         assert read.quantity_on_hand == 10
         assert read.quantity_reserved == 2
         assert read.status == InventoryStatus.available
+
+    def test_inventory_item_read_includes_variant_summary(self):
+        item, variant, _ = _make_orm_like_inventory_item(
+            variant_overrides={"sku": "ABC-XYZ", "flavor": "menthol"}
+        )
+        read = InventoryItemRead.model_validate(item)
+        assert read.variant.id == variant.id
+        assert read.variant.sku == "ABC-XYZ"
+        assert read.variant.flavor == "menthol"
+        assert read.variant.is_active is True
+
+    def test_inventory_item_read_includes_product_summary(self):
+        item, _, product = _make_orm_like_inventory_item(
+            product_overrides={
+                "name": "Coca-Cola Classic",
+                "brand": "Coca-Cola",
+                "category": "beverage",
+            }
+        )
+        read = InventoryItemRead.model_validate(item)
+        assert read.variant.product.id == product.id
+        assert read.variant.product.name == "Coca-Cola Classic"
+        assert read.variant.product.brand == "Coca-Cola"
+        assert read.variant.product.category == "beverage"
+        assert read.variant.product.allowed_for_sale is True
+        assert read.variant.product.is_active is True
+
+    def test_inventory_item_read_serializes_compliance_status(self):
+        # BIE.1 introduced ComplianceStatus to the inventory response
+        # tree (previously products-only). Round-trip through Pydantic
+        # to confirm the enum keeps its wire value.
+        item, _, _ = _make_orm_like_inventory_item(
+            product_overrides={"compliance_status": ComplianceStatus.banned}
+        )
+        read = InventoryItemRead.model_validate(item)
+        assert read.variant.product.compliance_status == ComplianceStatus.banned
+        dumped = read.model_dump(mode="json")
+        assert dumped["variant"]["product"]["compliance_status"] == "banned"
 
     def test_inventory_log_read_validates_orm_like_object(self):
         now = datetime.now(UTC)

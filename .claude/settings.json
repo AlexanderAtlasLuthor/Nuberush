@@ -43,7 +43,30 @@
       "Bash(npm install *)",
       "Bash(npx tsc *)",
       "Bash(echo \"---EXIT: $?---\")",
-      "Bash(./node_modules/.bin/tsc --noEmit)"
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(echo \"TSC_EXIT=$?\")",
+      "Bash(echo \"BUILD_EXIT=$?\")",
+      "Bash(echo \"TEST_EXIT=$?\")",
+      "Bash(pytest --collect-only tests/test_inventory_schemas.py)",
+      "Bash(python -c \"import alembic; print\\(alembic.__file__\\)\")",
+      "Bash(python -c \"import sqlalchemy; print\\(sqlalchemy.__version__\\)\")",
+      "Bash(python -c \"import fastapi; print\\(fastapi.__version__\\)\")",
+      "Bash(pip show *)",
+      "Bash(pip list *)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" pytest --collect-only tests/test_inventory_schemas.py)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" pytest tests/test_inventory_schemas.py)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" pytest tests/test_inventory_api.py -x)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" psql -h localhost -p 5432 -U nuberush -d nuberush_test -c \"SELECT 1\")",
+      "Bash(python -c ' *)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" pytest tests/test_inventory_api.py -x --tb=short -q)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" pytest tests/test_inventory_schemas.py -q)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" pytest tests/test_inventory_api.py tests/test_inventory_services.py -q)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" pytest tests/test_inventory_api.py -q --tb=short)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" pytest tests/test_inventory_services.py -q --tb=short)",
+      "Bash(PYTHONPATH=\"/c/Users/ceo/OneDrive/Desktop/Nuberush/.vendor_py\" pytest -q --tb=short)"
     ]
   }
 }

@@ -699,3 +699,81 @@ class TestServiceAtomicity:
         db_session.refresh(item)
         assert item.quantity_reserved == 8
         assert len(_logs_for_item(db_session, item.id)) == n_before
+
+
+# --------------------------------------------------------------------- #
+# BIE: anti-N+1 regression for the list endpoint
+# --------------------------------------------------------------------- #
+
+
+class TestEagerLoading:
+    def test_list_inventory_does_not_n_plus_1(
+        self,
+        db_session: Session,
+        make_store,
+        make_product,
+        make_variant,
+        make_item,
+    ):
+        """`list_inventory_for_store` MUST issue a bounded number of
+        SQL statements regardless of how many items the store carries.
+
+        With default lazy-loading the cost would be `1 + 2N` (items,
+        then per-item variant SELECT, then per-item product SELECT).
+        With `selectinload(InventoryItem.variant).selectinload(
+        ProductVariant.product)` the cost is `3` total, independent
+        of N: one SELECT for items, one IN-list SELECT for variants,
+        one IN-list SELECT for products.
+
+        We listen on the bound engine via `before_cursor_execute` and
+        filter to SELECTs that touch the inventory / variant / product
+        tables. The threshold is conservative (≤ 5) so a transient
+        extra read does not flake the test, but well below `2N+1` for
+        N≥4.
+        """
+        from sqlalchemy import event
+
+        store = make_store()
+        # 4 distinct items keeps `2N+1 = 9` clearly above any sane
+        # threshold while still cheap to set up.
+        for _ in range(4):
+            product = make_product()
+            variant = make_variant(product=product)
+            make_item(store=store, variant=variant)
+
+        engine = db_session.get_bind()
+        captured: list[str] = []
+
+        def _on_execute(conn, cursor, statement, parameters, context, executemany):
+            sql = statement.lower()
+            if "select" not in sql:
+                return
+            if any(
+                tbl in sql
+                for tbl in ("inventory_items", "product_variants", "products")
+            ):
+                captured.append(statement)
+
+        event.listen(engine, "before_cursor_execute", _on_execute)
+        try:
+            items = svc.list_inventory_for_store(db_session, store.id)
+        finally:
+            event.remove(engine, "before_cursor_execute", _on_execute)
+
+        # Sanity: we got the rows back and they are populated.
+        assert len(items) == 4
+        for item in items:
+            # Eager-loaded — accessing these does NOT trigger more SQL.
+            assert item.variant is not None
+            assert item.variant.product is not None
+            assert item.variant.sku
+            assert item.variant.product.name
+
+        # Bounded query count. Strict expectation is exactly 3 (items,
+        # variants, products); allow a small slack for harmless
+        # transactional bookkeeping that some SQLAlchemy versions emit.
+        assert len(captured) <= 5, (
+            f"list_inventory_for_store fired {len(captured)} SELECTs on "
+            f"inventory/variant/product tables for 4 items — looks like "
+            f"N+1. Statements:\n" + "\n---\n".join(captured)
+        )

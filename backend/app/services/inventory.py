@@ -23,11 +23,13 @@ from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import selectinload
 
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
+from app.db.models import ProductVariant
 from app.db.models import Store
 from app.schemas.inventory import AdjustStockRequest
 from app.schemas.inventory import DamageStockRequest
@@ -59,17 +61,81 @@ _MVP_OPERATIONAL_STATUSES: frozenset[InventoryStatus] = frozenset(
 # --------------------------------------------------------------------- #
 
 
-def _lock_inventory_item(db: Session, item_id: UUID) -> InventoryItem:
-    """Load the inventory item with a row-level lock.
+def _inventory_item_load_options():
+    """Eager-load options for the variant + product chain.
 
-    Issues `SELECT ... FOR UPDATE`. The lock is held until the
-    surrounding transaction commits or rolls back; concurrent calls
-    on the same item serialize at the DB level. Raises 404 when the
-    row is missing.
+    Used by every read path (`list_inventory_for_store`,
+    `get_inventory_item`, `_lock_inventory_item`) and by the
+    post-mutation re-query so that response serialization never
+    triggers per-row lazy loads. `selectinload` issues two extra
+    bulk SELECTs regardless of N — `1 (items) + 1 (variants) +
+    1 (products)` total — vs. the `2N+1` cost of default lazy
+    loading on a list endpoint. See `domain/inventory_rules.py` for
+    the broader transactional contract.
+    """
+    return selectinload(InventoryItem.variant).selectinload(
+        ProductVariant.product
+    )
+
+
+def _get_inventory_item_eager(
+    db: Session, item_id: UUID
+) -> InventoryItem | None:
+    """Read an inventory item with `variant` and `variant.product`
+    pre-loaded. Returns None when the row is missing — callers
+    decide whether that is a 404 (`get_inventory_item`) or an
+    invariant violation (post-mutation refresh).
+
+    Does NOT take a lock; not for use inside a mutation transaction.
     """
     stmt = (
         select(InventoryItem)
         .where(InventoryItem.id == item_id)
+        .options(_inventory_item_load_options())
+    )
+    return db.scalar(stmt)
+
+
+def _refresh_eager(db: Session, item: InventoryItem) -> InventoryItem:
+    """Replacement for `db.refresh(item)` in mutation paths.
+
+    After a successful commit, SQLAlchemy expires loaded attributes,
+    so accessing `item.variant.product` would lazy-load. Re-querying
+    with the eager-load options gives a fully-populated object that
+    Pydantic can serialize without further round-trips.
+
+    The row is guaranteed to exist post-commit (the caller just
+    mutated it inside the same transaction). The 404 branch covers a
+    pathological race window where a concurrent CASCADE delete from
+    a parent variant or store removed the row between commit and
+    re-query — surfacing it as a clean 404 beats a 500.
+    """
+    refreshed = _get_inventory_item_eager(db, item.id)
+    if refreshed is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Inventory item not found.",
+        )
+    return refreshed
+
+
+def _lock_inventory_item(db: Session, item_id: UUID) -> InventoryItem:
+    """Load the inventory item with a row-level lock and eager-loaded
+    variant + product.
+
+    Issues `SELECT ... FOR UPDATE`. The lock is held until the
+    surrounding transaction commits or rolls back; concurrent calls
+    on the same item serialize at the DB level. The eager-load
+    options issue separate (unlocked) SELECTs for the variant and
+    product so that downstream sellability checks
+    (`_assert_item_operable`, which reads `item.variant.product`)
+    do not fire lazy loads inside the locked transaction. Raises 404
+    when the row is missing.
+    """
+    stmt = (
+        select(InventoryItem)
+        .where(InventoryItem.id == item_id)
+        .options(_inventory_item_load_options())
         .with_for_update()
     )
     item = db.scalar(stmt)
@@ -208,7 +274,12 @@ def _commit_or_translate(db: Session) -> None:
 
 
 def get_inventory_item(db: Session, item_id: UUID) -> InventoryItem:
-    item = db.get(InventoryItem, item_id)
+    """Read a single inventory item with variant + product pre-loaded.
+
+    Eager-loaded so `InventoryItemRead` can serialize the nested
+    summary without a follow-up lazy load. Raises 404 when missing.
+    """
+    item = _get_inventory_item_eager(db, item_id)
     if item is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -223,13 +294,22 @@ def list_inventory_for_store(
     *,
     low_stock_only: bool = False,
 ) -> list[InventoryItem]:
-    """List every inventory item for a store.
+    """List every inventory item for a store with variant + product
+    pre-loaded.
 
     `low_stock_only=True` filters to items where
     `quantity_on_hand - quantity_reserved <= reorder_threshold`,
     so dashboards don't need to compute it client-side.
+
+    Uses `selectinload` for the variant + product chain. Total queries
+    are `1 (items) + 1 (variants) + 1 (products) = 3`, regardless of
+    how many items the store carries (avoids 2N+1).
     """
-    stmt = select(InventoryItem).where(InventoryItem.store_id == store_id)
+    stmt = (
+        select(InventoryItem)
+        .where(InventoryItem.store_id == store_id)
+        .options(_inventory_item_load_options())
+    )
     if low_stock_only:
         stmt = stmt.where(
             (InventoryItem.quantity_on_hand - InventoryItem.quantity_reserved)
@@ -329,8 +409,7 @@ def create_inventory_item(
             detail="Inventory item violates database constraints.",
         ) from exc
 
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 def update_inventory_threshold(
@@ -347,8 +426,7 @@ def update_inventory_threshold(
     item = _lock_inventory_item(db, item_id)
     item.reorder_threshold = reorder_threshold
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 def update_inventory_status(
@@ -374,8 +452,7 @@ def update_inventory_status(
     item = _lock_inventory_item(db, item_id)
     item.status = new_status
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 # --------------------------------------------------------------------- #
@@ -397,8 +474,7 @@ def receive_stock(
     """
     item = _receive_stock_locked(db, item_id, payload, actor_user_id)
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 def _receive_stock_locked(
@@ -448,8 +524,7 @@ def adjust_stock(
     """
     item = _adjust_stock_locked(db, item_id, payload, actor_user_id)
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 def _adjust_stock_locked(
@@ -505,8 +580,7 @@ def record_damage(
     mandatory at the schema layer. quantity_reserved is untouched."""
     item = _record_damage_locked(db, item_id, payload, actor_user_id)
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 def _record_damage_locked(
@@ -570,8 +644,7 @@ def sell_inventory(
     """
     item = _sell_inventory_locked(db, item_id, payload, actor_user_id)
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 def _sell_inventory_locked(
@@ -613,8 +686,7 @@ def reserve_inventory(
     quantity_reserved without touching quantity_on_hand."""
     item = _reserve_inventory_locked(db, item_id, payload, actor_user_id)
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 def _reserve_inventory_locked(
@@ -658,8 +730,7 @@ def release_reservation(
     return to the available pool."""
     item = _release_reservation_locked(db, item_id, payload, actor_user_id)
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 def _release_reservation_locked(
@@ -702,8 +773,7 @@ def return_to_inventory(
     accept its inventory back)."""
     item = _return_to_inventory_locked(db, item_id, payload, actor_user_id)
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
 
 
 def _return_to_inventory_locked(
@@ -851,5 +921,4 @@ def consume_reserved_inventory(
         reason=reason,
     )
     _commit_or_translate(db)
-    db.refresh(item)
-    return item
+    return _refresh_eager(db, item)
