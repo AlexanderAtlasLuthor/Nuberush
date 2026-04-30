@@ -70,7 +70,8 @@
       "Bash(python -m compileall tests)",
       "Bash(python -c \"import sys; print\\(sys.executable\\); print\\(sys.version\\)\")",
       "Bash(python -c \"import pytest, alembic, sqlalchemy, fastapi; print\\('pytest', pytest.__version__\\); print\\('sqlalchemy', sqlalchemy.__version__\\); print\\('alembic', alembic.__version__\\)\")",
-      "Bash(python -c \"import psycopg; print\\('psycopg', psycopg.__version__\\); from sqlalchemy import create_engine; eng = create_engine\\('postgresql+psycopg://nuberush:nuberush@localhost:5432/nuberush_test'\\); conn = eng.connect\\(\\); print\\('connected'\\); conn.close\\(\\)\")"
+      "Bash(python -c \"import psycopg; print\\('psycopg', psycopg.__version__\\); from sqlalchemy import create_engine; eng = create_engine\\('postgresql+psycopg://nuberush:nuberush@localhost:5432/nuberush_test'\\); conn = eng.connect\\(\\); print\\('connected'\\); conn.close\\(\\)\")",
+      "Bash(python -c \"import time; t=time.time\\(\\); import subprocess; r=subprocess.run\\(['python','-m','pytest','tests/test_inventory_schemas.py','-q','--no-header'], capture_output=True, text=True\\); print\\('---STDOUT---'\\); print\\(r.stdout[-3000:]\\); print\\('---STDERR---'\\); print\\(r.stderr[-1000:]\\); print\\(f'WALL_TIME={time.time\\(\\)-t:.2f}s'\\)\")"
     ]
   }
 }
