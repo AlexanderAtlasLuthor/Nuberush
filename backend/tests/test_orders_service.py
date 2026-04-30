@@ -28,6 +28,9 @@ shared ``db_session`` fixture.
 
 import os
 import uuid
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from decimal import Decimal
 from typing import Callable
 from typing import Generator
@@ -192,6 +195,27 @@ def _audit_logs_for_order(db: Session, order_id: uuid.UUID) -> list[OrderAuditLo
             .order_by(OrderAuditLog.created_at.asc())
         ).all()
     )
+
+
+def _set_order_created_at(
+    db: Session, order_id: uuid.UUID, created_at: datetime
+) -> None:
+    order = db.get(Order, order_id)
+    assert order is not None
+    order.created_at = created_at
+    db.add(order)
+    db.commit()
+
+
+def _assert_order_items_enriched(order: Order) -> None:
+    assert order.items
+    for item in order.items:
+        assert item.variant is not None
+        assert item.variant_id == item.variant.id
+        assert item.variant.sku
+        assert item.variant.product is not None
+        assert item.variant.product.id == item.variant.product_id
+        assert item.variant.product.name
 
 
 # --------------------------------------------------------------------- #
@@ -1570,11 +1594,142 @@ class TestReads:
 
         loaded = svc.get_order(db_session, order.id)
         assert loaded.id == order.id
+        _assert_order_items_enriched(loaded)
 
     def test_get_order_missing_raises_404(self, db_session: Session):
         with pytest.raises(HTTPException) as exc:
             svc.get_order(db_session, uuid.uuid4())
         assert exc.value.status_code == 404
+
+    def test_create_order_returns_items_with_variant_product(
+        self, db_session: Session, make_store, make_item, make_admin
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=5)
+        admin = make_admin()
+
+        order = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+
+        _assert_order_items_enriched(order)
+
+    def test_idempotency_replay_returns_items_with_variant_product(
+        self, db_session: Session, make_store, make_item, make_admin
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=5)
+        admin = make_admin()
+        key = f"k-{uuid.uuid4().hex[:8]}"
+
+        svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=key,
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+        replay = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=key,
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+
+        _assert_order_items_enriched(replay)
+
+    def test_transition_response_keeps_items_with_variant_product(
+        self, db_session: Session, make_store, make_item, make_admin
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=5)
+        admin = make_admin()
+        order = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+
+        transitioned = svc.transition_order_status(
+            db_session, order.id,
+            OrderStatusUpdate(new_status=OrderStatus.accepted), admin.id,
+        )
+
+        assert transitioned.status == OrderStatus.accepted
+        _assert_order_items_enriched(transitioned)
+
+    def test_cancel_response_keeps_items_with_variant_product(
+        self, db_session: Session, make_store, make_item, make_admin
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=5)
+        admin = make_admin()
+        order = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+
+        canceled = svc.cancel_order(
+            db_session,
+            order.id,
+            OrderCancelRequest(reason="customer changed mind"),
+            admin.id,
+        )
+
+        assert canceled.status == OrderStatus.canceled
+        _assert_order_items_enriched(canceled)
+
+    def test_return_response_keeps_items_with_variant_product(
+        self, db_session: Session, make_store, make_item, make_admin
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=5)
+        admin = make_admin()
+        order = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+        for status in (
+            OrderStatus.accepted,
+            OrderStatus.preparing,
+            OrderStatus.ready,
+            OrderStatus.delivered,
+        ):
+            order = svc.transition_order_status(
+                db_session,
+                order.id,
+                OrderStatusUpdate(new_status=status),
+                admin.id,
+            )
+
+        returned = svc.return_order(
+            db_session,
+            order.id,
+            OrderReturnRequest(reason="defective unit"),
+            admin.id,
+        )
+
+        assert returned.status == OrderStatus.returned
+        _assert_order_items_enriched(returned)
 
     def test_list_orders_for_store_filters_by_store(
         self, db_session: Session, make_store, make_item, make_admin
@@ -1605,6 +1760,216 @@ class TestReads:
         ids = [o.id for o in a_only]
         assert oa.id in ids
         assert ob.id not in ids
+
+    def test_list_orders_for_store_applies_limit_offset(
+        self, db_session: Session, make_store, make_item, make_admin
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=10)
+        admin = make_admin()
+        for _ in range(3):
+            svc.create_order(
+                db_session, store.id,
+                OrderCreate(
+                    idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                    items=[
+                        OrderItemCreate(
+                            variant_id=item.variant_id, quantity=1
+                        )
+                    ],
+                ),
+                actor_user_id=admin.id,
+            )
+
+        page = svc.list_orders_for_store(
+            db_session, store.id, limit=2, offset=1
+        )
+
+        assert len(page) == 2
+        assert svc.count_orders_for_store(db_session, store.id) == 3
+
+    def test_count_orders_for_store_uses_same_filters(
+        self, db_session: Session, make_store, make_item, make_admin
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=10)
+        admin = make_admin()
+        old = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+        kept = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+        canceled = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+        svc.cancel_order(
+            db_session,
+            canceled.id,
+            OrderCancelRequest(reason="filter target"),
+            admin.id,
+        )
+        base = datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
+        _set_order_created_at(db_session, old.id, base - timedelta(days=2))
+        _set_order_created_at(db_session, kept.id, base)
+        _set_order_created_at(db_session, canceled.id, base)
+
+        listed = svc.list_orders_for_store(
+            db_session,
+            store.id,
+            status=OrderStatus.pending,
+            created_from=base - timedelta(hours=1),
+        )
+        total = svc.count_orders_for_store(
+            db_session,
+            store.id,
+            status=OrderStatus.pending,
+            created_from=base - timedelta(hours=1),
+        )
+
+        assert [o.id for o in listed] == [kept.id]
+        assert total == 1
+
+    def test_list_orders_for_store_orders_by_created_at_desc_then_id_desc(
+        self, db_session: Session, make_store, make_item, make_admin
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=10)
+        admin = make_admin()
+        older = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+        tied_a = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+        tied_b = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+        base = datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
+        _set_order_created_at(db_session, older.id, base - timedelta(days=1))
+        _set_order_created_at(db_session, tied_a.id, base)
+        _set_order_created_at(db_session, tied_b.id, base)
+
+        ids = [
+            o.id
+            for o in svc.list_orders_for_store(db_session, store.id)
+        ]
+
+        assert ids[:2] == sorted([tied_a.id, tied_b.id], reverse=True)
+        assert ids[2] == older.id
+
+    def test_list_orders_for_store_includes_items(
+        self, db_session: Session, make_store, make_item, make_admin
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=5)
+        admin = make_admin()
+        order = svc.create_order(
+            db_session, store.id,
+            OrderCreate(
+                idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+            ),
+            actor_user_id=admin.id,
+        )
+
+        listed = svc.list_orders_for_store(db_session, store.id)
+
+        assert listed[0].id == order.id
+        assert len(listed[0].items) == 1
+        _assert_order_items_enriched(listed[0])
+
+    def test_list_orders_for_store_does_not_n_plus_1(
+        self,
+        db_session: Session,
+        make_store,
+        make_product,
+        make_variant,
+        make_item,
+        make_admin,
+    ):
+        from sqlalchemy import event
+
+        store = make_store()
+        admin = make_admin()
+        for _ in range(4):
+            product = make_product()
+            variant = make_variant(product=product)
+            make_item(store=store, variant=variant, quantity_on_hand=5)
+            svc.create_order(
+                db_session,
+                store.id,
+                OrderCreate(
+                    idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+                    items=[
+                        OrderItemCreate(variant_id=variant.id, quantity=1)
+                    ],
+                ),
+                actor_user_id=admin.id,
+            )
+
+        engine = db_session.get_bind()
+        captured: list[str] = []
+
+        def _on_execute(conn, cursor, statement, parameters, context, executemany):
+            sql = statement.lower()
+            if "select" not in sql:
+                return
+            if any(
+                tbl in sql
+                for tbl in (
+                    "orders",
+                    "order_items",
+                    "product_variants",
+                    "products",
+                )
+            ):
+                captured.append(statement)
+
+        event.listen(engine, "before_cursor_execute", _on_execute)
+        try:
+            orders = svc.list_orders_for_store(db_session, store.id)
+            for order in orders:
+                _assert_order_items_enriched(order)
+        finally:
+            event.remove(engine, "before_cursor_execute", _on_execute)
+
+        assert len(orders) == 4
+        assert len(captured) <= 6, (
+            f"list_orders_for_store fired {len(captured)} SELECTs on "
+            "orders/order_items/variant/product tables for 4 orders; "
+            "looks like N+1. Statements:\n" + "\n---\n".join(captured)
+        )
 
     def test_list_order_audit_logs_returns_in_creation_order(
         self, db_session: Session, make_store, make_item, make_admin

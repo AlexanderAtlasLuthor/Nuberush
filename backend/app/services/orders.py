@@ -53,6 +53,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from fastapi import status
+from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import SQLAlchemyError
@@ -239,12 +240,19 @@ def _write_order_audit_log(
     return audit
 
 
+def _order_read_load_options():
+    """Eager-load every relationship needed by OrderRead responses."""
+    return selectinload(Order.items).selectinload(
+        OrderItem.variant
+    ).selectinload(ProductVariant.product)
+
+
 def _load_order(db: Session, order_id: UUID) -> Order:
     """Load an order with its items eagerly. Raises 404 if missing."""
     stmt = (
         select(Order)
         .where(Order.id == order_id)
-        .options(selectinload(Order.items))
+        .options(_order_read_load_options())
     )
     order = db.scalar(stmt)
     if order is None:
@@ -264,7 +272,7 @@ def _find_existing_idempotent_order(
             Order.store_id == store_id,
             Order.idempotency_key == idempotency_key,
         )
-        .options(selectinload(Order.items))
+        .options(_order_read_load_options())
     )
     return db.scalar(stmt)
 
@@ -272,6 +280,24 @@ def _find_existing_idempotent_order(
 # --------------------------------------------------------------------- #
 # Reads
 # --------------------------------------------------------------------- #
+
+
+def _apply_order_list_filters(
+    stmt,
+    *,
+    store_id: UUID,
+    status: OrderStatus | None = None,  # noqa: A002 - public arg name
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+):
+    stmt = stmt.where(Order.store_id == store_id)
+    if status is not None:
+        stmt = stmt.where(Order.status == status)
+    if created_from is not None:
+        stmt = stmt.where(Order.created_at >= created_from)
+    if created_to is not None:
+        stmt = stmt.where(Order.created_at <= created_to)
+    return stmt
 
 
 def get_order(db: Session, order_id: UUID) -> Order:
@@ -285,20 +311,42 @@ def list_orders_for_store(
     status: OrderStatus | None = None,  # noqa: A002 — public arg name
     created_from: datetime | None = None,
     created_to: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[Order]:
-    stmt = (
-        select(Order)
-        .where(Order.store_id == store_id)
-        .options(selectinload(Order.items))
+    stmt = select(Order).options(_order_read_load_options())
+    stmt = _apply_order_list_filters(
+        stmt,
+        store_id=store_id,
+        status=status,
+        created_from=created_from,
+        created_to=created_to,
     )
-    if status is not None:
-        stmt = stmt.where(Order.status == status)
-    if created_from is not None:
-        stmt = stmt.where(Order.created_at >= created_from)
-    if created_to is not None:
-        stmt = stmt.where(Order.created_at <= created_to)
-    stmt = stmt.order_by(Order.created_at.desc())
+    stmt = (
+        stmt.order_by(Order.created_at.desc(), Order.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     return list(db.scalars(stmt).all())
+
+
+def count_orders_for_store(
+    db: Session,
+    store_id: UUID,
+    *,
+    status: OrderStatus | None = None,  # noqa: A002 - public arg name
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+) -> int:
+    stmt = select(func.count()).select_from(Order)
+    stmt = _apply_order_list_filters(
+        stmt,
+        store_id=store_id,
+        status=status,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    return int(db.scalar(stmt) or 0)
 
 
 def list_order_audit_logs(

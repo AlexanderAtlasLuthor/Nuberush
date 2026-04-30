@@ -16,15 +16,36 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from app.db.models import ComplianceStatus
 from app.db.models import OrderStatus
 from app.schemas.orders import OrderAuditLogRead
 from app.schemas.orders import OrderCancelRequest
 from app.schemas.orders import OrderCreate
 from app.schemas.orders import OrderItemCreate
 from app.schemas.orders import OrderItemRead
+from app.schemas.orders import OrderListResponse
 from app.schemas.orders import OrderRead
 from app.schemas.orders import OrderReturnRequest
 from app.schemas.orders import OrderStatusUpdate
+
+
+def _variant_summary() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid4(),
+        sku="SKU-ORDER-1",
+        flavor="mint",
+        size_label="1g",
+        is_active=True,
+        product=SimpleNamespace(
+            id=uuid4(),
+            name="Order Product",
+            brand="Nube",
+            category="vape",
+            compliance_status=ComplianceStatus.allowed,
+            allowed_for_sale=True,
+            is_active=True,
+        ),
+    )
 
 
 # --------------------------------------------------------------------- #
@@ -243,6 +264,7 @@ class TestOrderItemRead:
             line_total=Decimal("29.97"),
             created_at=now,
             updated_at=now,
+            variant=_variant_summary(),
         )
         out = OrderItemRead.model_validate(row)
         assert out.id == item_id
@@ -252,6 +274,8 @@ class TestOrderItemRead:
         assert out.quantity == 3
         assert out.unit_price == Decimal("9.99")
         assert out.line_total == Decimal("29.97")
+        assert out.variant.sku == "SKU-ORDER-1"
+        assert out.variant.product.name == "Order Product"
 
 
 # --------------------------------------------------------------------- #
@@ -307,12 +331,34 @@ class TestOrderRead:
             line_total=Decimal("9.98"),
             created_at=now,
             updated_at=now,
+            variant=_variant_summary(),
         )
         row = _orm_order(items=[item_row])
         out = OrderRead.model_validate(row)
         assert len(out.items) == 1
         assert out.items[0].quantity == 2
         assert out.items[0].line_total == Decimal("9.98")
+        assert out.items[0].variant.product.category == "vape"
+
+
+# --------------------------------------------------------------------- #
+# OrderListResponse
+# --------------------------------------------------------------------- #
+
+
+class TestOrderListResponse:
+    def test_contains_paginated_order_envelope(self):
+        row = _orm_order()
+        out = OrderListResponse(
+            items=[OrderRead.model_validate(row)],
+            total=1,
+            limit=100,
+            offset=0,
+        )
+        assert len(out.items) == 1
+        assert out.total == 1
+        assert out.limit == 100
+        assert out.offset == 0
 
 
 # --------------------------------------------------------------------- #

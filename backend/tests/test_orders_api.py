@@ -15,6 +15,9 @@ duplicated here.
 """
 
 import uuid
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from decimal import Decimal
 from typing import Callable
 
@@ -26,6 +29,7 @@ from app.core.security import create_access_token
 from app.core.security import hash_password
 from app.db.models import InventoryItem
 from app.db.models import InventoryStatus
+from app.db.models import Order
 from app.db.models import Product
 from app.db.models import ProductVariant
 from app.db.models import Store
@@ -158,6 +162,34 @@ def _create_pending(
     return resp.json()
 
 
+def _set_order_created_at(
+    db_session: Session, order_id: str, created_at: datetime
+) -> None:
+    order = db_session.get(Order, uuid.UUID(order_id))
+    assert order is not None
+    order.created_at = created_at
+    db_session.add(order)
+    db_session.commit()
+
+
+def _assert_order_items_enriched(order: dict) -> None:
+    assert order["items"]
+    for item in order["items"]:
+        assert item["variant_id"] == item["variant"]["id"]
+        assert item["variant"]["sku"]
+        assert "unit_price" in item
+        assert "line_total" in item
+        assert isinstance(item["unit_price"], str)
+        assert isinstance(item["line_total"], str)
+        product = item["variant"]["product"]
+        assert product["id"]
+        assert product["name"]
+        assert product["category"]
+        assert "compliance_status" in product
+        assert "allowed_for_sale" in product
+        assert "is_active" in product
+
+
 def _walk(client: TestClient, user: User, order_id: str, target: str) -> None:
     resp = client.patch(
         f"/orders/{order_id}/status",
@@ -282,6 +314,7 @@ class TestApiCreateOrder:
         assert body["status"] == "pending"
         assert body["store_id"] == str(store.id)
         assert len(body["items"]) == 1
+        _assert_order_items_enriched(body)
 
     def test_create_reserves_inventory(
         self,
@@ -390,9 +423,76 @@ class TestApiListOrders:
             f"/stores/{store_a.id}/orders", headers=_auth(admin)
         )
         assert resp.status_code == 200
-        ids = [o["id"] for o in resp.json()]
+        body = resp.json()
+        ids = [o["id"] for o in body["items"]]
+        assert body["total"] == 1
         assert oa["id"] in ids
         assert ob["id"] not in ids
+
+    def test_list_returns_paginated_envelope_with_defaults(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_item,
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=5)
+        admin = make_user(UserRole.admin)
+        order = _create_pending(client, admin, store, item.variant_id)
+
+        resp = client.get(
+            f"/stores/{store.id}/orders", headers=_auth(admin)
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body.keys()) == {"items", "total", "limit", "offset"}
+        assert body["total"] == 1
+        assert body["limit"] == 100
+        assert body["offset"] == 0
+        assert body["items"][0]["id"] == order["id"]
+        assert len(body["items"][0]["items"]) == 1
+        _assert_order_items_enriched(body["items"][0])
+
+    def test_list_custom_pagination_limits_items_but_not_total(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_item,
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=10)
+        admin = make_user(UserRole.admin)
+        for _ in range(3):
+            _create_pending(client, admin, store, item.variant_id)
+
+        resp = client.get(
+            f"/stores/{store.id}/orders?limit=2&offset=1",
+            headers=_auth(admin),
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["items"]) == 2
+        assert body["total"] == 3
+        assert body["limit"] == 2
+        assert body["offset"] == 1
+
+    @pytest.mark.parametrize(
+        "query",
+        ["limit=0", "limit=501", "offset=-1"],
+    )
+    def test_list_rejects_invalid_pagination_params(
+        self, client: TestClient, make_store, make_user, query
+    ):
+        store = make_store()
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            f"/stores/{store.id}/orders?{query}", headers=_auth(admin)
+        )
+        assert resp.status_code == 422
 
     def test_list_filter_by_status_query_param(
         self,
@@ -422,9 +522,101 @@ class TestApiListOrders:
             headers=_auth(admin),
         )
         assert resp.status_code == 200
-        ids = [o["id"] for o in resp.json()]
+        body = resp.json()
+        ids = [o["id"] for o in body["items"]]
+        assert body["total"] == 1
         assert kept["id"] in ids
         assert canceled_target["id"] not in ids
+
+    def test_list_filter_by_created_from_updates_items_and_total(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_item,
+        db_session,
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=10)
+        admin = make_user(UserRole.admin)
+        old = _create_pending(client, admin, store, item.variant_id)
+        new = _create_pending(client, admin, store, item.variant_id)
+        base = datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
+        _set_order_created_at(db_session, old["id"], base - timedelta(days=2))
+        _set_order_created_at(db_session, new["id"], base)
+
+        resp = client.get(
+            f"/stores/{store.id}/orders",
+            headers=_auth(admin),
+            params={"created_from": base.isoformat()},
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        ids = [o["id"] for o in body["items"]]
+        assert body["total"] == 1
+        assert new["id"] in ids
+        assert old["id"] not in ids
+
+    def test_list_filter_by_created_to_updates_items_and_total(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_item,
+        db_session,
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=10)
+        admin = make_user(UserRole.admin)
+        old = _create_pending(client, admin, store, item.variant_id)
+        new = _create_pending(client, admin, store, item.variant_id)
+        base = datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
+        _set_order_created_at(db_session, old["id"], base - timedelta(days=2))
+        _set_order_created_at(db_session, new["id"], base)
+
+        cutoff = base - timedelta(days=1)
+        resp = client.get(
+            f"/stores/{store.id}/orders",
+            headers=_auth(admin),
+            params={"created_to": cutoff.isoformat()},
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        ids = [o["id"] for o in body["items"]]
+        assert body["total"] == 1
+        assert old["id"] in ids
+        assert new["id"] not in ids
+
+    def test_list_orders_by_created_at_desc_then_id_desc(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_item,
+        db_session,
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=10)
+        admin = make_user(UserRole.admin)
+        older = _create_pending(client, admin, store, item.variant_id)
+        tied_a = _create_pending(client, admin, store, item.variant_id)
+        tied_b = _create_pending(client, admin, store, item.variant_id)
+        base = datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
+        _set_order_created_at(db_session, older["id"], base - timedelta(days=1))
+        _set_order_created_at(db_session, tied_a["id"], base)
+        _set_order_created_at(db_session, tied_b["id"], base)
+
+        resp = client.get(
+            f"/stores/{store.id}/orders", headers=_auth(admin)
+        )
+
+        assert resp.status_code == 200
+        ids = [o["id"] for o in resp.json()["items"]]
+        tied_expected = sorted([tied_a["id"], tied_b["id"]], reverse=True)
+        assert ids[:2] == tied_expected
+        assert ids[2] == older["id"]
 
 
 class TestApiGetOrder:
@@ -444,6 +636,7 @@ class TestApiGetOrder:
         )
         assert resp.status_code == 200
         assert resp.json()["id"] == order["id"]
+        _assert_order_items_enriched(resp.json())
 
     def test_get_missing_order_returns_404(
         self, client: TestClient, make_user
@@ -527,6 +720,7 @@ class TestApiTransitionStatus:
         assert resp.status_code == 200
         assert resp.json()["status"] == "accepted"
         assert resp.json()["accepted_at"] is not None
+        _assert_order_items_enriched(resp.json())
 
     def test_invalid_transition_returns_422(
         self,
@@ -677,6 +871,7 @@ class TestApiCancel:
         assert body["status"] == "canceled"
         assert body["canceled_at"] is not None
         assert body["cancel_reason"] == "operational"
+        _assert_order_items_enriched(body)
 
         db_session.refresh(item)
         assert item.quantity_reserved == 0
@@ -769,6 +964,7 @@ class TestApiReturn:
         body = resp.json()
         assert body["status"] == "returned"
         assert body["returned_at"] is not None
+        _assert_order_items_enriched(body)
 
         db_session.refresh(item)
         assert item.quantity_on_hand == 10  # back up

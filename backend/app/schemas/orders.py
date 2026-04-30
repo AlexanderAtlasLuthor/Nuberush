@@ -36,6 +36,7 @@ from pydantic import field_validator
 from pydantic import model_validator
 
 from app.db.models import OrderStatus
+from app.schemas.inventory import InventoryVariantSummary
 
 
 # --------------------------------------------------------------------- #
@@ -160,6 +161,7 @@ class OrderItemRead(BaseModel):
     line_total: Decimal
     created_at: datetime
     updated_at: datetime
+    variant: InventoryVariantSummary
 
 
 class OrderRead(BaseModel):
@@ -191,6 +193,20 @@ class OrderRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemRead]
+
+
+# --------------------------------------------------------------------- #
+# Aggregate responses
+# --------------------------------------------------------------------- #
+
+
+class OrderListResponse(BaseModel):
+    """Paginated response for GET /stores/{store_id}/orders."""
+
+    items: list[OrderRead]
+    total: int
+    limit: int
+    offset: int
 
 
 # --------------------------------------------------------------------- #

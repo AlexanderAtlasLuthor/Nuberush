@@ -44,6 +44,7 @@ from app.db.session import get_db
 from app.schemas.orders import OrderAuditLogRead
 from app.schemas.orders import OrderCancelRequest
 from app.schemas.orders import OrderCreate
+from app.schemas.orders import OrderListResponse
 from app.schemas.orders import OrderRead
 from app.schemas.orders import OrderReturnRequest
 from app.schemas.orders import OrderStatusUpdate
@@ -108,7 +109,7 @@ def create_order(
 
 @router.get(
     "/stores/{store_id}/orders",
-    response_model=list[OrderRead],
+    response_model=OrderListResponse,
     dependencies=[Depends(require_store_member)],
 )
 def list_store_orders(
@@ -118,15 +119,32 @@ def list_store_orders(
     status_filter: OrderStatus | None = Query(default=None, alias="status"),
     created_from: datetime | None = Query(default=None),
     created_to: datetime | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     current_user: User = Depends(require_staff_or_above),
     db: Session = Depends(get_db),
-) -> list:
-    return svc.list_orders_for_store(
+) -> OrderListResponse:
+    items = svc.list_orders_for_store(
         db,
         store_id,
         status=status_filter,
         created_from=created_from,
         created_to=created_to,
+        limit=limit,
+        offset=offset,
+    )
+    total = svc.count_orders_for_store(
+        db,
+        store_id,
+        status=status_filter,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    return OrderListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 
