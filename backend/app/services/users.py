@@ -1,0 +1,448 @@
+"""Service layer for users management (F2.15.2).
+
+Owns the business logic for the operational user-management surface
+(list / read / update / deactivate / reactivate / change role / assign
+store / admin-set-password). Routers in F2.15.3 will be thin: parse,
+authorize, call, return.
+
+Conventions (consistent with `app.services.stores` and
+`app.services.products`):
+
+- Every function takes the DB session as its first argument and is
+  responsible for its own commit/rollback.
+- Read functions raise HTTPException(404) on missing rows so routers
+  can `raise` directly without extra branching.
+- RBAC and tenancy guards live in `app.core.permissions`. This module
+  composes them; it does not re-encode the rules. That keeps a single
+  source of truth for the "who can do what" matrix.
+- Mutation functions write only the columns the contract permits. The
+  schemas (with `extra="forbid"`) prevent privileged fields from ever
+  reaching this layer; this module never relies on a deny-list.
+- Status codes match the existing repo:
+    * 403 for RBAC / tenancy refusals.
+    * 404 for missing resources.
+    * 400 for inactive stores during assignment (mirrors
+      `require_store_member`).
+    * 422 for self-target / last-admin / store-invariant violations.
+
+Out of scope here (handled elsewhere or deferred):
+  - User creation lives in `POST /auth/users` and is unchanged.
+  - Email-based password reset, invitation flows, MFA, SSO — none of
+    those exist in F2.15.
+"""
+
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import HTTPException
+from fastapi import status
+from sqlalchemy import func
+from sqlalchemy import or_
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.core.permissions import assert_active_store_for_assignment
+from app.core.permissions import assert_can_change_user_role
+from app.core.permissions import assert_can_deactivate_user
+from app.core.permissions import assert_can_modify_user
+from app.core.permissions import assert_can_reactivate_user
+from app.core.permissions import assert_user_store_invariant
+from app.core.security import hash_password
+from app.db.models import User
+from app.db.models import UserRole
+from app.schemas.users import AdminSetPasswordRequest
+from app.schemas.users import UserRoleChangeRequest
+from app.schemas.users import UserStoreAssignmentRequest
+from app.schemas.users import UserUpdateRequest
+
+
+# Roles allowed to access the user-management surface. staff and
+# driver are operational roles and never see this layer.
+_MANAGEMENT_ROLES: frozenset[UserRole] = frozenset(
+    {UserRole.admin, UserRole.owner, UserRole.manager}
+)
+
+
+def _assert_management_caller(actor: User) -> None:
+    if actor.role not in _MANAGEMENT_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this resource.",
+        )
+
+
+def _assert_admin_caller(actor: User) -> None:
+    if actor.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required.",
+        )
+
+
+def _get_user_or_404(db: Session, user_id: UUID) -> User:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+    return user
+
+
+def _get_user_for_management_or_forbidden(
+    db: Session, user_id: UUID, *, actor: User
+) -> User:
+    """Tenant-safe lookup for the user-management surface.
+
+    Mirrors the existence-collapse rule the codebase already uses for
+    `require_store_member`: a non-admin caller cannot probe whether a
+    user_id exists by observing 404 vs 403, so for non-admin actors we
+    return 403 in BOTH the missing-row and out-of-scope cases.
+
+    Admin actors continue to see 404 for genuinely missing rows so an
+    admin tooling caller can distinguish "user deleted" from "user
+    exists but action rejected by invariant" — that signal is useful
+    in admin contexts and not exploitable, since admin already has
+    global visibility.
+
+    The downstream `assert_can_*` helpers run unchanged on the
+    returned `User` and surface 403 for cross-store / matrix
+    rejections — same code path the existence-collapse uses, so a
+    non-admin attacker sees a uniform 403 response regardless of
+    whether the UUID was unknown, in another store, or owned by an
+    admin.
+    """
+    user = db.get(User, user_id)
+    if user is None:
+        if actor.role == UserRole.admin:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this user.",
+        )
+    return user
+
+
+def _commit_or_translate(db: Session, *, detail: str) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=detail,
+        ) from exc
+
+
+# --------------------------------------------------------------------- #
+# Read paths
+# --------------------------------------------------------------------- #
+
+
+def _resolve_list_store_scope(
+    actor: User, requested_store_id: UUID | None
+) -> UUID | None:
+    """Decide which store_id should scope the list query.
+
+    Distinct from `permissions.resolve_store_scope` because the rule
+    here is operationally narrower: management roles ALWAYS see only
+    their own store on `/users`, never another store, and never global
+    scope. Admin sees what they ask for (None == global, UUID == that
+    store). A non-admin without `store_id` is a structural bug and is
+    rejected with 403.
+    """
+    if actor.role == UserRole.admin:
+        return requested_store_id
+
+    if actor.store_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not bound to a store.",
+        )
+
+    if (
+        requested_store_id is not None
+        and requested_store_id != actor.store_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this store.",
+        )
+
+    return actor.store_id
+
+
+def list_users(
+    db: Session,
+    *,
+    actor: User,
+    role: UserRole | None = None,
+    is_active: bool | None = None,
+    store_id: UUID | None = None,
+    q: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> dict:
+    """Paginated list of users visible to `actor`.
+
+    Returns a dict shaped exactly like `UserListResponse`
+    (`items`/`total`/`limit`/`offset`) so the route layer can construct
+    the response model directly without remapping fields.
+    """
+    _assert_management_caller(actor)
+    effective_store_id = _resolve_list_store_scope(actor, store_id)
+
+    stmt = select(User)
+    count_stmt = select(func.count()).select_from(User)
+
+    if effective_store_id is not None:
+        stmt = stmt.where(User.store_id == effective_store_id)
+        count_stmt = count_stmt.where(User.store_id == effective_store_id)
+
+    if role is not None:
+        stmt = stmt.where(User.role == role)
+        count_stmt = count_stmt.where(User.role == role)
+
+    if is_active is not None:
+        stmt = stmt.where(User.is_active.is_(is_active))
+        count_stmt = count_stmt.where(User.is_active.is_(is_active))
+
+    if q:
+        pattern = f"%{q.strip()}%"
+        if pattern != "%%":
+            search = or_(
+                User.full_name.ilike(pattern),
+                User.email.ilike(pattern),
+                User.phone.ilike(pattern),
+            )
+            stmt = stmt.where(search)
+            count_stmt = count_stmt.where(search)
+
+    stmt = stmt.order_by(User.created_at.desc()).limit(limit).offset(offset)
+
+    items = list(db.scalars(stmt).all())
+    total = db.scalar(count_stmt) or 0
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def get_user(db: Session, user_id: UUID, *, actor: User) -> User:
+    """Read a single user under the same RBAC + tenancy rules used by
+    profile updates. Read parity with update keeps the matrix simple
+    and means a caller cannot probe the existence of users they may
+    not modify."""
+    _assert_management_caller(actor)
+    target = _get_user_for_management_or_forbidden(db, user_id, actor=actor)
+    assert_can_modify_user(actor, target)
+    return target
+
+
+# --------------------------------------------------------------------- #
+# Profile update
+# --------------------------------------------------------------------- #
+
+
+def update_user(
+    db: Session,
+    user_id: UUID,
+    payload: UserUpdateRequest,
+    *,
+    actor: User,
+) -> User:
+    """Apply a partial profile update.
+
+    Only the fields the schema exposes (`full_name`, `phone`) reach
+    the User row. Privileged columns are blocked at the schema layer
+    (`extra="forbid"`); this function does not maintain a deny-list.
+    """
+    _assert_management_caller(actor)
+    target = _get_user_for_management_or_forbidden(db, user_id, actor=actor)
+    assert_can_modify_user(actor, target)
+
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        setattr(target, field, value)
+
+    _commit_or_translate(
+        db, detail="User update violates database constraints."
+    )
+    db.refresh(target)
+    return target
+
+
+# --------------------------------------------------------------------- #
+# Lifecycle: deactivate / reactivate
+# --------------------------------------------------------------------- #
+
+
+def deactivate_user(
+    db: Session, user_id: UUID, *, actor: User
+) -> User:
+    _assert_management_caller(actor)
+    target = _get_user_for_management_or_forbidden(db, user_id, actor=actor)
+    assert_can_deactivate_user(db, actor, target)
+
+    target.is_active = False
+    _commit_or_translate(
+        db, detail="User deactivation violates database constraints."
+    )
+    db.refresh(target)
+    return target
+
+
+def reactivate_user(
+    db: Session, user_id: UUID, *, actor: User
+) -> User:
+    _assert_management_caller(actor)
+    target = _get_user_for_management_or_forbidden(db, user_id, actor=actor)
+    assert_can_reactivate_user(actor, target)
+
+    # Reactivating a non-admin without a store would create a logically
+    # inconsistent active user. The store-invariant helper raises 422
+    # with the canonical message; admins skip the check by design.
+    assert_user_store_invariant(target.role, target.store_id)
+
+    target.is_active = True
+    _commit_or_translate(
+        db, detail="User reactivation violates database constraints."
+    )
+    db.refresh(target)
+    return target
+
+
+# --------------------------------------------------------------------- #
+# Role change
+# --------------------------------------------------------------------- #
+
+
+def change_user_role(
+    db: Session,
+    user_id: UUID,
+    payload: UserRoleChangeRequest,
+    *,
+    actor: User,
+) -> User:
+    _assert_management_caller(actor)
+    target = _get_user_for_management_or_forbidden(db, user_id, actor=actor)
+
+    if target.id == actor.id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="You cannot change your own role.",
+        )
+
+    new_role = payload.role
+    assert_can_change_user_role(actor, target, new_role)
+
+    # Cross-field invariant: admins are global, non-admins are
+    # store-bound. Promoting to admin clears store_id; demoting from
+    # admin requires the target to already have a store assigned
+    # (admins use POST /users/{id}/store to set one before the
+    # demotion). Surfacing both as 422 keeps the contract uniform.
+    if new_role == UserRole.admin:
+        target.store_id = None
+    else:
+        if target.store_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"{new_role.value} users must be assigned to a store "
+                    f"before changing role."
+                ),
+            )
+
+    target.role = new_role
+    _commit_or_translate(
+        db, detail="User role change violates database constraints."
+    )
+    db.refresh(target)
+    return target
+
+
+# --------------------------------------------------------------------- #
+# Store assignment
+# --------------------------------------------------------------------- #
+
+
+def assign_user_store(
+    db: Session,
+    user_id: UUID,
+    payload: UserStoreAssignmentRequest,
+    *,
+    actor: User,
+) -> User:
+    """Set or clear a user's store_id. Admin-only.
+
+    Owners and managers can move users between stores only by
+    creating a fresh user under the new store, which is the simplest
+    safe path and matches how the org actually onboards.
+    """
+    _assert_admin_caller(actor)
+    target = _get_user_or_404(db, user_id)
+
+    if target.role == UserRole.admin:
+        if payload.store_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Admin users must not be bound to a store.",
+            )
+        target.store_id = None
+    else:
+        if payload.store_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"{target.role.value} users must be assigned to a store."
+                ),
+            )
+        # Resolves existence + active state. 404 / 400 mirror
+        # `require_store_member` so the route layer behavior is the
+        # same whether the call comes from /users or /stores.
+        assert_active_store_for_assignment(db, payload.store_id)
+        target.store_id = payload.store_id
+
+    _commit_or_translate(
+        db, detail="Store assignment violates database constraints."
+    )
+    db.refresh(target)
+    return target
+
+
+# --------------------------------------------------------------------- #
+# Admin-driven password set
+# --------------------------------------------------------------------- #
+
+
+def admin_set_user_password(
+    db: Session,
+    user_id: UUID,
+    payload: AdminSetPasswordRequest,
+    *,
+    actor: User,
+) -> User:
+    """Replace a user's password_hash with a fresh bcrypt hash.
+
+    No email, no reset token, no SMTP, no invitation flow — the admin
+    sets the password out of band and communicates it to the user
+    through a separate channel. F2.15 deliberately does not ship a
+    self-service reset.
+    """
+    _assert_admin_caller(actor)
+    target = _get_user_or_404(db, user_id)
+
+    target.password_hash = hash_password(payload.new_password)
+    _commit_or_translate(
+        db, detail="Password change violates database constraints."
+    )
+    db.refresh(target)
+    return target
