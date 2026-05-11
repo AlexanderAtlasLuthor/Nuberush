@@ -892,3 +892,445 @@ class TestEagerLoading:
             f"inventory/variant/product tables for 4 items — looks like "
             f"N+1. Statements:\n" + "\n---\n".join(captured)
         )
+
+
+# --------------------------------------------------------------------- #
+# Admin global feed (F2.18.1)
+# --------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def make_non_admin(db_session: Session, make_store) -> Callable[..., User]:
+    def _create(role: UserRole = UserRole.owner) -> User:
+        store = make_store()
+        user = User(
+            full_name=f"Inv Svc {role.value}",
+            email=f"{role.value}-{uuid.uuid4().hex[:8]}@example.com",
+            password_hash=hash_password("supersecret123"),
+            role=role,
+            store_id=store.id,
+            is_active=True,
+        )
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+        return user
+
+    return _create
+
+
+def _pin_updated_at(
+    db_session: Session,
+    items: list[InventoryItem],
+    *,
+    start: datetime | None = None,
+    same_timestamp: bool = False,
+) -> None:
+    """Pin updated_at to deterministic values for sort-order assertions.
+
+    Mirrors _pin_created_at but targets updated_at. A BEFORE UPDATE
+    trigger (`trg_inventory_items_set_updated_at`) normally overwrites
+    `NEW.updated_at = now()` on every UPDATE, which would clobber any
+    value we tried to write. The helper disables the trigger inside the
+    active test transaction so the manual values stick; the test session
+    rolls back at teardown so production behavior is never affected.
+    """
+    from sqlalchemy import text
+
+    db_session.execute(
+        text(
+            "ALTER TABLE inventory_items "
+            "DISABLE TRIGGER trg_inventory_items_set_updated_at"
+        )
+    )
+    try:
+        base = start or datetime(2025, 6, 1, tzinfo=UTC)
+        for index, item in enumerate(items):
+            item.updated_at = (
+                base if same_timestamp else base + timedelta(minutes=index)
+            )
+        db_session.commit()
+    finally:
+        db_session.execute(
+            text(
+                "ALTER TABLE inventory_items "
+                "ENABLE TRIGGER trg_inventory_items_set_updated_at"
+            )
+        )
+        db_session.commit()
+    for item in items:
+        db_session.refresh(item)
+
+
+class TestServiceAdminInventoryRBAC:
+    def test_non_admin_forbidden(
+        self, db_session: Session, make_non_admin
+    ):
+        owner = make_non_admin(role=UserRole.owner)
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_inventory(db_session, actor=owner)
+        assert excinfo.value.status_code == 403
+
+    @pytest.mark.parametrize(
+        "role",
+        [UserRole.owner, UserRole.manager, UserRole.staff, UserRole.driver],
+    )
+    def test_every_non_admin_role_forbidden(
+        self, db_session: Session, make_non_admin, role
+    ):
+        actor = make_non_admin(role=role)
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_inventory(db_session, actor=actor)
+        assert excinfo.value.status_code == 403
+
+    def test_admin_allowed_empty(
+        self, db_session: Session, make_admin
+    ):
+        admin = make_admin()
+        response = svc.list_admin_inventory(db_session, actor=admin)
+        assert response.total == 0
+        assert response.items == []
+        assert response.limit == 100
+        assert response.offset == 0
+
+
+class TestServiceAdminInventoryGlobalFeed:
+    def test_returns_items_from_multiple_stores(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store_a = make_store()
+        store_b = make_store()
+        item_a = make_item(store=store_a)
+        item_b = make_item(store=store_b)
+
+        response = svc.list_admin_inventory(db_session, actor=admin)
+
+        ids = {item.id for item in response.items}
+        assert item_a.id in ids
+        assert item_b.id in ids
+        assert response.total >= 2
+
+    def test_total_counts_pre_pagination(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        items = [make_item(store=store) for _ in range(5)]
+        _pin_updated_at(db_session, items)
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, store_id=store.id, limit=2, offset=0
+        )
+
+        assert response.total == 5
+        assert len(response.items) == 2
+
+    def test_pagination_offset_advances(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        items = [make_item(store=store) for _ in range(4)]
+        _pin_updated_at(db_session, items)
+
+        first_page = svc.list_admin_inventory(
+            db_session, actor=admin, store_id=store.id, limit=2, offset=0
+        )
+        second_page = svc.list_admin_inventory(
+            db_session, actor=admin, store_id=store.id, limit=2, offset=2
+        )
+
+        first_ids = [item.id for item in first_page.items]
+        second_ids = [item.id for item in second_page.items]
+        assert set(first_ids).isdisjoint(set(second_ids))
+        assert len(first_ids) == 2
+        assert len(second_ids) == 2
+
+    def test_sort_updated_at_desc_then_id_asc(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        # Three items with the SAME updated_at to force id ASC tie-break.
+        items = [make_item(store=store) for _ in range(3)]
+        _pin_updated_at(db_session, items, same_timestamp=True)
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, store_id=store.id, limit=10, offset=0
+        )
+
+        returned_ids = [str(item.id) for item in response.items]
+        assert returned_ids == sorted(str(item.id) for item in items)
+
+    def test_sort_newer_updated_at_first(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        items = [make_item(store=store) for _ in range(3)]
+        # Distinct ascending timestamps → newest must come first.
+        _pin_updated_at(db_session, items)
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, store_id=store.id, limit=10, offset=0
+        )
+
+        returned_ids = [item.id for item in response.items]
+        assert returned_ids == [items[2].id, items[1].id, items[0].id]
+
+
+class TestServiceAdminInventoryStoreScope:
+    def test_store_id_filter_returns_only_that_store(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store_a = make_store()
+        store_b = make_store()
+        item_a = make_item(store=store_a)
+        make_item(store=store_b)
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, store_id=store_a.id
+        )
+
+        returned_ids = {item.id for item in response.items}
+        assert returned_ids == {item_a.id}
+        # All returned rows belong to store_a.
+        for item in response.items:
+            assert item.store_id == store_a.id
+
+    def test_unknown_store_id_raises_404(
+        self, db_session: Session, make_admin
+    ):
+        admin = make_admin()
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_inventory(
+                db_session, actor=admin, store_id=uuid.uuid4()
+            )
+        assert excinfo.value.status_code == 404
+        assert "store" in excinfo.value.detail.lower()
+
+    def test_inactive_store_id_returns_data(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        """Admin retains visibility into deactivated stores.
+
+        Mirrors F2.17.4 `list_admin_audit` semantics: inactive stores
+        still serve history; only unknown ones 404.
+        """
+        admin = make_admin()
+        store = make_store()
+        item = make_item(store=store)
+        # Deactivate the store directly on the row.
+        store.is_active = False
+        db_session.commit()
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, store_id=store.id
+        )
+
+        ids = {row.id for row in response.items}
+        assert item.id in ids
+
+
+class TestServiceAdminInventoryFilters:
+    def test_low_stock_filter(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        low = make_item(
+            store=store,
+            quantity_on_hand=2,
+            quantity_reserved=1,
+            reorder_threshold=2,
+        )
+        not_low = make_item(
+            store=store,
+            quantity_on_hand=20,
+            quantity_reserved=0,
+            reorder_threshold=2,
+        )
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, store_id=store.id, low_stock=True
+        )
+
+        ids = {item.id for item in response.items}
+        assert low.id in ids
+        assert not_low.id not in ids
+        assert response.total == 1
+
+    def test_status_filter(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        flagged = make_item(store=store, status=InventoryStatus.flagged)
+        make_item(store=store, status=InventoryStatus.available)
+
+        response = svc.list_admin_inventory(
+            db_session,
+            actor=admin,
+            store_id=store.id,
+            inventory_status=InventoryStatus.flagged,
+        )
+
+        assert {item.id for item in response.items} == {flagged.id}
+
+    def test_variant_id_filter(
+        self,
+        db_session: Session,
+        make_admin,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_admin()
+        store_a = make_store()
+        store_b = make_store()
+        target_variant = make_variant()
+        other_variant = make_variant()
+        wanted_a = make_item(store=store_a, variant=target_variant)
+        wanted_b = make_item(store=store_b, variant=target_variant)
+        make_item(store=store_a, variant=other_variant)
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, variant_id=target_variant.id
+        )
+
+        ids = {item.id for item in response.items}
+        assert ids == {wanted_a.id, wanted_b.id}
+
+    def test_product_id_filter(
+        self,
+        db_session: Session,
+        make_admin,
+        make_store,
+        make_product,
+        make_variant,
+        make_item,
+    ):
+        admin = make_admin()
+        store = make_store()
+        target_product = make_product()
+        other_product = make_product()
+        target_variant = make_variant(product=target_product)
+        other_variant = make_variant(product=other_product)
+        wanted = make_item(store=store, variant=target_variant)
+        make_item(store=store, variant=other_variant)
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, product_id=target_product.id
+        )
+
+        ids = {item.id for item in response.items}
+        assert ids == {wanted.id}
+
+    def test_q_matches_variant_sku(
+        self,
+        db_session: Session,
+        make_admin,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_admin()
+        store = make_store()
+        target_variant = make_variant()
+        other_variant = make_variant()
+        wanted = make_item(store=store, variant=target_variant)
+        make_item(store=store, variant=other_variant)
+
+        # Take a unique substring from the target SKU.
+        sku_fragment = target_variant.sku[-6:]
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, q=sku_fragment
+        )
+
+        ids = {item.id for item in response.items}
+        assert wanted.id in ids
+        # Other variants happen to be different uuid-derived SKUs, so
+        # they should not match this fragment.
+        for item in response.items:
+            assert sku_fragment.lower() in (
+                item.variant.sku.lower()
+                if item.variant.sku
+                else ""
+            ) or sku_fragment.lower() in (
+                item.variant.product.name.lower()
+                if item.variant.product.name
+                else ""
+            )
+
+    def test_q_matches_product_name(
+        self,
+        db_session: Session,
+        make_admin,
+        make_store,
+        make_product,
+        make_variant,
+        make_item,
+    ):
+        admin = make_admin()
+        store = make_store()
+        target_product = make_product()
+        target_variant = make_variant(product=target_product)
+        make_item(store=store, variant=target_variant)
+
+        # Take a unique substring from the target product name.
+        name_fragment = target_product.name[-4:]
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, q=name_fragment
+        )
+
+        # The target item must appear.
+        product_names = {
+            item.variant.product.name for item in response.items
+        }
+        assert target_product.name in product_names
+
+    def test_q_whitespace_only_collapses_to_no_filter(
+        self,
+        db_session: Session,
+        make_admin,
+        make_store,
+        make_item,
+    ):
+        admin = make_admin()
+        store = make_store()
+        item = make_item(store=store)
+
+        response = svc.list_admin_inventory(
+            db_session, actor=admin, store_id=store.id, q="   "
+        )
+
+        ids = {row.id for row in response.items}
+        assert item.id in ids
+
+
+class TestServiceStoreScopedRegression:
+    """F2.18.1 must not change the store-scoped service surface."""
+
+    def test_list_inventory_for_store_unchanged(
+        self, db_session: Session, make_store, make_item
+    ):
+        store = make_store()
+        items = [make_item(store=store) for _ in range(2)]
+        _pin_created_at(db_session, items)
+
+        rows = svc.list_inventory_for_store(db_session, store.id)
+
+        assert {row.id for row in rows} == {item.id for item in items}
+
+    def test_count_inventory_for_store_unchanged(
+        self, db_session: Session, make_store, make_item
+    ):
+        store = make_store()
+        for _ in range(3):
+            make_item(store=store)
+
+        assert svc.count_inventory_for_store(db_session, store.id) == 3

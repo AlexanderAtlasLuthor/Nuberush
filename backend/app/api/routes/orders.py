@@ -34,6 +34,7 @@ from fastapi import Query
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin
 from app.api.deps import require_manager_or_above
 from app.api.deps import require_staff_or_above
 from app.api.deps import require_store_member
@@ -238,4 +239,45 @@ def post_return_order(
     _assert_can_access_store(current_user, order.store_id)
     return svc.return_order(
         db, order_id, payload, actor_user_id=current_user.id
+    )
+
+
+# --------------------------------------------------------------------- #
+# Admin global feed (F2.18.1B)
+# --------------------------------------------------------------------- #
+#
+# Read-only, admin-only, cross-store orders list. Lives on the orders
+# router so the orders module owns its admin entry point (mirrors
+# `/admin/inventory` co-located in the inventory router). RBAC is
+# `require_admin` only — no tenancy gate, since admins can see every
+# store. The store-scoped `GET /stores/{store_id}/orders` is preserved
+# unchanged for non-admin operational use.
+
+
+@router.get(
+    "/admin/orders",
+    response_model=OrderListResponse,
+)
+def list_admin_orders_endpoint(
+    actor: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    store_id: UUID | None = Query(default=None),
+    # Aliased to "status" on the wire to match the store-scoped
+    # endpoint and the F2.18.0 contract; local name avoids shadowing
+    # the imported `fastapi.status`.
+    order_status: OrderStatus | None = Query(default=None, alias="status"),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+) -> OrderListResponse:
+    return svc.list_admin_orders(
+        db,
+        actor=actor,
+        store_id=store_id,
+        limit=limit,
+        offset=offset,
+        order_status=order_status,
+        date_from=date_from,
+        date_to=date_to,
     )

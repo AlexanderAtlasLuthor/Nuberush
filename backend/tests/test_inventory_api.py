@@ -1217,3 +1217,489 @@ class TestApiEnrichedResponse:
         # Enriched variant + product survived the mutation path.
         assert body["variant"]["sku"] == "BT-09"
         assert body["variant"]["product"]["name"] == "Bubble Tea"
+
+
+# --------------------------------------------------------------------- #
+# F2.18.1 — GET /admin/inventory (admin global feed)
+# --------------------------------------------------------------------- #
+
+
+ADMIN_INVENTORY_URL = "/admin/inventory"
+
+_ADMIN_INV_LIST_KEYS = {"items", "total", "limit", "offset"}
+
+_NON_ADMIN_ROLES_FOR_ADMIN_INVENTORY = (
+    UserRole.owner,
+    UserRole.manager,
+    UserRole.staff,
+    UserRole.driver,
+)
+
+
+def _pin_updated_at(
+    db_session: Session,
+    items: list[InventoryItem],
+    *,
+    start: datetime | None = None,
+    same_timestamp: bool = False,
+) -> None:
+    """Pin updated_at to deterministic values for sort-order assertions.
+
+    The `trg_inventory_items_set_updated_at` BEFORE UPDATE trigger
+    unconditionally rewrites `NEW.updated_at = now()`, so any plain
+    UPDATE here would lose the value we want. Disable it for the
+    duration of the manual writes; the test session rolls back at
+    teardown, so this never leaks into production behavior.
+    """
+    from sqlalchemy import text
+
+    db_session.execute(
+        text(
+            "ALTER TABLE inventory_items "
+            "DISABLE TRIGGER trg_inventory_items_set_updated_at"
+        )
+    )
+    try:
+        base = start or datetime(2025, 6, 1, tzinfo=UTC)
+        for index, item in enumerate(items):
+            item.updated_at = (
+                base if same_timestamp else base + timedelta(minutes=index)
+            )
+        db_session.commit()
+    finally:
+        db_session.execute(
+            text(
+                "ALTER TABLE inventory_items "
+                "ENABLE TRIGGER trg_inventory_items_set_updated_at"
+            )
+        )
+        db_session.commit()
+    for item in items:
+        db_session.refresh(item)
+
+
+class TestAdminInventoryAuthRBAC:
+    def test_anonymous_returns_401(self, client: TestClient):
+        resp = client.get(ADMIN_INVENTORY_URL)
+        assert resp.status_code == 401, resp.text
+
+    def test_invalid_token_returns_401(self, client: TestClient):
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers={"Authorization": "Bearer not-a-real-token"},
+        )
+        assert resp.status_code == 401, resp.text
+
+    def test_admin_returns_200_empty(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(ADMIN_INVENTORY_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == _ADMIN_INV_LIST_KEYS
+        assert isinstance(body["items"], list)
+        assert body["total"] == 0
+        assert body["limit"] == 100
+        assert body["offset"] == 0
+
+    @pytest.mark.parametrize("role", _NON_ADMIN_ROLES_FOR_ADMIN_INVENTORY)
+    def test_non_admin_forbidden(
+        self,
+        client: TestClient,
+        make_user,
+        role: UserRole,
+    ):
+        actor = make_user(role)
+        resp = client.get(ADMIN_INVENTORY_URL, headers=_auth(actor))
+        assert resp.status_code == 403, resp.text
+
+
+class TestAdminInventoryGlobalFeed:
+    def test_includes_items_from_multiple_stores(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        item_a = make_item(store=store_a, variant=make_variant())
+        item_b = make_item(store=store_b, variant=make_variant())
+
+        resp = client.get(ADMIN_INVENTORY_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        ids = {row["id"] for row in body["items"]}
+        assert str(item_a.id) in ids
+        assert str(item_b.id) in ids
+
+    def test_total_counts_pre_pagination(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        items = [make_item(store=store, variant=make_variant()) for _ in range(5)]
+        _pin_updated_at(db_session, items)
+
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "limit": 2, "offset": 0},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total"] == 5
+        assert len(body["items"]) == 2
+
+    def test_pagination_offset(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        items = [make_item(store=store, variant=make_variant()) for _ in range(4)]
+        _pin_updated_at(db_session, items)
+
+        first = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "limit": 2, "offset": 0},
+        ).json()
+        second = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "limit": 2, "offset": 2},
+        ).json()
+
+        first_ids = {row["id"] for row in first["items"]}
+        second_ids = {row["id"] for row in second["items"]}
+        assert first_ids.isdisjoint(second_ids)
+        assert len(first_ids) == 2
+        assert len(second_ids) == 2
+
+    def test_sort_updated_at_desc(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        items = [make_item(store=store, variant=make_variant()) for _ in range(3)]
+        _pin_updated_at(db_session, items)
+
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "limit": 10},
+        )
+        assert resp.status_code == 200, resp.text
+        returned = [row["id"] for row in resp.json()["items"]]
+        expected = [str(items[2].id), str(items[1].id), str(items[0].id)]
+        assert returned == expected
+
+
+class TestAdminInventoryStoreScope:
+    def test_store_id_filter_scopes_to_one_store(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        item_a = make_item(store=store_a, variant=make_variant())
+        make_item(store=store_b, variant=make_variant())
+
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store_a.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        ids = {row["id"] for row in body["items"]}
+        assert ids == {str(item_a.id)}
+        for row in body["items"]:
+            assert row["store_id"] == str(store_a.id)
+
+    def test_unknown_store_id_returns_404(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(uuid.uuid4())},
+        )
+        assert resp.status_code == 404, resp.text
+
+    def test_inactive_store_id_returns_200(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        item = make_item(store=store, variant=make_variant())
+        store.is_active = False
+        db_session.commit()
+
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert str(item.id) in ids
+
+
+class TestAdminInventoryQueryFilters:
+    def test_low_stock_filter(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        low = make_item(
+            store=store,
+            variant=make_variant(),
+            quantity_on_hand=2,
+            quantity_reserved=1,
+            reorder_threshold=2,
+        )
+        not_low = make_item(
+            store=store,
+            variant=make_variant(),
+            quantity_on_hand=20,
+            reorder_threshold=2,
+        )
+
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "low_stock": True},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert str(low.id) in ids
+        assert str(not_low.id) not in ids
+
+    def test_status_filter(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        flagged = make_item(
+            store=store,
+            variant=make_variant(),
+            status=InventoryStatus.flagged,
+        )
+        make_item(store=store, variant=make_variant())
+
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "status": "flagged"},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert ids == {str(flagged.id)}
+
+    def test_variant_id_filter(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        target = make_variant()
+        other = make_variant()
+        wanted_a = make_item(store=store_a, variant=target)
+        wanted_b = make_item(store=store_b, variant=target)
+        make_item(store=store_a, variant=other)
+
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"variant_id": str(target.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert ids == {str(wanted_a.id), str(wanted_b.id)}
+
+    def test_product_id_filter(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_product,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        target_product = make_product()
+        other_product = make_product()
+        target_variant = make_variant(product=target_product)
+        other_variant = make_variant(product=other_product)
+        wanted = make_item(store=store, variant=target_variant)
+        make_item(store=store, variant=other_variant)
+
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"product_id": str(target_product.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert ids == {str(wanted.id)}
+
+    def test_q_matches_variant_sku(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        target = make_variant()
+        other = make_variant()
+        wanted = make_item(store=store, variant=target)
+        make_item(store=store, variant=other)
+
+        sku_fragment = target.sku[-6:]
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"q": sku_fragment},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert str(wanted.id) in ids
+
+    def test_invalid_uuid_store_id_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": "not-a-uuid"},
+        )
+        assert resp.status_code == 422
+
+    def test_invalid_status_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"status": "not-a-real-status"},
+        )
+        assert resp.status_code == 422
+
+    def test_limit_above_500_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"limit": 501},
+        )
+        assert resp.status_code == 422
+
+    def test_response_envelope_includes_eager_variant_product(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_product,
+        make_variant,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        make_item(store=store, variant=variant)
+
+        resp = client.get(
+            ADMIN_INVENTORY_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["items"], "expected at least one row"
+        row = body["items"][0]
+        assert row["variant"]["sku"] == variant.sku
+        assert row["variant"]["product"]["name"] == product.name
+
+
+class TestAdminInventoryDoesNotBreakStoreScoped:
+    """GET /admin/inventory must not perturb the existing store-scoped
+    inventory endpoint."""
+
+    def test_store_scoped_list_still_works_for_staff(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_variant,
+        make_item,
+    ):
+        store = make_store()
+        item = make_item(store=store, variant=make_variant())
+        staff = make_user(UserRole.staff, store_id=store.id)
+
+        resp = client.get(
+            f"/stores/{store.id}/inventory", headers=_auth(staff)
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        ids = {row["id"] for row in body["items"]}
+        assert str(item.id) in ids

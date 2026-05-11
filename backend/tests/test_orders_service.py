@@ -2002,3 +2002,400 @@ class TestReads:
         with pytest.raises(HTTPException) as exc:
             svc.list_order_audit_logs(db_session, uuid.uuid4())
         assert exc.value.status_code == 404
+
+
+# --------------------------------------------------------------------- #
+# Admin global feed (F2.18.1B)
+# --------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def make_non_admin_user(
+    db_session: Session, make_store
+) -> Callable[..., User]:
+    def _create(role: UserRole = UserRole.owner) -> User:
+        store = make_store()
+        user = User(
+            full_name=f"Ord Svc {role.value}",
+            email=f"{role.value}-{uuid.uuid4().hex[:8]}@example.com",
+            password_hash=hash_password("supersecret123"),
+            role=role,
+            store_id=store.id,
+            is_active=True,
+        )
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+        return user
+
+    return _create
+
+
+def _make_pending_order(
+    db_session: Session,
+    make_store,
+    make_item,
+    admin: User,
+    *,
+    store: Store | None = None,
+) -> Order:
+    """Build a real pending order via the service so totals + items +
+    audit log land naturally. Returns the eager-loaded Order."""
+    target_store = store if store is not None else make_store()
+    item = make_item(store=target_store, quantity_on_hand=10)
+    return svc.create_order(
+        db_session,
+        target_store.id,
+        OrderCreate(
+            idempotency_key=f"k-{uuid.uuid4().hex[:8]}",
+            items=[OrderItemCreate(variant_id=item.variant_id, quantity=1)],
+        ),
+        actor_user_id=admin.id,
+    )
+
+
+class TestServiceAdminOrdersRBAC:
+    @pytest.mark.parametrize(
+        "role",
+        [UserRole.owner, UserRole.manager, UserRole.staff, UserRole.driver],
+    )
+    def test_non_admin_role_forbidden(
+        self, db_session: Session, make_non_admin_user, role
+    ):
+        actor = make_non_admin_user(role=role)
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_orders(db_session, actor=actor)
+        assert excinfo.value.status_code == 403
+
+    def test_admin_allowed_empty(
+        self, db_session: Session, make_admin
+    ):
+        admin = make_admin()
+        response = svc.list_admin_orders(db_session, actor=admin)
+        assert response.total == 0
+        assert response.items == []
+        assert response.limit == 50
+        assert response.offset == 0
+
+
+class TestServiceAdminOrdersGlobalFeed:
+    def test_returns_orders_from_multiple_stores(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store_a = make_store()
+        store_b = make_store()
+        order_a = _make_pending_order(
+            db_session, make_store, make_item, admin, store=store_a
+        )
+        order_b = _make_pending_order(
+            db_session, make_store, make_item, admin, store=store_b
+        )
+
+        response = svc.list_admin_orders(db_session, actor=admin)
+
+        ids = {order.id for order in response.items}
+        assert order_a.id in ids
+        assert order_b.id in ids
+        assert response.total >= 2
+
+    def test_total_counts_pre_pagination(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        for _ in range(5):
+            _make_pending_order(
+                db_session, make_store, make_item, admin, store=store
+            )
+
+        response = svc.list_admin_orders(
+            db_session, actor=admin, store_id=store.id, limit=2, offset=0
+        )
+
+        assert response.total == 5
+        assert len(response.items) == 2
+
+    def test_pagination_offset_advances(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        orders = [
+            _make_pending_order(
+                db_session, make_store, make_item, admin, store=store
+            )
+            for _ in range(4)
+        ]
+        # Pin distinct created_at so DESC sort is deterministic
+        # (without this, all orders in a single TX share now()).
+        base = datetime(2025, 6, 1, tzinfo=UTC)
+        for index, order in enumerate(orders):
+            _set_order_created_at(
+                db_session, order.id, base + timedelta(minutes=index)
+            )
+
+        first = svc.list_admin_orders(
+            db_session, actor=admin, store_id=store.id, limit=2, offset=0
+        )
+        second = svc.list_admin_orders(
+            db_session, actor=admin, store_id=store.id, limit=2, offset=2
+        )
+
+        first_ids = {order.id for order in first.items}
+        second_ids = {order.id for order in second.items}
+        assert first_ids.isdisjoint(second_ids)
+        assert len(first_ids) == 2
+        assert len(second_ids) == 2
+
+    def test_sort_newer_created_at_first(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        orders = [
+            _make_pending_order(
+                db_session, make_store, make_item, admin, store=store
+            )
+            for _ in range(3)
+        ]
+        base = datetime(2025, 6, 1, tzinfo=UTC)
+        for index, order in enumerate(orders):
+            _set_order_created_at(
+                db_session, order.id, base + timedelta(minutes=index)
+            )
+
+        response = svc.list_admin_orders(
+            db_session, actor=admin, store_id=store.id, limit=10
+        )
+
+        returned_ids = [order.id for order in response.items]
+        assert returned_ids == [orders[2].id, orders[1].id, orders[0].id]
+
+    def test_sort_id_asc_tie_breaker(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        orders = [
+            _make_pending_order(
+                db_session, make_store, make_item, admin, store=store
+            )
+            for _ in range(3)
+        ]
+        # Same created_at across all three → id ASC tie-breaker decides.
+        same = datetime(2025, 6, 1, tzinfo=UTC)
+        for order in orders:
+            _set_order_created_at(db_session, order.id, same)
+
+        response = svc.list_admin_orders(
+            db_session, actor=admin, store_id=store.id, limit=10
+        )
+
+        returned_ids = [str(order.id) for order in response.items]
+        assert returned_ids == sorted(str(order.id) for order in orders)
+
+
+class TestServiceAdminOrdersStoreScope:
+    def test_store_id_filter_returns_only_that_store(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store_a = make_store()
+        store_b = make_store()
+        order_a = _make_pending_order(
+            db_session, make_store, make_item, admin, store=store_a
+        )
+        _make_pending_order(
+            db_session, make_store, make_item, admin, store=store_b
+        )
+
+        response = svc.list_admin_orders(
+            db_session, actor=admin, store_id=store_a.id
+        )
+
+        ids = {order.id for order in response.items}
+        assert ids == {order_a.id}
+        for order in response.items:
+            assert order.store_id == store_a.id
+
+    def test_unknown_store_id_raises_404(
+        self, db_session: Session, make_admin
+    ):
+        admin = make_admin()
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_orders(
+                db_session, actor=admin, store_id=uuid.uuid4()
+            )
+        assert excinfo.value.status_code == 404
+        assert "store" in excinfo.value.detail.lower()
+
+    def test_inactive_store_id_returns_data(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        """Admin retains visibility into deactivated stores.
+
+        Mirrors list_admin_audit / list_admin_inventory semantics.
+        """
+        admin = make_admin()
+        store = make_store()
+        order = _make_pending_order(
+            db_session, make_store, make_item, admin, store=store
+        )
+        store.is_active = False
+        db_session.commit()
+
+        response = svc.list_admin_orders(
+            db_session, actor=admin, store_id=store.id
+        )
+
+        ids = {row.id for row in response.items}
+        assert order.id in ids
+
+
+class TestServiceAdminOrdersFilters:
+    def test_status_filter(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        pending = _make_pending_order(
+            db_session, make_store, make_item, admin, store=store
+        )
+        accepted_order = _make_pending_order(
+            db_session, make_store, make_item, admin, store=store
+        )
+        svc.transition_order_status(
+            db_session,
+            accepted_order.id,
+            OrderStatusUpdate(new_status=OrderStatus.accepted),
+            actor_user_id=admin.id,
+        )
+
+        response = svc.list_admin_orders(
+            db_session,
+            actor=admin,
+            store_id=store.id,
+            order_status=OrderStatus.accepted,
+        )
+
+        ids = {row.id for row in response.items}
+        assert ids == {accepted_order.id}
+        assert pending.id not in ids
+
+    def test_date_from_inclusive_lower_bound(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        orders = [
+            _make_pending_order(
+                db_session, make_store, make_item, admin, store=store
+            )
+            for _ in range(3)
+        ]
+        base = datetime(2025, 6, 1, tzinfo=UTC)
+        for index, order in enumerate(orders):
+            _set_order_created_at(
+                db_session, order.id, base + timedelta(days=index)
+            )
+
+        # date_from = the second order's timestamp; >= so it's included.
+        cutoff = base + timedelta(days=1)
+        response = svc.list_admin_orders(
+            db_session,
+            actor=admin,
+            store_id=store.id,
+            date_from=cutoff,
+        )
+
+        ids = {row.id for row in response.items}
+        assert ids == {orders[1].id, orders[2].id}
+
+    def test_date_to_inclusive_upper_bound(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        orders = [
+            _make_pending_order(
+                db_session, make_store, make_item, admin, store=store
+            )
+            for _ in range(3)
+        ]
+        base = datetime(2025, 6, 1, tzinfo=UTC)
+        for index, order in enumerate(orders):
+            _set_order_created_at(
+                db_session, order.id, base + timedelta(days=index)
+            )
+
+        # date_to = the second order's timestamp; <= so it's included.
+        cutoff = base + timedelta(days=1)
+        response = svc.list_admin_orders(
+            db_session,
+            actor=admin,
+            store_id=store.id,
+            date_to=cutoff,
+        )
+
+        ids = {row.id for row in response.items}
+        assert ids == {orders[0].id, orders[1].id}
+
+    def test_date_range_filters_combined(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        orders = [
+            _make_pending_order(
+                db_session, make_store, make_item, admin, store=store
+            )
+            for _ in range(4)
+        ]
+        base = datetime(2025, 6, 1, tzinfo=UTC)
+        for index, order in enumerate(orders):
+            _set_order_created_at(
+                db_session, order.id, base + timedelta(days=index)
+            )
+
+        response = svc.list_admin_orders(
+            db_session,
+            actor=admin,
+            store_id=store.id,
+            date_from=base + timedelta(days=1),
+            date_to=base + timedelta(days=2),
+        )
+
+        ids = {row.id for row in response.items}
+        assert ids == {orders[1].id, orders[2].id}
+
+
+class TestServiceStoreScopedOrdersRegression:
+    """F2.18.1B must not change the store-scoped orders service surface."""
+
+    def test_list_orders_for_store_unchanged(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        orders = [
+            _make_pending_order(
+                db_session, make_store, make_item, admin, store=store
+            )
+            for _ in range(2)
+        ]
+
+        rows = svc.list_orders_for_store(db_session, store.id)
+        assert {row.id for row in rows} == {order.id for order in orders}
+
+    def test_count_orders_for_store_unchanged(
+        self, db_session: Session, make_admin, make_store, make_item
+    ):
+        admin = make_admin()
+        store = make_store()
+        for _ in range(3):
+            _make_pending_order(
+                db_session, make_store, make_item, admin, store=store
+            )
+
+        assert svc.count_orders_for_store(db_session, store.id) == 3

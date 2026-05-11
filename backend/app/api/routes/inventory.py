@@ -38,6 +38,7 @@ from fastapi import Query
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin
 from app.api.deps import require_manager_or_above
 from app.api.deps import require_staff_or_above
 from app.api.deps import require_store_member
@@ -333,3 +334,45 @@ def post_return(
     item = svc.get_inventory_item(db, item_id)
     _assert_can_access_store(current_user, item.store_id)
     return svc.return_to_inventory(db, item_id, payload, current_user.id)
+
+
+# --------------------------------------------------------------------- #
+# Admin global feed (F2.18.1)
+# --------------------------------------------------------------------- #
+#
+# Read-only, admin-only, cross-store inventory list. Lives on the
+# inventory router so the inventory module owns its admin entry point
+# (mirrors `/admin/audit` co-located in the audit router). RBAC is
+# `require_admin` only — no tenancy gate, since admins can see every
+# store. The store-scoped `GET /stores/{store_id}/inventory` is
+# preserved unchanged for non-admin operational use.
+
+
+@router.get(
+    "/admin/inventory",
+    response_model=InventoryItemListResponse,
+)
+def list_admin_inventory_endpoint(
+    actor: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    store_id: UUID | None = Query(None),
+    q: str | None = Query(None, max_length=200),
+    low_stock: bool = Query(False),
+    product_id: UUID | None = Query(None),
+    variant_id: UUID | None = Query(None),
+    inventory_status: InventoryStatus | None = Query(None, alias="status"),
+) -> InventoryItemListResponse:
+    return svc.list_admin_inventory(
+        db,
+        actor=actor,
+        limit=limit,
+        offset=offset,
+        store_id=store_id,
+        q=q,
+        low_stock=low_stock,
+        product_id=product_id,
+        variant_id=variant_id,
+        inventory_status=inventory_status,
+    )

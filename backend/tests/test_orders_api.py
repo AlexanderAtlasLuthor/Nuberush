@@ -30,6 +30,7 @@ from app.core.security import hash_password
 from app.db.models import InventoryItem
 from app.db.models import InventoryStatus
 from app.db.models import Order
+from app.db.models import OrderStatus
 from app.db.models import Product
 from app.db.models import ProductVariant
 from app.db.models import Store
@@ -1350,3 +1351,437 @@ class TestApiErrorPropagation:
             json={"reason": "too late"},
         )
         assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------- #
+# F2.18.1B — GET /admin/orders (admin global feed)
+# --------------------------------------------------------------------- #
+
+
+ADMIN_ORDERS_URL = "/admin/orders"
+
+_ADMIN_ORDERS_LIST_KEYS = {"items", "total", "limit", "offset"}
+
+_NON_ADMIN_ROLES_FOR_ADMIN_ORDERS = (
+    UserRole.owner,
+    UserRole.manager,
+    UserRole.staff,
+    UserRole.driver,
+)
+
+
+class TestAdminOrdersAuthRBAC:
+    def test_anonymous_returns_401(self, client: TestClient):
+        resp = client.get(ADMIN_ORDERS_URL)
+        assert resp.status_code == 401, resp.text
+
+    def test_invalid_token_returns_401(self, client: TestClient):
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers={"Authorization": "Bearer not-a-real-token"},
+        )
+        assert resp.status_code == 401, resp.text
+
+    def test_admin_returns_200_empty(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(ADMIN_ORDERS_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == _ADMIN_ORDERS_LIST_KEYS
+        assert isinstance(body["items"], list)
+        assert body["total"] == 0
+        assert body["limit"] == 50
+        assert body["offset"] == 0
+
+    @pytest.mark.parametrize("role", _NON_ADMIN_ROLES_FOR_ADMIN_ORDERS)
+    def test_non_admin_forbidden(
+        self,
+        client: TestClient,
+        make_user,
+        role: UserRole,
+    ):
+        actor = make_user(role)
+        resp = client.get(ADMIN_ORDERS_URL, headers=_auth(actor))
+        assert resp.status_code == 403, resp.text
+
+
+class TestAdminOrdersGlobalFeed:
+    def test_includes_orders_from_multiple_stores(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        item_a = make_item(store=store_a, quantity_on_hand=5)
+        item_b = make_item(store=store_b, quantity_on_hand=5)
+        staff_a = make_user(UserRole.staff, store_id=store_a.id)
+        staff_b = make_user(UserRole.staff, store_id=store_b.id)
+        order_a = _create_pending(client, staff_a, store_a, item_a.variant_id)
+        order_b = _create_pending(client, staff_b, store_b, item_b.variant_id)
+
+        resp = client.get(ADMIN_ORDERS_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        ids = {row["id"] for row in body["items"]}
+        assert order_a["id"] in ids
+        assert order_b["id"] in ids
+
+    def test_total_counts_pre_pagination(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        staff = make_user(UserRole.staff, store_id=store.id)
+        for _ in range(5):
+            item = make_item(store=store, quantity_on_hand=5)
+            _create_pending(client, staff, store, item.variant_id)
+
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "limit": 2, "offset": 0},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total"] == 5
+        assert len(body["items"]) == 2
+
+    def test_pagination_offset(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        staff = make_user(UserRole.staff, store_id=store.id)
+        orders = []
+        for _ in range(4):
+            item = make_item(store=store, quantity_on_hand=5)
+            orders.append(
+                _create_pending(client, staff, store, item.variant_id)
+            )
+        # Pin distinct created_at so DESC sort is deterministic.
+        base = datetime(2025, 6, 1, tzinfo=UTC)
+        for index, order in enumerate(orders):
+            _set_order_created_at(
+                db_session, order["id"], base + timedelta(minutes=index)
+            )
+
+        first = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "limit": 2, "offset": 0},
+        ).json()
+        second = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "limit": 2, "offset": 2},
+        ).json()
+
+        first_ids = {row["id"] for row in first["items"]}
+        second_ids = {row["id"] for row in second["items"]}
+        assert first_ids.isdisjoint(second_ids)
+        assert len(first_ids) == 2
+        assert len(second_ids) == 2
+
+    def test_sort_created_at_desc(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        staff = make_user(UserRole.staff, store_id=store.id)
+        orders = []
+        for _ in range(3):
+            item = make_item(store=store, quantity_on_hand=5)
+            orders.append(
+                _create_pending(client, staff, store, item.variant_id)
+            )
+        base = datetime(2025, 6, 1, tzinfo=UTC)
+        for index, order in enumerate(orders):
+            _set_order_created_at(
+                db_session, order["id"], base + timedelta(minutes=index)
+            )
+
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "limit": 10},
+        )
+        assert resp.status_code == 200, resp.text
+        returned = [row["id"] for row in resp.json()["items"]]
+        expected = [orders[2]["id"], orders[1]["id"], orders[0]["id"]]
+        assert returned == expected
+
+
+class TestAdminOrdersStoreScope:
+    def test_store_id_filter_scopes_to_one_store(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        item_a = make_item(store=store_a, quantity_on_hand=5)
+        item_b = make_item(store=store_b, quantity_on_hand=5)
+        staff_a = make_user(UserRole.staff, store_id=store_a.id)
+        staff_b = make_user(UserRole.staff, store_id=store_b.id)
+        order_a = _create_pending(client, staff_a, store_a, item_a.variant_id)
+        _create_pending(client, staff_b, store_b, item_b.variant_id)
+
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store_a.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        ids = {row["id"] for row in body["items"]}
+        assert ids == {order_a["id"]}
+        for row in body["items"]:
+            assert row["store_id"] == str(store_a.id)
+
+    def test_unknown_store_id_returns_404(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(uuid.uuid4())},
+        )
+        assert resp.status_code == 404, resp.text
+
+    def test_inactive_store_id_returns_200(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=5)
+        staff = make_user(UserRole.staff, store_id=store.id)
+        order = _create_pending(client, staff, store, item.variant_id)
+        store.is_active = False
+        db_session.commit()
+
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert order["id"] in ids
+
+
+class TestAdminOrdersQueryFilters:
+    def test_status_filter(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        staff = make_user(UserRole.staff, store_id=store.id)
+        item_pending = make_item(store=store, quantity_on_hand=5)
+        item_accepted = make_item(store=store, quantity_on_hand=5)
+        _create_pending(client, staff, store, item_pending.variant_id)
+        accepted = _create_pending(
+            client, staff, store, item_accepted.variant_id
+        )
+        _walk(client, staff, accepted["id"], "accepted")
+
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "status": "accepted"},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert ids == {accepted["id"]}
+
+    def test_date_from_inclusive(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        staff = make_user(UserRole.staff, store_id=store.id)
+        orders = []
+        for _ in range(3):
+            item = make_item(store=store, quantity_on_hand=5)
+            orders.append(
+                _create_pending(client, staff, store, item.variant_id)
+            )
+        base = datetime(2025, 6, 1, tzinfo=UTC)
+        for index, order in enumerate(orders):
+            _set_order_created_at(
+                db_session, order["id"], base + timedelta(days=index)
+            )
+
+        cutoff = (base + timedelta(days=1)).isoformat()
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "date_from": cutoff},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert ids == {orders[1]["id"], orders[2]["id"]}
+
+    def test_date_to_inclusive(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        staff = make_user(UserRole.staff, store_id=store.id)
+        orders = []
+        for _ in range(3):
+            item = make_item(store=store, quantity_on_hand=5)
+            orders.append(
+                _create_pending(client, staff, store, item.variant_id)
+            )
+        base = datetime(2025, 6, 1, tzinfo=UTC)
+        for index, order in enumerate(orders):
+            _set_order_created_at(
+                db_session, order["id"], base + timedelta(days=index)
+            )
+
+        cutoff = (base + timedelta(days=1)).isoformat()
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id), "date_to": cutoff},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {row["id"] for row in resp.json()["items"]}
+        assert ids == {orders[0]["id"], orders[1]["id"]}
+
+    def test_invalid_uuid_store_id_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": "not-a-uuid"},
+        )
+        assert resp.status_code == 422
+
+    def test_invalid_status_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"status": "not-a-real-status"},
+        )
+        assert resp.status_code == 422
+
+    def test_invalid_date_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"date_from": "not-a-date"},
+        )
+        assert resp.status_code == 422
+
+    def test_limit_above_200_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"limit": 201},
+        )
+        assert resp.status_code == 422
+
+    def test_response_envelope_includes_eager_items(
+        self,
+        client: TestClient,
+        make_user,
+        make_store,
+        make_item,
+    ):
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        staff = make_user(UserRole.staff, store_id=store.id)
+        item = make_item(store=store, quantity_on_hand=5)
+        _create_pending(client, staff, store, item.variant_id)
+
+        resp = client.get(
+            ADMIN_ORDERS_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["items"], "expected at least one row"
+        row = body["items"][0]
+        # Same eager shape as the store-scoped endpoint.
+        _assert_order_items_enriched(row)
+
+
+class TestAdminOrdersDoesNotBreakStoreScoped:
+    """GET /admin/orders must not perturb the existing store-scoped
+    orders endpoint."""
+
+    def test_store_scoped_list_still_works_for_staff(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_item,
+    ):
+        store = make_store()
+        item = make_item(store=store, quantity_on_hand=5)
+        staff = make_user(UserRole.staff, store_id=store.id)
+        order = _create_pending(client, staff, store, item.variant_id)
+
+        resp = client.get(
+            f"/stores/{store.id}/orders", headers=_auth(staff)
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        ids = {row["id"] for row in body["items"]}
+        assert order["id"] in ids

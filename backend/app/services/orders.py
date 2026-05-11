@@ -67,11 +67,14 @@ from app.db.models import OrderItem
 from app.db.models import OrderStatus
 from app.db.models import ProductVariant
 from app.db.models import Store
+from app.db.models import User
+from app.db.models import UserRole
 from app.schemas.inventory import ReleaseReservationRequest
 from app.schemas.inventory import ReserveStockRequest
 from app.schemas.inventory import ReturnStockRequest
 from app.schemas.orders import OrderCancelRequest
 from app.schemas.orders import OrderCreate
+from app.schemas.orders import OrderListResponse
 from app.schemas.orders import OrderReturnRequest
 from app.schemas.orders import OrderStatusUpdate
 from app.services import inventory as inv
@@ -347,6 +350,132 @@ def count_orders_for_store(
         created_to=created_to,
     )
     return int(db.scalar(stmt) or 0)
+
+
+# --------------------------------------------------------------------- #
+# Admin global feed (F2.18.1B)
+# --------------------------------------------------------------------- #
+
+
+def _apply_admin_order_filters(
+    stmt,
+    *,
+    store_id: UUID | None,
+    order_status: OrderStatus | None,
+    date_from: datetime | None,
+    date_to: datetime | None,
+):
+    """Attach the F2.18.1B admin filter set to a SELECT on Order.
+
+    Distinct from `_apply_order_list_filters` because the admin path
+    accepts an *optional* `store_id` (cross-store when omitted) and
+    intentionally has no store-scoped requirement. The store-scoped
+    helper stays unchanged so the existing `/stores/{store_id}/orders`
+    behavior is preserved byte-for-byte.
+    """
+    if store_id is not None:
+        stmt = stmt.where(Order.store_id == store_id)
+    if order_status is not None:
+        stmt = stmt.where(Order.status == order_status)
+    if date_from is not None:
+        stmt = stmt.where(Order.created_at >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(Order.created_at <= date_to)
+    return stmt
+
+
+def list_admin_orders(
+    db: Session,
+    *,
+    actor: User,
+    store_id: UUID | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    order_status: OrderStatus | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> OrderListResponse:
+    """Global admin orders feed (F2.18.1B).
+
+    Admin-only entry point. Cross-store read with optional `store_id`
+    scope. Reuses `OrderRead` and `OrderListResponse` unchanged. Sort
+    is `created_at DESC, id ASC` (deterministic; most recent orders
+    first, with id ASC as the stable tie-breaker — consistent with the
+    rest of the admin namespace).
+
+    Behavior:
+
+      - Non-admin actor → 403 (HTTPException).
+      - `store_id` provided and not found → 404. Inactive stores are
+        explicitly allowed (admin retains visibility into deactivated
+        stores), matching `list_admin_audit` and `list_admin_inventory`
+        precedent.
+      - `store_id` omitted → returns orders across every store.
+      - `order_status` exact match on `Order.status`.
+      - `date_from` / `date_to` apply as inclusive bounds on
+        `Order.created_at` (>= and <=, matching the existing
+        store-scoped `_apply_order_list_filters` semantics).
+      - Pagination: `1 <= limit <= 200`, `offset >= 0` (enforced at
+        the route layer via `Query(...)`). `total` is computed
+        pre-pagination.
+      - Eager-loads `items` → `variant` → `product` via
+        `_order_read_load_options()` so the response can be serialized
+        without N+1 lazy reads.
+
+    Read-only. No mutation, no audit log writes, no inventory side
+    effects. The store-scoped `list_orders_for_store` and
+    `count_orders_for_store` are untouched.
+
+    The `q` filter is intentionally **not** implemented in F2.18.1B:
+    the Order model has no clean text-search target (no name/code
+    field; `idempotency_key` and `notes` are operational metadata, not
+    user-facing search keys). Skipping it keeps the admin surface
+    aligned with the F2.18.0 contract §8.2 for `/admin/orders`.
+    """
+    if actor.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this resource",
+        )
+
+    if store_id is not None:
+        store = db.scalar(select(Store).where(Store.id == store_id))
+        if store is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found.",
+            )
+
+    filter_kwargs = dict(
+        store_id=store_id,
+        order_status=order_status,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+    count_stmt = _apply_admin_order_filters(
+        select(func.count()).select_from(Order),
+        **filter_kwargs,
+    )
+    total = int(db.scalar(count_stmt) or 0)
+
+    items_stmt = _apply_admin_order_filters(
+        select(Order).options(_order_read_load_options()),
+        **filter_kwargs,
+    )
+    items_stmt = (
+        items_stmt.order_by(Order.created_at.desc(), Order.id.asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    items = list(db.scalars(items_stmt).all())
+
+    return OrderListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 def list_order_audit_logs(

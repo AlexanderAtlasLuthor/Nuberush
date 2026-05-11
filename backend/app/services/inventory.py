@@ -21,6 +21,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy import func
+from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -30,11 +31,15 @@ from app.db.models import InventoryItem
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
+from app.db.models import Product
 from app.db.models import ProductVariant
 from app.db.models import Store
+from app.db.models import User
+from app.db.models import UserRole
 from app.schemas.inventory import AdjustStockRequest
 from app.schemas.inventory import DamageStockRequest
 from app.schemas.inventory import InventoryItemCreate
+from app.schemas.inventory import InventoryItemListResponse
 from app.schemas.inventory import ReceiveStockRequest
 from app.schemas.inventory import ReleaseReservationRequest
 from app.schemas.inventory import ReserveStockRequest
@@ -343,6 +348,165 @@ def count_inventory_for_store(
         .where(*_inventory_store_filters(store_id, low_stock_only))
     )
     return int(db.scalar(stmt) or 0)
+
+
+# --------------------------------------------------------------------- #
+# Admin global feed (F2.18.1)
+# --------------------------------------------------------------------- #
+
+
+def _low_stock_predicate():
+    return (
+        InventoryItem.quantity_on_hand - InventoryItem.quantity_reserved
+    ) <= InventoryItem.reorder_threshold
+
+
+def _admin_inventory_apply_filters(
+    stmt,
+    *,
+    store_id: UUID | None,
+    q: str | None,
+    low_stock: bool,
+    product_id: UUID | None,
+    variant_id: UUID | None,
+    inventory_status: InventoryStatus | None,
+):
+    """Attach the F2.18.1 admin filter set (and any required JOINs) to a
+    SELECT against InventoryItem.
+
+    Variant + product JOINs are added only when filters that need them are
+    set (product_id or q). Same JOIN topology is applied to both the
+    items SELECT and the count SELECT so the two stay in lockstep.
+    """
+    q_stripped = q.strip() if q is not None and q.strip() else None
+    needs_variant_join = product_id is not None or q_stripped is not None
+    needs_product_join = q_stripped is not None
+
+    if needs_variant_join:
+        stmt = stmt.join(
+            ProductVariant, InventoryItem.variant_id == ProductVariant.id
+        )
+    if needs_product_join:
+        stmt = stmt.join(Product, ProductVariant.product_id == Product.id)
+
+    where_clauses = []
+    if store_id is not None:
+        where_clauses.append(InventoryItem.store_id == store_id)
+    if low_stock:
+        where_clauses.append(_low_stock_predicate())
+    if variant_id is not None:
+        where_clauses.append(InventoryItem.variant_id == variant_id)
+    if inventory_status is not None:
+        where_clauses.append(InventoryItem.status == inventory_status)
+    if product_id is not None:
+        where_clauses.append(ProductVariant.product_id == product_id)
+    if q_stripped is not None:
+        pattern = f"%{q_stripped}%"
+        where_clauses.append(
+            or_(
+                ProductVariant.sku.ilike(pattern),
+                Product.name.ilike(pattern),
+            )
+        )
+
+    if where_clauses:
+        stmt = stmt.where(*where_clauses)
+
+    return stmt
+
+
+def list_admin_inventory(
+    db: Session,
+    *,
+    actor: User,
+    store_id: UUID | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    q: str | None = None,
+    low_stock: bool = False,
+    product_id: UUID | None = None,
+    variant_id: UUID | None = None,
+    inventory_status: InventoryStatus | None = None,
+) -> InventoryItemListResponse:
+    """Global admin inventory feed (F2.18.1).
+
+    Admin-only entry point. Cross-store read with optional `store_id`
+    scope. Reuses `InventoryItemRead` and `InventoryItemListResponse`
+    unchanged. Sort is `updated_at DESC, id ASC` (deterministic; most
+    recently mutated rows first, aligned with admin operational use).
+
+    Behavior:
+
+      - Non-admin actor → 403 (HTTPException).
+      - `store_id` provided and not found → 404. Inactive stores are
+        explicitly allowed (admin retains visibility into deactivated
+        stores), matching the F2.17.4 `list_admin_audit` precedent.
+      - `store_id` omitted → returns inventory across every store.
+      - `q` runs ILIKE on `ProductVariant.sku` and `Product.name`
+        (case-insensitive, trimmed; whitespace-only collapses to no
+        filter).
+      - `low_stock=True` → `(quantity_on_hand - quantity_reserved) <=
+        reorder_threshold`, identical predicate to the store-scoped
+        `low_stock_only` filter.
+      - `product_id` / `variant_id` / `inventory_status` apply as exact
+        equality filters.
+      - Pagination: `1 <= limit <= 500`, `offset >= 0` (enforced at
+        the route layer via `Query(...)`). `total` is computed
+        pre-pagination.
+      - Eager-loads `variant` → `product` with `selectinload` so the
+        response can be serialized without N+1 lazy reads.
+
+    Read-only. No mutation, no audit log writes, no store-scoped
+    semantics. The store-scoped `list_inventory_for_store` and
+    `count_inventory_for_store` are untouched.
+    """
+    if actor.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this resource",
+        )
+
+    if store_id is not None:
+        store = db.scalar(select(Store).where(Store.id == store_id))
+        if store is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found.",
+            )
+
+    filter_kwargs = dict(
+        store_id=store_id,
+        q=q,
+        low_stock=low_stock,
+        product_id=product_id,
+        variant_id=variant_id,
+        inventory_status=inventory_status,
+    )
+
+    count_stmt = _admin_inventory_apply_filters(
+        select(func.count()).select_from(InventoryItem),
+        **filter_kwargs,
+    )
+    total = int(db.scalar(count_stmt) or 0)
+
+    items_stmt = (
+        _admin_inventory_apply_filters(
+            select(InventoryItem),
+            **filter_kwargs,
+        )
+        .options(_inventory_item_load_options())
+        .order_by(InventoryItem.updated_at.desc(), InventoryItem.id.asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    items = list(db.scalars(items_stmt).all())
+
+    return InventoryItemListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 def list_inventory_logs_for_store(
