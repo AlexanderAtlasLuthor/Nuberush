@@ -1251,3 +1251,835 @@ class TestCrossStoreIsolation:
         )
         assert feed_a.total == 1
         assert feed_a.items[0].store_id == store_a.id
+
+
+# --------------------------------------------------------------------- #
+# F2.17.4 — list_admin_audit
+# --------------------------------------------------------------------- #
+
+
+_NON_ADMIN_AUDIT_ROLES = (
+    UserRole.owner,
+    UserRole.manager,
+    UserRole.staff,
+    UserRole.driver,
+)
+
+
+class TestAdminAuditRBAC:
+    def test_admin_can_call_without_store_id(
+        self, db_session, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        result = svc.list_admin_audit(db_session, actor=admin)
+        assert result.limit == 50
+        assert result.offset == 0
+        # Envelope shape comes from AuditEventListResponse.
+        assert hasattr(result, "items")
+        assert hasattr(result, "total")
+
+    @pytest.mark.parametrize("role", _NON_ADMIN_AUDIT_ROLES)
+    def test_non_admin_forbidden(
+        self, db_session, make_store, make_user, role
+    ):
+        store = make_store()
+        actor = make_user(role=role, store_id=store.id)
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_audit(db_session, actor=actor)
+        assert excinfo.value.status_code == 403
+
+
+class TestAdminAuditGlobalCoverage:
+    def test_global_feed_includes_inventory(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        log = make_inventory_log(item=item)
+
+        result = svc.list_admin_audit(db_session, actor=admin)
+
+        inv_events = [
+            e for e in result.items if e.source == AuditSource.inventory
+        ]
+        assert any(e.id == log.id for e in inv_events)
+
+    def test_global_feed_includes_order(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_order,
+        make_order_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        order = make_order(store=store)
+        log = make_order_audit_log(order=order)
+
+        result = svc.list_admin_audit(db_session, actor=admin)
+
+        order_events = [
+            e for e in result.items if e.source == AuditSource.order
+        ]
+        assert any(e.id == log.id for e in order_events)
+
+    def test_global_feed_includes_compliance(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        make_item(store=store, variant=variant)
+        log = make_compliance_audit_log(product=product)
+
+        result = svc.list_admin_audit(db_session, actor=admin)
+
+        compliance_events = [
+            e
+            for e in result.items
+            if e.source == AuditSource.product_compliance
+        ]
+        assert any(e.id == log.id for e in compliance_events)
+
+    def test_global_feed_includes_events_from_multiple_stores(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item_a = make_item(store=store_a, variant=variant)
+        item_b = make_item(store=store_b, variant=variant)
+        log_a = make_inventory_log(item=item_a)
+        log_b = make_inventory_log(item=item_b)
+
+        result = svc.list_admin_audit(db_session, actor=admin)
+
+        store_ids = {
+            e.store_id
+            for e in result.items
+            if e.id in {log_a.id, log_b.id}
+        }
+        assert store_ids == {store_a.id, store_b.id}
+
+
+class TestAdminAuditEnvelopeAndPagination:
+    def test_envelope_shape(self, db_session, make_user):
+        admin = make_user(role=UserRole.admin)
+        result = svc.list_admin_audit(db_session, actor=admin)
+        assert result.limit == 50
+        assert result.offset == 0
+        assert isinstance(result.items, list)
+        assert isinstance(result.total, int)
+
+    def test_total_is_pre_pagination(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        for _ in range(5):
+            make_inventory_log(item=item)
+
+        result = svc.list_admin_audit(
+            db_session, actor=admin, limit=2, source=AuditSource.inventory
+        )
+        assert result.total == 5
+        assert len(result.items) == 2
+
+    def test_pagination_limit_offset(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        for _ in range(5):
+            make_inventory_log(item=item)
+
+        page = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            limit=2,
+            offset=2,
+            source=AuditSource.inventory,
+        )
+        assert page.limit == 2
+        assert page.offset == 2
+        assert len(page.items) == 2
+
+    def test_limit_one_works(self, db_session, make_user):
+        admin = make_user(role=UserRole.admin)
+        result = svc.list_admin_audit(db_session, actor=admin, limit=1)
+        assert result.limit == 1
+
+    def test_limit_two_hundred_works(self, db_session, make_user):
+        admin = make_user(role=UserRole.admin)
+        result = svc.list_admin_audit(db_session, actor=admin, limit=200)
+        assert result.limit == 200
+
+    def test_limit_zero_rejected(self, db_session, make_user):
+        admin = make_user(role=UserRole.admin)
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_audit(db_session, actor=admin, limit=0)
+        assert excinfo.value.status_code == 422
+
+    def test_limit_above_max_rejected(self, db_session, make_user):
+        admin = make_user(role=UserRole.admin)
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_audit(db_session, actor=admin, limit=201)
+        assert excinfo.value.status_code == 422
+
+    def test_negative_offset_rejected(self, db_session, make_user):
+        admin = make_user(role=UserRole.admin)
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_audit(db_session, actor=admin, offset=-1)
+        assert excinfo.value.status_code == 422
+
+
+class TestAdminAuditStoreFilter:
+    def test_store_id_filter_scopes_feed(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item_a = make_item(store=store_a, variant=variant)
+        item_b = make_item(store=store_b, variant=variant)
+        make_inventory_log(item=item_a)
+        make_inventory_log(item=item_b)
+
+        result = svc.list_admin_audit(
+            db_session, actor=admin, store_id=store_a.id
+        )
+        for event in result.items:
+            assert event.store_id == store_a.id
+
+    def test_unknown_store_id_returns_404(
+        self, db_session, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        with pytest.raises(HTTPException) as excinfo:
+            svc.list_admin_audit(
+                db_session, actor=admin, store_id=uuid.uuid4()
+            )
+        assert excinfo.value.status_code == 404
+
+    def test_store_id_filter_works_for_inventory(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item_a = make_item(store=store_a, variant=variant)
+        item_b = make_item(store=store_b, variant=variant)
+        log_a = make_inventory_log(item=item_a)
+        log_b = make_inventory_log(item=item_b)
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            store_id=store_a.id,
+            source=AuditSource.inventory,
+        )
+        ids = {e.id for e in result.items}
+        assert log_a.id in ids
+        assert log_b.id not in ids
+
+    def test_store_id_filter_works_for_order(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_order,
+        make_order_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        order_a = make_order(store=store_a)
+        order_b = make_order(store=store_b)
+        log_a = make_order_audit_log(order=order_a)
+        log_b = make_order_audit_log(order=order_b)
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            store_id=store_a.id,
+            source=AuditSource.order,
+        )
+        ids = {e.id for e in result.items}
+        assert log_a.id in ids
+        assert log_b.id not in ids
+
+    def test_store_id_filter_works_for_compliance(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product_a = make_product()
+        product_b = make_product()
+        variant_a = make_variant(product=product_a)
+        variant_b = make_variant(product=product_b)
+        make_item(store=store_a, variant=variant_a)
+        make_item(store=store_b, variant=variant_b)
+        log_a = make_compliance_audit_log(product=product_a)
+        log_b = make_compliance_audit_log(product=product_b)
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            store_id=store_a.id,
+            source=AuditSource.product_compliance,
+        )
+        ids = {e.id for e in result.items}
+        assert log_a.id in ids
+        assert log_b.id not in ids
+
+
+class TestAdminAuditSourceFilters:
+    def test_source_inventory_only(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_order,
+        make_inventory_log,
+        make_order_audit_log,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        order = make_order(store=store)
+        make_inventory_log(item=item)
+        make_order_audit_log(order=order)
+        make_compliance_audit_log(product=product)
+
+        result = svc.list_admin_audit(
+            db_session, actor=admin, source=AuditSource.inventory
+        )
+        for event in result.items:
+            assert event.source == AuditSource.inventory
+
+    def test_source_order_only(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_order,
+        make_inventory_log,
+        make_order_audit_log,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        order = make_order(store=store)
+        make_inventory_log(item=item)
+        make_order_audit_log(order=order)
+        make_compliance_audit_log(product=product)
+
+        result = svc.list_admin_audit(
+            db_session, actor=admin, source=AuditSource.order
+        )
+        for event in result.items:
+            assert event.source == AuditSource.order
+
+    def test_source_compliance_only(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_order,
+        make_inventory_log,
+        make_order_audit_log,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        order = make_order(store=store)
+        make_inventory_log(item=item)
+        make_order_audit_log(order=order)
+        make_compliance_audit_log(product=product)
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            source=AuditSource.product_compliance,
+        )
+        for event in result.items:
+            assert event.source == AuditSource.product_compliance
+
+
+class TestAdminAuditNonSourceFilters:
+    def test_entity_type_filter_narrows(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_order,
+        make_inventory_log,
+        make_order_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        order = make_order(store=store)
+        make_inventory_log(item=item)
+        make_order_audit_log(order=order)
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            entity_type=AuditEntityType.order,
+        )
+        for event in result.items:
+            assert event.entity_type == AuditEntityType.order
+
+    def test_action_filter_narrows(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        receipt = make_inventory_log(
+            item=item, movement_type=InventoryMovementType.receipt
+        )
+        adjustment = make_inventory_log(
+            item=item, movement_type=InventoryMovementType.adjustment
+        )
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            action=InventoryMovementType.receipt.value,
+        )
+        ids = {e.id for e in result.items}
+        assert receipt.id in ids
+        assert adjustment.id not in ids
+
+    def test_actor_id_filter_narrows(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        actor_one = make_user(role=UserRole.manager, store_id=store.id)
+        actor_two = make_user(role=UserRole.manager, store_id=store.id)
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        log_one = make_inventory_log(item=item, actor=actor_one)
+        log_two = make_inventory_log(item=item, actor=actor_two)
+
+        result = svc.list_admin_audit(
+            db_session, actor=admin, actor_id=actor_one.id
+        )
+        ids = {e.id for e in result.items}
+        assert log_one.id in ids
+        assert log_two.id not in ids
+
+
+class TestAdminAuditDateFilters:
+    def test_date_from_excludes_older(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+
+        old = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        recent = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 5, 1, tzinfo=UTC),
+        )
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            date_from=datetime(2026, 3, 1, tzinfo=UTC),
+        )
+        ids = {e.id for e in result.items}
+        assert recent.id in ids
+        assert old.id not in ids
+
+    def test_date_to_excludes_newer(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+
+        old = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        recent = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 5, 1, tzinfo=UTC),
+        )
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            date_to=datetime(2026, 3, 1, tzinfo=UTC),
+        )
+        ids = {e.id for e in result.items}
+        assert old.id in ids
+        assert recent.id not in ids
+
+    def test_date_window(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+
+        before = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        inside = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 3, 15, tzinfo=UTC),
+        )
+        after = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 6, 1, tzinfo=UTC),
+        )
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            date_from=datetime(2026, 2, 1, tzinfo=UTC),
+            date_to=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        ids = {e.id for e in result.items}
+        assert inside.id in ids
+        assert before.id not in ids
+        assert after.id not in ids
+
+
+class TestAdminAuditSorting:
+    def test_created_at_desc(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+
+        older = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        middle = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 2, 1, tzinfo=UTC),
+        )
+        newest = make_inventory_log(
+            item=item,
+            created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        )
+
+        result = svc.list_admin_audit(
+            db_session, actor=admin, source=AuditSource.inventory
+        )
+        ids_in_order = [e.id for e in result.items]
+        assert ids_in_order.index(newest.id) < ids_in_order.index(middle.id)
+        assert ids_in_order.index(middle.id) < ids_in_order.index(older.id)
+
+    def test_source_asc_tie_breaker(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_order,
+        make_inventory_log,
+        make_order_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        order = make_order(store=store)
+
+        same_ts = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+        inv_log = make_inventory_log(item=item, created_at=same_ts)
+        ord_log = make_order_audit_log(order=order, created_at=same_ts)
+
+        result = svc.list_admin_audit(db_session, actor=admin)
+        # AuditSource.inventory.value == "inventory" < "order"
+        # ASC by source → inventory event must come before order event
+        # within the same created_at bucket.
+        ids_in_order = [e.id for e in result.items]
+        assert ids_in_order.index(inv_log.id) < ids_in_order.index(
+            ord_log.id
+        )
+
+    def test_id_asc_tie_breaker(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+
+        same_ts = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+        a = make_inventory_log(item=item, created_at=same_ts)
+        b = make_inventory_log(item=item, created_at=same_ts)
+
+        result = svc.list_admin_audit(
+            db_session, actor=admin, source=AuditSource.inventory
+        )
+        ids_in_order = [e.id for e in result.items]
+        # Same source + same created_at → id ASC tie-breaker.
+        smaller_id = min(a.id, b.id, key=str)
+        assert ids_in_order[0] == smaller_id
+
+
+class TestAdminAuditComplianceFanOut:
+    def test_compliance_fans_out_per_affected_store(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        make_item(store=store_a, variant=variant)
+        make_item(store=store_b, variant=variant)
+        log = make_compliance_audit_log(product=product)
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            source=AuditSource.product_compliance,
+        )
+
+        compliance_events = [e for e in result.items if e.id == log.id]
+        store_ids = {e.store_id for e in compliance_events}
+        assert store_ids == {store_a.id, store_b.id}
+
+    def test_compliance_does_not_duplicate_same_log_store_pair(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        # Two variants, two items in the same store — the join would
+        # otherwise enumerate 2 rows for one (log, store) pair.
+        variant_one = make_variant(product=product)
+        variant_two = make_variant(product=product)
+        make_item(store=store, variant=variant_one)
+        make_item(store=store, variant=variant_two)
+        log = make_compliance_audit_log(product=product)
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            source=AuditSource.product_compliance,
+        )
+        matching = [e for e in result.items if e.id == log.id]
+        assert len(matching) == 1
+        assert matching[0].store_id == store.id
+
+    def test_compliance_with_store_filter_returns_only_affected_store(
+        self,
+        db_session,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        make_item(store=store_a, variant=variant)
+        make_item(store=store_b, variant=variant)
+        log = make_compliance_audit_log(product=product)
+
+        result = svc.list_admin_audit(
+            db_session,
+            actor=admin,
+            source=AuditSource.product_compliance,
+            store_id=store_a.id,
+        )
+        compliance_events = [e for e in result.items if e.id == log.id]
+        assert len(compliance_events) == 1
+        assert compliance_events[0].store_id == store_a.id

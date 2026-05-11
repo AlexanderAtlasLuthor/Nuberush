@@ -1045,3 +1045,743 @@ class TestExistingRouteRegression:
             AUDIT_URL.format(store_id=store.id), headers=_auth(admin)
         )
         assert resp_audit.status_code == 200
+
+
+# --------------------------------------------------------------------- #
+# F2.17.5 — GET /admin/audit
+# --------------------------------------------------------------------- #
+
+
+ADMIN_AUDIT_URL = "/admin/audit"
+
+_NON_ADMIN_AUDIT_ROLES = (
+    UserRole.owner,
+    UserRole.manager,
+    UserRole.staff,
+    UserRole.driver,
+)
+
+
+class TestAdminAuditAuthRBAC:
+    def test_anonymous_returns_401(self, client: TestClient):
+        resp = client.get(ADMIN_AUDIT_URL)
+        assert resp.status_code == 401, resp.text
+
+    def test_admin_returns_200(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(ADMIN_AUDIT_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == AUDIT_LIST_KEYS
+
+    @pytest.mark.parametrize("role", _NON_ADMIN_AUDIT_ROLES)
+    def test_non_admin_forbidden(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        role: UserRole,
+    ):
+        store = make_store()
+        actor = make_user(role=role, store_id=store.id)
+        resp = client.get(ADMIN_AUDIT_URL, headers=_auth(actor))
+        assert resp.status_code == 403, resp.text
+
+
+class TestAdminAuditEnvelopeAndCoverage:
+    def test_envelope_keys(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(ADMIN_AUDIT_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == AUDIT_LIST_KEYS
+        assert isinstance(body["items"], list)
+        assert isinstance(body["total"], int)
+        assert isinstance(body["limit"], int)
+        assert isinstance(body["offset"], int)
+        assert body["limit"] == 50
+        assert body["offset"] == 0
+
+    def test_global_feed_includes_inventory(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        log = make_inventory_log(item=item)
+
+        resp = client.get(ADMIN_AUDIT_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        ids = {item_dict["id"] for item_dict in resp.json()["items"]}
+        assert str(log.id) in ids
+
+    def test_global_feed_includes_order(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_order,
+        make_order_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        order = make_order(store=store)
+        log = make_order_audit_log(order=order)
+
+        resp = client.get(ADMIN_AUDIT_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        ids = {item_dict["id"] for item_dict in resp.json()["items"]}
+        assert str(log.id) in ids
+
+    def test_global_feed_includes_compliance(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        make_item(store=store, variant=variant)
+        log = make_compliance_audit_log(product=product)
+
+        resp = client.get(ADMIN_AUDIT_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        ids = {item_dict["id"] for item_dict in resp.json()["items"]}
+        assert str(log.id) in ids
+
+    def test_global_feed_includes_multiple_stores(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item_a = make_item(store=store_a, variant=variant)
+        item_b = make_item(store=store_b, variant=variant)
+        make_inventory_log(item=item_a)
+        make_inventory_log(item=item_b)
+
+        resp = client.get(ADMIN_AUDIT_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+        store_ids = {
+            item_dict["store_id"]
+            for item_dict in resp.json()["items"]
+            if item_dict["store_id"] is not None
+        }
+        assert str(store_a.id) in store_ids
+        assert str(store_b.id) in store_ids
+
+    def test_total_is_pre_pagination(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        for _ in range(5):
+            make_inventory_log(item=item)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"limit": 2, "source": "inventory"},
+        )
+        body = resp.json()
+        assert body["total"] == 5
+        assert len(body["items"]) == 2
+
+    def test_pagination_limit_offset(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        for _ in range(5):
+            make_inventory_log(item=item)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"limit": 2, "offset": 2, "source": "inventory"},
+        )
+        body = resp.json()
+        assert body["limit"] == 2
+        assert body["offset"] == 2
+        assert len(body["items"]) == 2
+
+
+class TestAdminAuditStoreFilter:
+    def test_store_id_filter_scopes_to_one_store(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item_a = make_item(store=store_a, variant=variant)
+        item_b = make_item(store=store_b, variant=variant)
+        make_inventory_log(item=item_a)
+        make_inventory_log(item=item_b)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"store_id": str(store_a.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        for item_dict in resp.json()["items"]:
+            assert item_dict["store_id"] == str(store_a.id)
+
+    def test_unknown_store_id_returns_404(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"store_id": str(uuid.uuid4())},
+        )
+        assert resp.status_code == 404, resp.text
+
+    def test_invalid_store_id_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"store_id": "not-a-uuid"},
+        )
+        assert resp.status_code == 422, resp.text
+
+
+class TestAdminAuditQueryValidation:
+    def test_limit_zero_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"limit": 0},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_limit_above_max_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"limit": 201},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_negative_offset_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"offset": -1},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_invalid_source_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"source": "user_audit"},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_invalid_entity_type_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"entity_type": "user"},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_invalid_actor_id_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"actor_id": "not-a-uuid"},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_invalid_date_from_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"date_from": "not-a-date"},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_invalid_date_to_returns_422(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"date_to": "not-a-date"},
+        )
+        assert resp.status_code == 422, resp.text
+
+
+class TestAdminAuditFunctionalFilters:
+    def test_source_inventory_only(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_order,
+        make_inventory_log,
+        make_order_audit_log,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        order = make_order(store=store)
+        make_inventory_log(item=item)
+        make_order_audit_log(order=order)
+        make_compliance_audit_log(product=product)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"source": "inventory"},
+        )
+        assert resp.status_code == 200, resp.text
+        for item_dict in resp.json()["items"]:
+            assert item_dict["source"] == "inventory"
+
+    def test_source_order_only(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_order,
+        make_inventory_log,
+        make_order_audit_log,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        order = make_order(store=store)
+        make_inventory_log(item=item)
+        make_order_audit_log(order=order)
+        make_compliance_audit_log(product=product)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"source": "order"},
+        )
+        assert resp.status_code == 200, resp.text
+        for item_dict in resp.json()["items"]:
+            assert item_dict["source"] == "order"
+
+    def test_source_compliance_only(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_order,
+        make_inventory_log,
+        make_order_audit_log,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        order = make_order(store=store)
+        make_inventory_log(item=item)
+        make_order_audit_log(order=order)
+        make_compliance_audit_log(product=product)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"source": "product_compliance"},
+        )
+        assert resp.status_code == 200, resp.text
+        for item_dict in resp.json()["items"]:
+            assert item_dict["source"] == "product_compliance"
+
+    def test_entity_type_filter_narrows(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_order,
+        make_inventory_log,
+        make_order_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        order = make_order(store=store)
+        make_inventory_log(item=item)
+        make_order_audit_log(order=order)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"entity_type": "order"},
+        )
+        assert resp.status_code == 200, resp.text
+        for item_dict in resp.json()["items"]:
+            assert item_dict["entity_type"] == "order"
+
+    def test_action_filter_narrows(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        receipt = make_inventory_log(
+            item=item, movement_type=InventoryMovementType.receipt
+        )
+        adjustment = make_inventory_log(
+            item=item, movement_type=InventoryMovementType.adjustment
+        )
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"action": InventoryMovementType.receipt.value},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {item_dict["id"] for item_dict in resp.json()["items"]}
+        assert str(receipt.id) in ids
+        assert str(adjustment.id) not in ids
+
+    def test_actor_id_filter_narrows(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        actor_one = make_user(role=UserRole.manager, store_id=store.id)
+        actor_two = make_user(role=UserRole.manager, store_id=store.id)
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        log_one = make_inventory_log(item=item, actor=actor_one)
+        log_two = make_inventory_log(item=item, actor=actor_two)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"actor_id": str(actor_one.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {item_dict["id"] for item_dict in resp.json()["items"]}
+        assert str(log_one.id) in ids
+        assert str(log_two.id) not in ids
+
+    def test_date_from_excludes_older(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        old = make_inventory_log(
+            item=item, created_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        recent = make_inventory_log(
+            item=item, created_at=datetime(2026, 5, 1, tzinfo=UTC)
+        )
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"date_from": "2026-03-01T00:00:00+00:00"},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {item_dict["id"] for item_dict in resp.json()["items"]}
+        assert str(recent.id) in ids
+        assert str(old.id) not in ids
+
+    def test_date_to_excludes_newer(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        old = make_inventory_log(
+            item=item, created_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        recent = make_inventory_log(
+            item=item, created_at=datetime(2026, 5, 1, tzinfo=UTC)
+        )
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"date_to": "2026-03-01T00:00:00+00:00"},
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {item_dict["id"] for item_dict in resp.json()["items"]}
+        assert str(old.id) in ids
+        assert str(recent.id) not in ids
+
+    def test_date_window(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_inventory_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        item = make_item(store=store, variant=variant)
+        before = make_inventory_log(
+            item=item, created_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        inside = make_inventory_log(
+            item=item, created_at=datetime(2026, 3, 15, tzinfo=UTC)
+        )
+        after = make_inventory_log(
+            item=item, created_at=datetime(2026, 6, 1, tzinfo=UTC)
+        )
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={
+                "date_from": "2026-02-01T00:00:00+00:00",
+                "date_to": "2026-04-01T00:00:00+00:00",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {item_dict["id"] for item_dict in resp.json()["items"]}
+        assert str(inside.id) in ids
+        assert str(before.id) not in ids
+        assert str(after.id) not in ids
+
+
+class TestAdminAuditCompliance:
+    def test_compliance_fans_out_across_stores(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        make_item(store=store_a, variant=variant)
+        make_item(store=store_b, variant=variant)
+        log = make_compliance_audit_log(product=product)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={"source": "product_compliance"},
+        )
+        assert resp.status_code == 200, resp.text
+        compliance_store_ids = {
+            item_dict["store_id"]
+            for item_dict in resp.json()["items"]
+            if item_dict["id"] == str(log.id)
+        }
+        assert compliance_store_ids == {str(store_a.id), str(store_b.id)}
+
+    def test_compliance_store_filter_returns_only_affected_store(
+        self,
+        client: TestClient,
+        make_store,
+        make_user,
+        make_product,
+        make_variant,
+        make_item,
+        make_compliance_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        store_a = make_store()
+        store_b = make_store()
+        product = make_product()
+        variant = make_variant(product=product)
+        make_item(store=store_a, variant=variant)
+        make_item(store=store_b, variant=variant)
+        log = make_compliance_audit_log(product=product)
+
+        resp = client.get(
+            ADMIN_AUDIT_URL,
+            headers=_auth(admin),
+            params={
+                "source": "product_compliance",
+                "store_id": str(store_a.id),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        matching = [
+            item_dict
+            for item_dict in resp.json()["items"]
+            if item_dict["id"] == str(log.id)
+        ]
+        assert len(matching) == 1
+        assert matching[0]["store_id"] == str(store_a.id)
+
+
+class TestAdminAuditRouteCollision:
+    def test_admin_audit_route_distinct_from_store_audit(
+        self, client: TestClient, make_store, make_user
+    ):
+        """`GET /admin/audit` must not be misrouted to
+        `GET /stores/{store_id}/audit` and vice versa. The store-scoped
+        route requires a path UUID; if `/admin/audit` were mis-parsed
+        as `/stores/admin/audit` it would 422 (invalid UUID). A clean
+        200 here proves the routes are distinct.
+        """
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(ADMIN_AUDIT_URL, headers=_auth(admin))
+        assert resp.status_code == 200, resp.text
+
+    def test_store_audit_route_still_works_alongside_admin_audit(
+        self, client: TestClient, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        resp = client.get(
+            AUDIT_URL.format(store_id=store.id), headers=_auth(admin)
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body.keys()) == AUDIT_LIST_KEYS

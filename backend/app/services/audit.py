@@ -1,43 +1,57 @@
-"""Service layer for the unified store audit feed (F2.16.2).
+"""Service layer for the unified audit feed (F2.16.2 + F2.17.4).
 
-`list_store_audit` is the only public entry point. It aggregates three
-existing append-only log tables — `inventory_logs`, `order_audit_logs`,
-and `product_compliance_audit_logs` — into the normalized
-`AuditEventRead` shape locked in F2.16.1, applies a uniform set of
-filters, merges them, sorts with a 3-key stable order, and paginates
-after the merge.
+Two public entry points share the same normalizers, filters, merge,
+sort, and pagination machinery:
 
-No new tables, no migrations, no model changes. The compliance source
-has no `store_id` column; this module owns the join that scopes a
-product's compliance history to a requested store:
+  - `list_store_audit`  (F2.16.2) — store-scoped feed, role matrix
+    `admin/owner/manager/staff` with `require_store_member` semantics.
+  - `list_admin_audit`  (F2.17.4) — admin-only global or single-store
+    feed, with `store_id` optional.
+
+Both aggregate the same three append-only log tables — `inventory_logs`,
+`order_audit_logs`, and `product_compliance_audit_logs` — into the
+normalized `AuditEventRead` shape locked in F2.16.1. No new tables, no
+migrations, no model changes. No new `AuditSource` enum values.
+
+The compliance source has no `store_id` column; this module owns the
+join that maps a product's compliance history to one or more stores:
 
   ProductComplianceAuditLog.product_id
     -> ProductVariant.product_id
     -> InventoryItem.variant_id
-    -> InventoryItem.store_id == requested store_id
+    -> InventoryItem.store_id
 
-A product carried by multiple variants/items in the same store still
-yields ONE compliance event per audit row (DISTINCT on the audit log
-id, plus a defensive Python-side dedupe).
+In the store-scoped path the join is filtered by the requested store
+and yields exactly one event per audit row for that store. In the
+global path the join is unfiltered and produces one event per
+(log, store_id) pair — a compliance change fans out across every store
+that currently carries the product. A Python-side dedupe by
+`(log.id, store_id)` collapses duplicates from a product having
+multiple variants/items in the same store.
 
-RBAC / tenancy is enforced here at the service layer even though
-routes do not exist yet (F2.16.3 owns the route). The rules mirror
-`require_store_member` exactly so behavior stays uniform when the
-route is added on top:
+RBAC:
 
-  - admin: any active store; 404 if missing; 400 if inactive.
-  - owner / manager / staff: own active store only; cross-store and
-    unknown-store collapse to 403 to avoid existence-probe leaks;
-    400 if their own store is inactive.
-  - driver: 403 (role gate; never sees the audit surface).
-  - anonymous: not reachable here — `current_user` injection runs in
-    the route, so this layer only ever sees an authenticated `User`.
+  list_store_audit (F2.16.2):
+    - admin: any active store; 404 if missing; 400 if inactive.
+    - owner / manager / staff: own active store only; cross-store and
+      unknown-store collapse to 403 to avoid existence-probe leaks;
+      400 if their own store is inactive.
+    - driver: 403 (role gate; never sees the audit surface).
+    - anonymous: not reachable here — `current_user` injection runs in
+      the route.
 
-Pagination guards run at the service boundary so the route can stay
+  list_admin_audit (F2.17.4):
+    - admin only; everyone else → 403.
+    - When `store_id` is provided, the store must exist; unknown → 404.
+      Inactive stores are still readable (audit history of a
+      deactivated store remains available to admin), so the 400
+      response from `_assert_audit_access` is intentionally NOT
+      mirrored here.
+
+Pagination guards run at the service boundary so routes can stay
 thin: limit must be 1..200, offset must be >= 0. Out-of-range values
-raise 422 — same status code the route's `Query(ge=..., le=...)` will
-raise, so a future direct caller (admin script, batch job) gets the
-same contract.
+raise 422 — same status code routes encode via `Query(ge=..., le=...)`,
+so direct callers (admin scripts, batch jobs) get the same contract.
 """
 
 from __future__ import annotations
@@ -173,6 +187,21 @@ def _validate_pagination(limit: int, offset: int) -> None:
         )
 
 
+def _assert_admin_caller(actor: User) -> None:
+    """RBAC gate for the global / admin audit feed (F2.17.4).
+
+    Symmetric with `app.services.users._assert_admin_caller` and
+    `app.services.stores._assert_admin_caller`. Kept local to the
+    module instead of inventing a shared helper because each service
+    owns its own RBAC source of truth.
+    """
+    if actor.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required.",
+        )
+
+
 # --------------------------------------------------------------------- #
 # Source normalizers
 # --------------------------------------------------------------------- #
@@ -212,12 +241,18 @@ def _coerce_uuid_str(value: UUID | None) -> str | None:
 def _query_inventory_events(
     db: Session,
     *,
-    store_id: UUID,
+    store_id: UUID | None,
     action: str | None,
     actor_id: UUID | None,
     date_from: datetime | None,
     date_to: datetime | None,
 ) -> list[AuditEventRead]:
+    """Normalize `inventory_logs` rows into `AuditEventRead`.
+
+    `store_id=None` means "no store filter" (admin global path).
+    `store_id` set to a UUID scopes the query to one store, matching
+    the F2.16.2 store-scoped behavior.
+    """
     if action is not None:
         # `InventoryLog.movement_type` is a Postgres enum column;
         # comparing it against a string that isn't a valid enum
@@ -233,7 +268,9 @@ def _query_inventory_events(
     else:
         movement_filter = None
 
-    stmt = select(InventoryLog).where(InventoryLog.store_id == store_id)
+    stmt = select(InventoryLog)
+    if store_id is not None:
+        stmt = stmt.where(InventoryLog.store_id == store_id)
     if movement_filter is not None:
         stmt = stmt.where(InventoryLog.movement_type == movement_filter)
     if actor_id is not None:
@@ -274,13 +311,19 @@ def _query_inventory_events(
 def _query_order_events(
     db: Session,
     *,
-    store_id: UUID,
+    store_id: UUID | None,
     action: str | None,
     actor_id: UUID | None,
     date_from: datetime | None,
     date_to: datetime | None,
 ) -> list[AuditEventRead]:
-    stmt = select(OrderAuditLog).where(OrderAuditLog.store_id == store_id)
+    """Normalize `order_audit_logs` rows into `AuditEventRead`.
+
+    `store_id=None` means "no store filter" (admin global path).
+    """
+    stmt = select(OrderAuditLog)
+    if store_id is not None:
+        stmt = stmt.where(OrderAuditLog.store_id == store_id)
     if action is not None:
         stmt = stmt.where(OrderAuditLog.action == action)
     if actor_id is not None:
@@ -322,26 +365,42 @@ def _query_order_events(
 def _query_compliance_events(
     db: Session,
     *,
-    store_id: UUID,
+    store_id: UUID | None,
     action: str | None,
     actor_id: UUID | None,
     date_from: datetime | None,
     date_to: datetime | None,
 ) -> list[AuditEventRead]:
-    """Compliance events scoped via the catalog→inventory join path.
+    """Compliance events resolved via the catalog→inventory join path.
 
     `Product` has no `store_id`; a compliance audit row is relevant to
     a store only when that store currently carries inventory for at
-    least one variant of the product. The DISTINCT clause + Python-side
-    dedupe collapse duplicates that arise from a product having
-    multiple variants/items in the same store (one row in the join
-    output per matching item, but we want one event per audit log id).
+    least one variant of the product.
+
+    When `store_id` is a concrete UUID (F2.16.2 store-scoped path):
+      - The join is filtered to that store.
+      - Each emitted event carries `store_id == requested`.
+      - A product with multiple variants/items in that store yields
+        ONE event per audit log row.
+
+    When `store_id is None` (F2.17.4 admin global path):
+      - The join is unfiltered.
+      - Each audit row fans out to one event per store that carries
+        the product.
+      - Dedupe is by `(log.id, store_id)` so a product with multiple
+        variants/items in the SAME store still yields one event for
+        that store.
+
+    The tuple select `(ProductComplianceAuditLog, InventoryItem.store_id)`
+    is used in both paths so the emitted event's `store_id` always
+    reflects the actual carrying store (equal to the requested one in
+    the scoped path; varying across rows in the global path).
     """
     if action is not None and action != _COMPLIANCE_ACTION:
         return []
 
     stmt = (
-        select(ProductComplianceAuditLog)
+        select(ProductComplianceAuditLog, InventoryItem.store_id)
         .join(
             ProductVariant,
             ProductVariant.product_id == ProductComplianceAuditLog.product_id,
@@ -350,9 +409,9 @@ def _query_compliance_events(
             InventoryItem,
             InventoryItem.variant_id == ProductVariant.id,
         )
-        .where(InventoryItem.store_id == store_id)
-        .distinct()
     )
+    if store_id is not None:
+        stmt = stmt.where(InventoryItem.store_id == store_id)
     if actor_id is not None:
         stmt = stmt.where(
             ProductComplianceAuditLog.changed_by_user_id == actor_id
@@ -362,21 +421,21 @@ def _query_compliance_events(
     if date_to is not None:
         stmt = stmt.where(ProductComplianceAuditLog.created_at <= date_to)
 
-    rows = list(db.scalars(stmt).all())
+    rows = list(db.execute(stmt).all())
 
-    # Defense-in-depth dedupe by audit log id — covers any join shape
-    # that DISTINCT did not collapse (e.g. if SQLAlchemy ever surfaces
-    # the join's row carrier with extra identity columns).
-    seen: set[UUID] = set()
-    deduped: list[ProductComplianceAuditLog] = []
-    for log in rows:
-        if log.id in seen:
-            continue
-        seen.add(log.id)
-        deduped.append(log)
-
+    # Dedupe by (log.id, event_store_id). The join enumerates one row
+    # per matching inventory item, so a product with N variants and/or
+    # M items per variant in the same store produces N*M raw rows for
+    # one audit event — collapse them here. We avoid SQL DISTINCT
+    # because the multi-column select makes its semantics less obvious
+    # than a tight Python pass.
+    seen: set[tuple[UUID, UUID]] = set()
     events: list[AuditEventRead] = []
-    for log in deduped:
+    for log, event_store_id in rows:
+        key = (log.id, event_store_id)
+        if key in seen:
+            continue
+        seen.add(key)
         metadata: dict[str, Any] = {
             "previous_compliance_status": (
                 log.previous_compliance_status.value
@@ -390,10 +449,7 @@ def _query_compliance_events(
             AuditEventRead(
                 id=log.id,
                 source=AuditSource.product_compliance,
-                # The requested store_id is the audit scope, not the
-                # log's own (which has no store_id column). Compliance
-                # events fan out across stores that carry the product.
-                store_id=store_id,
+                store_id=event_store_id,
                 actor_id=log.changed_by_user_id,
                 action=_COMPLIANCE_ACTION,
                 entity_type=AuditEntityType.product,
@@ -522,6 +578,122 @@ def list_store_audit(
     # Stable 3-key sort via two passes. Python's sort is stable, so
     # ascending (source, id) is preserved within each created_at
     # bucket after the second pass flips to created_at DESC.
+    events.sort(key=lambda e: (e.source.value, str(e.id)))
+    events.sort(key=lambda e: e.created_at, reverse=True)
+
+    total = len(events)
+    page_items = events[offset : offset + limit]
+
+    return AuditEventListResponse(
+        items=page_items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def list_admin_audit(
+    db: Session,
+    *,
+    actor: User,
+    store_id: UUID | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    source: AuditSource | None = None,
+    entity_type: AuditEntityType | None = None,
+    action: str | None = None,
+    actor_id: UUID | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> AuditEventListResponse:
+    """Return the global / admin audit feed (F2.17.4).
+
+    Admin-only entry point. Reuses the same source normalizers and
+    merge/sort/paginate pipeline as `list_store_audit`. The only
+    structural differences are:
+
+      - RBAC: `_assert_admin_caller` (admin only; everyone else 403).
+        Non-admins do NOT reach `_assert_audit_access`, so the
+        store-scoped 400/403/404 contract from `list_store_audit` does
+        not apply here.
+
+      - Store scope: `store_id` is optional.
+          * If provided, the store must exist (404 if not). Inactive
+            stores are explicitly allowed — admin can read the audit
+            history of a deactivated store.
+          * If omitted, all three sources contribute events from every
+            store. Compliance fans out one event per (audit row,
+            carrying store) pair; dedupe is by `(log.id, store_id)`.
+
+    Pipeline:
+      1. Authorize: admin only.
+      2. Validate pagination bounds (1..200 limit, offset >= 0).
+      3. If `store_id` is provided, confirm existence.
+      4. Query each applicable source with `store_id` passed through.
+      5. Merge + stable-sort by (`created_at` DESC, `source` ASC,
+         `id` ASC).
+      6. `total` = pre-pagination count; slice `[offset:offset+limit]`.
+    """
+    _assert_admin_caller(actor)
+    _validate_pagination(limit, offset)
+
+    if store_id is not None:
+        store = db.scalar(select(Store).where(Store.id == store_id))
+        if store is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found.",
+            )
+        # Intentionally no 400 on inactive — admin global audit must
+        # be able to inspect deactivated stores. Mirrors the F2.17.0
+        # contract for `GET /admin/audit`.
+
+    events: list[AuditEventRead] = []
+
+    if _source_applies(
+        AuditSource.inventory, source=source, entity_type=entity_type
+    ):
+        events.extend(
+            _query_inventory_events(
+                db,
+                store_id=store_id,
+                action=action,
+                actor_id=actor_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        )
+
+    if _source_applies(
+        AuditSource.order, source=source, entity_type=entity_type
+    ):
+        events.extend(
+            _query_order_events(
+                db,
+                store_id=store_id,
+                action=action,
+                actor_id=actor_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        )
+
+    if _source_applies(
+        AuditSource.product_compliance,
+        source=source,
+        entity_type=entity_type,
+    ):
+        events.extend(
+            _query_compliance_events(
+                db,
+                store_id=store_id,
+                action=action,
+                actor_id=actor_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        )
+
     events.sort(key=lambda e: (e.source.value, str(e.id)))
     events.sort(key=lambda e: e.created_at, reverse=True)
 
