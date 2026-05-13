@@ -1,31 +1,21 @@
 import { useEffect } from "react";
 import { Navigate, Outlet, useParams } from "react-router-dom";
 import { AdminLayout } from "@/layouts/AdminLayout";
+import { PublicLayout } from "@/layouts/PublicLayout";
 import { StoreLayout } from "@/layouts/StoreLayout";
 import { useAuth } from "@/auth";
 import AdminPlaceholderPage from "@/features/admin/pages/AdminPlaceholderPage";
-import LandingPage from "@/pages/LandingPage";
 
-// Root entry point at `/`. Authenticated users go straight to /app
-// (where AppIndexRedirect routes them by role); unauthenticated
-// visitors see the public landing page. Replaces the previous
-// unconditional `Navigate to="/app"` so visitors aren't bounced
-// through /login on first visit.
-export function AppEntry() {
-  const { isAuthenticated, isLoading } = useAuth();
-
-  if (isLoading) {
-    // Brief boot-pass before the in-memory token (if any) is validated
-    // by /auth/me. Render nothing so we don't flash the landing page
-    // for an already-authenticated user.
-    return null;
-  }
-
-  if (isAuthenticated) {
-    return <Navigate to="/app" replace />;
-  }
-
-  return <LandingPage />;
+// F2.21.1: PublicShell wraps every public-website route in PublicLayout.
+// Renders identically for unauthenticated and authenticated visitors
+// per F2.21 contract §4 — no auth check, no role/store context, no
+// admin/store navigation.
+export function PublicShell() {
+  return (
+    <PublicLayout>
+      <Outlet />
+    </PublicLayout>
+  );
 }
 
 export function AdminShell() {

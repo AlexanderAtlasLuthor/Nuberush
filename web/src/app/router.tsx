@@ -22,22 +22,55 @@ import AdminAuditPage from "@/features/audit/pages/AdminAuditPage";
 import StoreSettingsPage from "@/features/store/pages/StoreSettingsPage";
 import AdminStoresPage from "@/features/stores/pages/AdminStoresPage";
 import AdminStoreDetailPage from "@/features/stores/pages/AdminStoreDetailPage";
+import HomePage from "@/features/public/pages/HomePage";
+import ForStoresPage from "@/features/public/pages/ForStoresPage";
+import HowItWorksPage from "@/features/public/pages/HowItWorksPage";
+import FeaturesPage from "@/features/public/pages/FeaturesPage";
+import ContactPage from "@/features/public/pages/ContactPage";
+import RequestDemoPage from "@/features/public/pages/RequestDemoPage";
+import SupportPage from "@/features/public/pages/SupportPage";
+import LegalHubPage from "@/features/public/legal/LegalHubPage";
+import TermsPage from "@/features/public/legal/TermsPage";
+import PrivacyPage from "@/features/public/legal/PrivacyPage";
+import MerchantAgreementPage from "@/features/public/legal/MerchantAgreementPage";
+import AcceptableUsePage from "@/features/public/legal/AcceptableUsePage";
+import CookiesPage from "@/features/public/legal/CookiesPage";
 import {
   AdminSettingsPlaceholder,
   AdminShell,
-  AppEntry,
   AppIndexRedirect,
   LegacyInventoryRedirect,
   LegacyOrderRedirect,
   LegacyProductRedirect,
+  PublicShell,
   StoreShell,
   StoreRedirect,
 } from "./route-components";
 
 export const appRoutes: RouteObject[] = [
+  // F2.21.1: public website routes share the PublicShell layout. They
+  // render identically for unauthenticated and authenticated visitors
+  // per the F2.21 contract — no auth gate, no role/store context.
   {
-    path: "/",
-    element: <AppEntry />,
+    element: <PublicShell />,
+    children: [
+      { path: "/", element: <HomePage /> },
+      { path: "/for-stores", element: <ForStoresPage /> },
+      { path: "/how-it-works", element: <HowItWorksPage /> },
+      { path: "/features", element: <FeaturesPage /> },
+      { path: "/contact", element: <ContactPage /> },
+      { path: "/request-demo", element: <RequestDemoPage /> },
+      { path: "/support", element: <SupportPage /> },
+      { path: "/legal", element: <LegalHubPage /> },
+      { path: "/legal/terms", element: <TermsPage /> },
+      { path: "/legal/privacy", element: <PrivacyPage /> },
+      {
+        path: "/legal/merchant-agreement",
+        element: <MerchantAgreementPage />,
+      },
+      { path: "/legal/acceptable-use", element: <AcceptableUsePage /> },
+      { path: "/legal/cookies", element: <CookiesPage /> },
+    ],
   },
   {
     path: "/login",
