@@ -98,7 +98,7 @@ export function PublicFooter() {
             <p className="mt-2 text-sm">
               <a
                 href="mailto:team@fuenmayorindustries.com"
-                className="text-foreground hover:text-primary transition-colors"
+                className="text-foreground hover:text-primary transition-colors break-words"
               >
                 team@fuenmayorindustries.com
               </a>

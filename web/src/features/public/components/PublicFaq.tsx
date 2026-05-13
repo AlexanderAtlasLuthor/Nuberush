@@ -27,7 +27,7 @@ export function PublicFaq({ items }: PublicFaqProps) {
                 aria-hidden="true"
               />
             </summary>
-            <div className="px-5 pb-5 -mt-1">
+            <div className="px-5 pb-5 pt-0">
               <p className="text-sm text-muted-foreground leading-relaxed">
                 {item.answer}
               </p>
