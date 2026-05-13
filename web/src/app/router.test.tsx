@@ -126,6 +126,20 @@ vi.mock("@/features/admin-operations/pages/AdminOperationsPage", () => ({
   default: () => <div>Admin operations page</div>,
 }));
 
+// F2.20.5: /app/admin/products and /app/admin/products/:productId now
+// mount the real AdminProductsPage / AdminProductDetailPage. Same
+// mock convention.
+vi.mock("@/features/admin-products/pages/AdminProductsPage", () => ({
+  default: () => <div>Admin products page</div>,
+}));
+
+vi.mock(
+  "@/features/admin-products/pages/AdminProductDetailPage",
+  () => ({
+    default: () => <div>Admin product detail page</div>,
+  }),
+);
+
 import { appRoutes } from "./router";
 
 function makeUser(overrides: Partial<AuthUser> = {}): AuthUser {
@@ -366,11 +380,9 @@ describe("app route split", () => {
   // placeholders — they mount real pages. The placeholder-blocker
   // matrix intentionally excludes them.
   it.each([
-    [
-      "/app/admin/products",
-      "Admin Global Products",
-      "Global products query",
-    ],
+    // F2.20.5: /app/admin/products is no longer a placeholder — it
+    // mounts the real AdminProductsPage. The placeholder-blocker
+    // matrix intentionally excludes it.
     [
       "/app/admin/compliance",
       "Admin Compliance",
@@ -428,7 +440,9 @@ describe("app route split", () => {
     // F2.19.6: /app/admin/operations now renders the real
     //          AdminOperationsPage — its "No fake incidents" row is
     //          gone with the placeholder.
-    ["/app/admin/products", "No fake product data"],
+    // F2.20.5: /app/admin/products now renders the real
+    //          AdminProductsPage — its "No fake product data" row
+    //          is gone with the placeholder.
     ["/app/admin/compliance", "No fake compliance queue"],
     ["/app/admin/settings", "No billing simulation"],
   ])("renders admin non-goal %s", async (path, nonGoal) => {
@@ -463,6 +477,52 @@ describe("app route split", () => {
     expect(
       screen.queryByText("No frontend role authority"),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders the real AdminProductsPage at /app/admin/products (no longer a placeholder)", async () => {
+    renderRoute(
+      "/app/admin/products",
+      makeUser({ role: "admin", store_id: null }),
+      {
+        currentStoreId: null,
+        hasStoreContext: false,
+        isStoreRequired: false,
+      },
+    );
+    expect(
+      await screen.findByText("Admin products page"),
+    ).toBeInTheDocument();
+    // The placeholder copy must NOT be present anywhere.
+    expect(
+      screen.queryByRole("heading", { name: "Admin Global Products" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Global products query"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Backend Required")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("No fake product data"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the real AdminProductDetailPage at /app/admin/products/:productId (new route in F2.20.5)", async () => {
+    renderRoute(
+      "/app/admin/products/55555555-5555-5555-5555-555555555555",
+      makeUser({ role: "admin", store_id: null }),
+      {
+        currentStoreId: null,
+        hasStoreContext: false,
+        isStoreRequired: false,
+      },
+    );
+    expect(
+      await screen.findByText("Admin product detail page"),
+    ).toBeInTheDocument();
+    // Sidebar should still be the admin shell, not the store shell.
+    expect(screen.queryByTestId("store-gate")).not.toBeInTheDocument();
+    expect(
+      screen.getAllByText("Platform Admin").length,
+    ).toBeGreaterThan(0);
   });
 
   it("renders the real AdminInventoryPage at /app/admin/inventory (no longer a placeholder)", async () => {

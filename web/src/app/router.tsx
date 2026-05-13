@@ -9,6 +9,8 @@ import OrderDetailPage from "@/features/orders/pages/OrderDetailPage";
 import InventoryPage from "@/features/inventory/pages/InventoryPage";
 import AdminDashboardPage from "@/features/admin-dashboard/pages/AdminDashboardPage";
 import AdminOperationsPage from "@/features/admin-operations/pages/AdminOperationsPage";
+import AdminProductsPage from "@/features/admin-products/pages/AdminProductsPage";
+import AdminProductDetailPage from "@/features/admin-products/pages/AdminProductDetailPage";
 import AdminInventoryPage from "@/features/inventory/pages/AdminInventoryPage";
 import AdminOrdersPage from "@/features/orders/pages/AdminOrdersPage";
 import ProductsPage from "@/features/products/pages/ProductsPage";
@@ -21,7 +23,6 @@ import AdminStoresPage from "@/features/stores/pages/AdminStoresPage";
 import AdminStoreDetailPage from "@/features/stores/pages/AdminStoreDetailPage";
 import {
   AdminCompliancePlaceholder,
-  AdminProductsPlaceholder,
   AdminSettingsPlaceholder,
   AdminShell,
   AppEntry,
@@ -78,7 +79,18 @@ export const appRoutes: RouteObject[] = [
           // and /app/admin/users (global scope); the page reads
           // `useLocation()` to decide which UX hints to flip.
           { path: "users", element: <UsersPage /> },
-          { path: "products", element: <AdminProductsPlaceholder /> },
+          // F2.20.5: real admin products oversight + detail drill-down
+          // replace the placeholder. The placeholder component remains
+          // defined in route-components.tsx (unused) so the deletion
+          // footprint is limited to the router; same convention used
+          // in F2.15.7, F2.18.3, F2.18.4, F2.18.5, F2.19.5, F2.19.6.
+          // Detail route is new in F2.20.0 — it did not exist as a
+          // placeholder pre-F2.20.
+          { path: "products", element: <AdminProductsPage /> },
+          {
+            path: "products/:productId",
+            element: <AdminProductDetailPage />,
+          },
           // F2.18.5: real admin global inventory and orders read-only
           // pages replace the placeholders. Placeholder components
           // remain defined in route-components.tsx (unused) so the
