@@ -140,6 +140,15 @@ vi.mock(
   }),
 );
 
+// F2.20.6: /app/admin/compliance now mounts the real
+// AdminCompliancePage. Same mock convention.
+vi.mock(
+  "@/features/admin-compliance/pages/AdminCompliancePage",
+  () => ({
+    default: () => <div>Admin compliance page</div>,
+  }),
+);
+
 import { appRoutes } from "./router";
 
 function makeUser(overrides: Partial<AuthUser> = {}): AuthUser {
@@ -383,11 +392,8 @@ describe("app route split", () => {
     // F2.20.5: /app/admin/products is no longer a placeholder — it
     // mounts the real AdminProductsPage. The placeholder-blocker
     // matrix intentionally excludes it.
-    [
-      "/app/admin/compliance",
-      "Admin Compliance",
-      "Global compliance feed",
-    ],
+    // F2.20.6: /app/admin/compliance is no longer a placeholder
+    // either — it mounts the real AdminCompliancePage.
     [
       "/app/admin/settings",
       "Admin Settings",
@@ -443,7 +449,9 @@ describe("app route split", () => {
     // F2.20.5: /app/admin/products now renders the real
     //          AdminProductsPage — its "No fake product data" row
     //          is gone with the placeholder.
-    ["/app/admin/compliance", "No fake compliance queue"],
+    // F2.20.6: /app/admin/compliance now renders the real
+    //          AdminCompliancePage — its "No fake compliance queue"
+    //          row is gone with the placeholder.
     ["/app/admin/settings", "No billing simulation"],
   ])("renders admin non-goal %s", async (path, nonGoal) => {
     renderRoute(
@@ -502,6 +510,32 @@ describe("app route split", () => {
     expect(screen.queryByText("Backend Required")).not.toBeInTheDocument();
     expect(
       screen.queryByText("No fake product data"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the real AdminCompliancePage at /app/admin/compliance (no longer a placeholder)", async () => {
+    renderRoute(
+      "/app/admin/compliance",
+      makeUser({ role: "admin", store_id: null }),
+      {
+        currentStoreId: null,
+        hasStoreContext: false,
+        isStoreRequired: false,
+      },
+    );
+    expect(
+      await screen.findByText("Admin compliance page"),
+    ).toBeInTheDocument();
+    // Placeholder copy must NOT be present anywhere.
+    expect(
+      screen.queryByRole("heading", { name: "Admin Compliance" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Global compliance feed"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Backend Required")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("No fake compliance queue"),
     ).not.toBeInTheDocument();
   });
 

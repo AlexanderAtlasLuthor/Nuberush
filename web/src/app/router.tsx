@@ -11,6 +11,7 @@ import AdminDashboardPage from "@/features/admin-dashboard/pages/AdminDashboardP
 import AdminOperationsPage from "@/features/admin-operations/pages/AdminOperationsPage";
 import AdminProductsPage from "@/features/admin-products/pages/AdminProductsPage";
 import AdminProductDetailPage from "@/features/admin-products/pages/AdminProductDetailPage";
+import AdminCompliancePage from "@/features/admin-compliance/pages/AdminCompliancePage";
 import AdminInventoryPage from "@/features/inventory/pages/AdminInventoryPage";
 import AdminOrdersPage from "@/features/orders/pages/AdminOrdersPage";
 import ProductsPage from "@/features/products/pages/ProductsPage";
@@ -22,7 +23,6 @@ import StoreSettingsPage from "@/features/store/pages/StoreSettingsPage";
 import AdminStoresPage from "@/features/stores/pages/AdminStoresPage";
 import AdminStoreDetailPage from "@/features/stores/pages/AdminStoreDetailPage";
 import {
-  AdminCompliancePlaceholder,
   AdminSettingsPlaceholder,
   AdminShell,
   AppEntry,
@@ -104,7 +104,13 @@ export const appRoutes: RouteObject[] = [
           // limited to the router; same convention used in F2.15.7
           // and F2.18.3.
           { path: "audit", element: <AdminAuditPage /> },
-          { path: "compliance", element: <AdminCompliancePlaceholder /> },
+          // F2.20.6: real admin compliance oversight replaces the
+          // placeholder. The placeholder component remains defined
+          // in route-components.tsx (unused) so the deletion
+          // footprint is limited to the router; same convention
+          // used in F2.15.7, F2.18.3, F2.18.4, F2.18.5, F2.19.5,
+          // F2.19.6, F2.20.5.
+          { path: "compliance", element: <AdminCompliancePage /> },
           // F2.19.6: real admin operations alerts page replaces the
           // placeholder. The placeholder component remains defined in
           // route-components.tsx (unused) so the deletion footprint is
