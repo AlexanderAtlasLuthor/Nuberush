@@ -93,14 +93,17 @@ const AuthScreen = () => {
 
   return (
     <div className="fixed inset-0 flex flex-col z-50 safe-top" style={{ backgroundColor: '#0A0A0F' }}>
-      {/* Back button — replaces the prototype's onboarding-wizard step
-          jump with a real router back navigation. */}
+      {/* Back button — navigates to `/` (the public landing page).
+          We don't use `navigate(-1)` because /login is often the
+          first entry on the history stack (deep link, fresh tab,
+          logout-then-login) and the back step would silently do
+          nothing. */}
       <button
         type="button"
-        onClick={() => navigate(-1)}
+        onClick={() => navigate('/')}
         className="absolute top-12 left-5 w-10 h-10 rounded-full flex items-center justify-center"
         style={{ backgroundColor: '#13131A' }}
-        aria-label="Go back"
+        aria-label="Back to landing page"
       >
         <ArrowLeft className="w-5 h-5 text-white" />
       </button>

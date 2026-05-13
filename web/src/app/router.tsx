@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import { createBrowserRouter } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import AuthScreen from "@/pages/AuthScreen";
 import { ProtectedRoute, StoreGate } from "@/auth";
@@ -24,6 +24,7 @@ import {
   AdminProductsPlaceholder,
   AdminSettingsPlaceholder,
   AdminShell,
+  AppEntry,
   AppIndexRedirect,
   LegacyInventoryRedirect,
   LegacyOrderRedirect,
@@ -35,7 +36,7 @@ import {
 export const appRoutes: RouteObject[] = [
   {
     path: "/",
-    element: <Navigate to="/app" replace />,
+    element: <AppEntry />,
   },
   {
     path: "/login",
