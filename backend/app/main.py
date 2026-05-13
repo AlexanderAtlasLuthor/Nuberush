@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes.admin_compliance import router as admin_compliance_router
 from app.api.routes.admin_dashboard import router as admin_dashboard_router
 from app.api.routes.admin_operations import router as admin_operations_router
 from app.api.routes.admin_products import router as admin_products_router
@@ -42,6 +43,7 @@ app.include_router(audit_router)
 app.include_router(admin_dashboard_router)
 app.include_router(admin_operations_router)
 app.include_router(admin_products_router)
+app.include_router(admin_compliance_router)
 
 
 @app.get("/health", tags=["system"])
