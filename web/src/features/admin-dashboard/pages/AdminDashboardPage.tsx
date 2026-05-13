@@ -1,14 +1,13 @@
-// F2.19.5: real Admin Dashboard page over the F2.19.1 backend.
+// F2.19.5 / Phase C: real Admin Dashboard page over the F2.19.1 backend.
 //
-// Mounted at /app/admin. Replaces the F2.17 placeholder with a real,
-// contract-bound READ-ONLY admin overview. Per F2.19.0 §3.1 the
-// dashboard renders backend-computed KPIs only — the frontend never
-// aggregates, never invents a value, never densifies the histogram
-// (the backend already does that).
+// Mounted at /app/admin. Renders a contract-bound READ-ONLY admin
+// overview. Per F2.19.0 §3.1 the dashboard renders backend-computed
+// KPIs only — the frontend never aggregates, never invents a value,
+// never densifies the histogram (the backend already does that).
 //
 // Wiring:
 //   useAdminDashboardQuery()
-//     -> KpiGrid                (6 platform KPI cards)
+//     -> KpiGrid                (6 platform KPI cards, bento layout)
 //     -> OrdersByStatusPanel    (orders.by_status, densified server-side)
 //     -> RecentOrdersPanel      (orders.recent, bounded to 5)
 //     -> RecentActivityPanel    (recent_audit, bounded to 5)
@@ -25,30 +24,28 @@
 //   - No client-side merging, sorting, or aggregation.
 //   - No fake rows, no placeholder data.
 
+import { AlertCircle, ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
-import { AlertCircle } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 
-import { useAdminDashboardQuery } from "../hooks";
 import { KpiGrid } from "../components/KpiGrid";
 import { OrdersByStatusPanel } from "../components/OrdersByStatusPanel";
-import { RecentOrdersPanel } from "../components/RecentOrdersPanel";
 import { RecentActivityPanel } from "../components/RecentActivityPanel";
+import { RecentOrdersPanel } from "../components/RecentOrdersPanel";
+import { useAdminDashboardQuery } from "../hooks";
 
 function PageHeader() {
   return (
     <header>
-      <h1 className="text-xl font-semibold">Admin dashboard</h1>
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Admin · Dashboard
+      </p>
+      <h1 className="mt-1.5 text-2xl font-semibold tracking-tight md:text-[28px]">
+        Platform overview
+      </h1>
+      <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground leading-relaxed">
         Platform-wide operational overview. Read-only — every value is
         computed by the backend from existing data on each request.
       </p>
@@ -58,28 +55,32 @@ function PageHeader() {
 
 function OperationsCta() {
   return (
-    <Card data-testid="admin-dashboard-operations-cta">
-      <CardHeader>
-        <CardTitle className="text-base font-semibold">
-          Operations alerts
-        </CardTitle>
-        <CardDescription>
-          Low stock, aging orders, compliance blockers, inactive stores,
-          and stores with no inventory live on the dedicated operations
-          surface.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Button asChild>
+    <section
+      className="rounded-xl border border-border bg-card p-5 md:p-6"
+      data-testid="admin-dashboard-operations-cta"
+      aria-label="Operations alerts"
+    >
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold">Operations alerts</h2>
+          <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
+            Low stock, aging orders, compliance blockers, inactive stores,
+            and stores with no inventory live on the dedicated operations
+            surface.
+          </p>
+        </div>
+        <Button asChild className="shrink-0">
           <Link
             to="/app/admin/operations"
             data-testid="admin-dashboard-operations-link"
+            className="inline-flex items-center gap-2"
           >
             Open operations
+            <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </Link>
         </Button>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
@@ -132,7 +133,7 @@ export default function AdminDashboardPage() {
 
   return (
     <div
-      className="p-6 md:p-8 space-y-6 max-w-7xl"
+      className="px-4 py-5 md:px-8 md:py-7 max-w-[1320px] mx-auto w-full space-y-5 md:space-y-6"
       data-testid="admin-dashboard-page"
     >
       <PageHeader />
@@ -152,7 +153,7 @@ export default function AdminDashboardPage() {
         <>
           <KpiGrid summary={query.data} />
           <OrdersByStatusPanel byStatus={query.data.orders.by_status} />
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid gap-4 lg:grid-cols-2 md:gap-5">
             <RecentOrdersPanel orders={query.data.orders.recent} />
             <RecentActivityPanel events={query.data.recent_audit} />
           </div>

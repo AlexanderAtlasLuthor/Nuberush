@@ -570,6 +570,176 @@ describe("AdminDashboardPage — operations CTA + drill-downs", () => {
 });
 
 // --------------------------------------------------------------------- //
+// Phase C — bento layout + fake/demo guard
+// --------------------------------------------------------------------- //
+
+describe("AdminDashboardPage — bento layout (Phase C)", () => {
+  it("promotes Open orders to the hero tile and links to /app/admin/orders", () => {
+    vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+
+    renderPage();
+
+    const grid = screen.getByTestId("admin-dashboard-kpi-grid");
+    const heroLink = within(grid)
+      .getByTestId("kpi-orders-open")
+      .closest("a");
+
+    // The hero tile still wraps a real Link with the same drill-down
+    // route. The bento promotion only changes visual weight, not data
+    // or routing.
+    expect(heroLink).toHaveAttribute("href", "/app/admin/orders");
+    expect(within(grid).getByTestId("kpi-orders-open")).toHaveTextContent(
+      "9",
+    );
+  });
+
+  it("orders-by-status total is the sum of the backend densified counts", () => {
+    vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+
+    renderPage();
+
+    const total = screen.getByTestId(
+      "admin-dashboard-orders-by-status-total",
+    );
+    // 3 + 2 + 1 + 1 + 2 + 10 + 1 + 0 = 20 — straight from `makeSummary`.
+    expect(total).toHaveTextContent("20");
+  });
+
+  it("orders-by-status total is 0 when every count is 0 (no fake denominator)", () => {
+    const summary = makeSummary({
+      orders: {
+        open_count: 0,
+        by_status: {
+          pending: 0,
+          accepted: 0,
+          preparing: 0,
+          ready: 0,
+          out_for_delivery: 0,
+          delivered: 0,
+          canceled: 0,
+          returned: 0,
+        },
+        recent: [],
+      },
+    });
+    vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: summary }),
+    );
+
+    renderPage();
+
+    expect(
+      screen.getByTestId("admin-dashboard-orders-by-status-total"),
+    ).toHaveTextContent("0");
+  });
+
+  it("recent orders rows show the real status text inside the status pill", () => {
+    vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+
+    renderPage();
+
+    // The status pill is the same element carrying the existing
+    // `recent-order-status-{id}` test id — the visual upgrade only
+    // wraps the text in a colored span without touching the value.
+    expect(
+      screen.getByTestId(`recent-order-status-${ORDER_ID_1}`),
+    ).toHaveTextContent("pending");
+    expect(
+      screen.getByTestId(`recent-order-status-${ORDER_ID_2}`),
+    ).toHaveTextContent("accepted");
+  });
+});
+
+describe("AdminDashboardPage — fake/demo guard (Phase C)", () => {
+  // Strings the design-system ZIP ships as demo content. None of
+  // these may leak into the production dashboard, ever.
+  const ZIP_DEMO_STRINGS = [
+    "Wynwood",
+    "Brickell",
+    "Doral",
+    "Hookah House",
+    "Vape Co",
+    "Alex Fuenmayor",
+    "alex@",
+    "marketplace",
+    "checkout",
+    "driver",
+    "payments",
+    "signup",
+  ];
+
+  // Fake metric vocabulary that bento dashboards often invent.
+  // The admin dashboard contract only exposes counts; anything
+  // here would be an aggregation we are not allowed to render.
+  const FAKE_METRIC_STRINGS = [
+    "GMV",
+    "AOV",
+    "revenue",
+    "conversion",
+    "sparkline",
+    "trend delta",
+    "+12%",
+    "-8%",
+  ];
+
+  it("does not render any ZIP demo identity strings", () => {
+    vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+
+    renderPage();
+
+    const page = screen.getByTestId("admin-dashboard-page");
+    for (const fake of ZIP_DEMO_STRINGS) {
+      const literal = fake.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      expect(
+        within(page).queryByText(new RegExp(literal, "i")),
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it("does not render any fake-metric vocabulary", () => {
+    vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+
+    renderPage();
+
+    const page = screen.getByTestId("admin-dashboard-page");
+    for (const fake of FAKE_METRIC_STRINGS) {
+      // Escape regex metacharacters in the fake-string literals so
+      // entries like "+12%" / "-8%" are treated as literal text.
+      const literal = fake.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      expect(
+        within(page).queryByText(new RegExp(literal, "i")),
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it("does not render fake trend delta percentage chips on KPI cards", () => {
+    vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+
+    renderPage();
+
+    const grid = screen.getByTestId("admin-dashboard-kpi-grid");
+    // No chip-style "+N%" or "−N%" text inside any KPI card. The wire
+    // contract has no historical deltas, so the bento upgrade cannot
+    // ship trend chips.
+    expect(within(grid).queryByText(/^[+−-]?\d+(\.\d+)?%$/)).not.toBeInTheDocument();
+    expect(within(grid).queryByText(/vs\.? (yesterday|last week|prior)/i))
+      .not.toBeInTheDocument();
+  });
+});
+
+// --------------------------------------------------------------------- //
 // Architecture guards
 // --------------------------------------------------------------------- //
 

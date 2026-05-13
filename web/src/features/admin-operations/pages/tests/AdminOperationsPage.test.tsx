@@ -704,6 +704,272 @@ describe("AdminOperationsPage — no mutation actions", () => {
 });
 
 // --------------------------------------------------------------------- //
+// Phase E — responsive: mobile card stack + fake/demo guard
+// --------------------------------------------------------------------- //
+
+describe("AdminOperationsPage — mobile card stack (Phase E)", () => {
+  it("renders one mobile card per backend alert with the same payload", () => {
+    const alerts: AdminOperationsAlert[] = [
+      makeAlert({
+        id: `low_stock:${ITEM_ID}`,
+        category: "low_stock",
+        severity: "high",
+        store_id: STORE_A,
+        entity_type: "inventory_item",
+        entity_id: ITEM_ID,
+        summary: "Low stock: available 0",
+      }),
+      makeAlert({
+        id: `compliance_blocker:${PRODUCT_ID}`,
+        category: "compliance_blocker",
+        severity: "medium",
+        store_id: null,
+        entity_type: "product",
+        entity_id: PRODUCT_ID,
+        summary: "Compliance: restricted",
+      }),
+    ];
+    vi.mocked(
+      adminOperationsHooks.useAdminOperationsAlertsQuery,
+    ).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeResponse(alerts) }),
+    );
+
+    renderPage();
+
+    const cardList = screen.getByTestId("admin-operations-alerts-cards");
+    const cards = within(cardList).getAllByTestId(
+      "admin-operations-alert-card",
+    );
+    expect(cards).toHaveLength(2);
+
+    const card1 = cards[0];
+    expect(
+      within(card1).getByTestId("admin-operations-card-severity"),
+    ).toHaveTextContent("High");
+    expect(
+      within(card1).getByTestId("admin-operations-card-category"),
+    ).toHaveTextContent("Low stock");
+    expect(
+      within(card1).getByTestId("admin-operations-card-summary"),
+    ).toHaveTextContent("Low stock: available 0");
+    expect(
+      within(card1).getByTestId("admin-operations-card-entity-type"),
+    ).toHaveTextContent("inventory_item");
+
+    const card2 = cards[1];
+    expect(
+      within(card2).getByTestId("admin-operations-card-store-id"),
+    ).toHaveTextContent("Global");
+    expect(
+      within(card2).getByTestId("admin-operations-card-category"),
+    ).toHaveTextContent("Compliance blocker");
+  });
+
+  it("mobile card drill-down links use the same real routes as the desktop table", () => {
+    const alerts: AdminOperationsAlert[] = [
+      makeAlert({
+        id: `inactive_store:${STORE_B}`,
+        category: "inactive_store",
+        entity_type: "store",
+        entity_id: STORE_B,
+        store_id: STORE_B,
+      }),
+      makeAlert({
+        id: `aging_order:${ORDER_ID}:1440`,
+        category: "aging_order",
+        entity_type: "order",
+        entity_id: ORDER_ID,
+        store_id: STORE_A,
+      }),
+    ];
+    vi.mocked(
+      adminOperationsHooks.useAdminOperationsAlertsQuery,
+    ).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeResponse(alerts) }),
+    );
+
+    renderPage();
+
+    const cardList = screen.getByTestId("admin-operations-alerts-cards");
+    const cards = within(cardList).getAllByTestId(
+      "admin-operations-alert-card",
+    );
+    expect(
+      within(cards[0]).getByTestId("admin-operations-card-drilldown"),
+    ).toHaveAttribute("href", `/app/admin/stores/${STORE_B}`);
+    expect(
+      within(cards[1]).getByTestId("admin-operations-card-drilldown"),
+    ).toHaveAttribute("href", "/app/admin/orders");
+  });
+
+  it("does NOT render the mobile card stack while loading", () => {
+    vi.mocked(
+      adminOperationsHooks.useAdminOperationsAlertsQuery,
+    ).mockReturnValue(
+      asQueryResult({ isPending: true, isLoading: true }),
+    );
+
+    renderPage();
+
+    expect(
+      screen.queryByTestId("admin-operations-alerts-cards"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does NOT render the mobile card stack when items is empty", () => {
+    vi.mocked(
+      adminOperationsHooks.useAdminOperationsAlertsQuery,
+    ).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeResponse([]) }),
+    );
+
+    renderPage();
+
+    expect(
+      screen.queryByTestId("admin-operations-alerts-cards"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders mobile severity chips with the real backend severity (with neutral fallback for unknown values)", () => {
+    const alerts: AdminOperationsAlert[] = [
+      makeAlert({ id: "low_stock:a", severity: "high", entity_id: "a" }),
+      makeAlert({ id: "low_stock:b", severity: "medium", entity_id: "b" }),
+      makeAlert({ id: "low_stock:c", severity: "low", entity_id: "c" }),
+    ];
+    vi.mocked(
+      adminOperationsHooks.useAdminOperationsAlertsQuery,
+    ).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeResponse(alerts) }),
+    );
+
+    renderPage();
+
+    const cardList = screen.getByTestId("admin-operations-alerts-cards");
+    const cards = within(cardList).getAllByTestId(
+      "admin-operations-alert-card",
+    );
+    expect(
+      within(cards[0]).getByTestId("admin-operations-card-severity"),
+    ).toHaveTextContent("High");
+    expect(
+      within(cards[1]).getByTestId("admin-operations-card-severity"),
+    ).toHaveTextContent("Medium");
+    expect(
+      within(cards[2]).getByTestId("admin-operations-card-severity"),
+    ).toHaveTextContent("Low");
+  });
+});
+
+describe("AdminOperationsPage — fake/demo guard (Phase E)", () => {
+  const ZIP_DEMO_STRINGS = [
+    "Wynwood",
+    "Brickell",
+    "Doral",
+    "Hookah House",
+    "Vape Co",
+    "Alex Fuenmayor",
+    "alex@",
+    "marketplace",
+    "checkout",
+    "driver",
+    "payments",
+    "signup",
+  ];
+
+  const FAKE_METRIC_STRINGS = [
+    "GMV",
+    "AOV",
+    "revenue",
+    "conversion",
+    "sparkline",
+    "trend delta",
+    "+12%",
+    "-8%",
+  ];
+
+  it("does not render any ZIP demo identity strings", () => {
+    const alerts: AdminOperationsAlert[] = [
+      makeAlert({
+        id: `low_stock:${ITEM_ID}`,
+        category: "low_stock",
+        entity_id: ITEM_ID,
+      }),
+      makeAlert({
+        id: `inactive_store:${STORE_A}`,
+        category: "inactive_store",
+        entity_type: "store",
+        entity_id: STORE_A,
+        store_id: STORE_A,
+      }),
+    ];
+    vi.mocked(
+      adminOperationsHooks.useAdminOperationsAlertsQuery,
+    ).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeResponse(alerts) }),
+    );
+
+    renderPage();
+
+    const page = screen.getByTestId("admin-operations-page");
+    for (const fake of ZIP_DEMO_STRINGS) {
+      const literal = fake.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      expect(
+        within(page).queryByText(new RegExp(literal, "i")),
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it("does not render any fake-metric vocabulary", () => {
+    const alerts: AdminOperationsAlert[] = [
+      makeAlert({
+        id: `low_stock:${ITEM_ID}`,
+        category: "low_stock",
+        entity_id: ITEM_ID,
+      }),
+    ];
+    vi.mocked(
+      adminOperationsHooks.useAdminOperationsAlertsQuery,
+    ).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeResponse(alerts) }),
+    );
+
+    renderPage();
+
+    const page = screen.getByTestId("admin-operations-page");
+    for (const fake of FAKE_METRIC_STRINGS) {
+      const literal = fake.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      expect(
+        within(page).queryByText(new RegExp(literal, "i")),
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it("does not render fake notification badges or count chips next to alerts", () => {
+    const alerts: AdminOperationsAlert[] = [
+      makeAlert({
+        id: `low_stock:${ITEM_ID}`,
+        category: "low_stock",
+        entity_id: ITEM_ID,
+      }),
+    ];
+    vi.mocked(
+      adminOperationsHooks.useAdminOperationsAlertsQuery,
+    ).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeResponse(alerts) }),
+    );
+
+    renderPage();
+
+    // No bare "+N" / "-N" / "Nx" badges in any alert row or card.
+    const page = screen.getByTestId("admin-operations-page");
+    expect(within(page).queryByText(/^\+\d+$/)).not.toBeInTheDocument();
+    expect(within(page).queryByText(/^[−-]\d+$/)).not.toBeInTheDocument();
+    expect(within(page).queryByText(/^\d+x$/i)).not.toBeInTheDocument();
+  });
+});
+
+// --------------------------------------------------------------------- //
 // Architecture guards
 // --------------------------------------------------------------------- //
 
