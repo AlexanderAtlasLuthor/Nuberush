@@ -18,6 +18,8 @@ interface NavItemProps {
   description?: string;
   disabled?: boolean;
   badge?: string;
+  /** Optional. Fired after a successful navigation click — used to close the mobile drawer. */
+  onNavigate?: () => void;
 }
 
 export function NavItem({
@@ -28,6 +30,7 @@ export function NavItem({
   description,
   disabled = false,
   badge,
+  onNavigate,
 }: NavItemProps) {
   return (
     <NavLink
@@ -39,25 +42,44 @@ export function NavItem({
       onClick={(event) => {
         if (disabled) {
           event.preventDefault();
+          return;
         }
+        onNavigate?.();
       }}
       className={({ isActive }) =>
         cn(
-          "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+          "group relative w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-[13px] font-medium transition-colors",
           disabled && "pointer-events-none opacity-50",
           isActive
-            ? "bg-primary text-primary-foreground"
-            : "text-muted-foreground hover:text-foreground hover:bg-secondary",
+            ? "bg-primary/15 text-primary"
+            : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
         )
       }
     >
-      <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
-      <span className="truncate">{label}</span>
-      {badge ? (
-        <span className="ml-auto rounded bg-secondary px-1.5 py-0.5 text-xs">
-          {badge}
-        </span>
-      ) : null}
+      {({ isActive }) => (
+        <>
+          <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <span className="truncate flex-1">{label}</span>
+          {badge ? (
+            <span
+              className={cn(
+                "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full px-1 text-[10px] font-medium tabular-nums",
+                isActive
+                  ? "bg-primary/20 text-primary"
+                  : "bg-secondary text-foreground",
+              )}
+            >
+              {badge}
+            </span>
+          ) : null}
+          {isActive ? (
+            <span
+              className="w-1 h-4 rounded-full bg-primary shrink-0"
+              aria-hidden="true"
+            />
+          ) : null}
+        </>
+      )}
     </NavLink>
   );
 }

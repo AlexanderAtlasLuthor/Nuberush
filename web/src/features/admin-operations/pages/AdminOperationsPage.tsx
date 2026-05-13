@@ -109,8 +109,13 @@ function PaginationBar({
 function PageHeader() {
   return (
     <header>
-      <h1 className="text-xl font-semibold">Operations alerts</h1>
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Admin · Operations
+      </p>
+      <h1 className="mt-1.5 text-2xl font-semibold tracking-tight md:text-[28px]">
+        Operations alerts
+      </h1>
+      <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground leading-relaxed">
         Computed read-only operational signals: low stock, aging
         orders, compliance blockers, inactive stores, and stores
         with no inventory. Every alert is derived from existing data

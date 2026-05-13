@@ -221,7 +221,14 @@ function expectSidebarLink(label: string, href: string) {
 }
 
 function expectNoSidebarLinks(paths: RegExp) {
-  for (const link of within(getSidebar()).queryAllByRole("link")) {
+  const sidebar = getSidebar();
+  // F2 Phase B: the workspace switcher is intentional cross-surface
+  // navigation declared by AdminLayout/StoreLayout. The "no
+  // cross-pollination" assertion only applies to the Main/Platform
+  // sidebar nav, not to the switcher row.
+  const switcher = within(sidebar).queryByTestId("workspace-switcher");
+  for (const link of within(sidebar).queryAllByRole("link")) {
+    if (switcher?.contains(link)) continue;
     expect(link).not.toHaveAttribute("href", expect.stringMatching(paths));
   }
 }

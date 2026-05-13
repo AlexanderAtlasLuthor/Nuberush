@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactNode } from "react";
 
 import { AdminLayout } from "./AdminLayout";
+import { AppShell } from "./AppShell";
 import { DashboardLayout } from "./DashboardLayout";
 import { StoreLayout } from "./StoreLayout";
 import { ADMIN_NAV_ITEMS, NAV_ITEMS, STORE_NAV_ITEMS } from "./navigation";
@@ -105,8 +106,13 @@ function expectNavLinks(
 
 function expectNoNavLinks(paths: RegExp) {
   const sidebar = getSidebar();
+  // The workspace switcher is intentional cross-surface navigation — Admin
+  // layouts can legitimately link to /app/store from inside their sidebar.
+  // The "no cross-pollination" rule only applies to the Main/Platform nav.
+  const switcher = within(sidebar).queryByTestId("workspace-switcher");
 
   for (const link of within(sidebar).queryAllByRole("link")) {
+    if (switcher?.contains(link)) continue;
     expect(link).not.toHaveAttribute("href", expect.stringMatching(paths));
   }
 }
@@ -439,10 +445,420 @@ describe("AppTopbar", () => {
       ),
     );
 
-    expect(screen.getByText("Platform Admin")).toBeInTheDocument();
+    // The modern topbar exposes the surface label twice: once as the mobile
+    // compact title and once as the leading breadcrumb crumb on desktop.
+    // CSS visibility classes don't influence the accessibility tree under
+    // JSDOM, so we accept either.
+    expect(screen.getAllByText("Platform Admin").length).toBeGreaterThan(0);
     expect(screen.getByTestId("store-context-indicator")).toHaveTextContent(
       "Global scope",
     );
+  });
+
+  it("derives the breadcrumb tail from the active route in a real shell", () => {
+    setAuth({ user: makeUser(), isAuthenticated: true });
+    setStore({
+      currentStoreId: "22222222-2222-2222-2222-222222222222",
+      hasStoreContext: true,
+      isStoreRequired: true,
+    });
+
+    render(
+      withRouter(
+        <StoreLayout>
+          <div>products-slot</div>
+        </StoreLayout>,
+        "/app/store/products/sku-1",
+      ),
+    );
+
+    const breadcrumb = screen.getByRole("navigation", { name: /breadcrumb/i });
+    expect(within(breadcrumb).getByText("Store Operations")).toBeInTheDocument();
+    expect(within(breadcrumb).getByText("Products")).toBeInTheDocument();
+  });
+
+  it("keeps search and notifications as inert placeholders — no fake endpoints", () => {
+    setAuth({ user: makeUser(), isAuthenticated: true });
+    setStore({
+      currentStoreId: "22222222-2222-2222-2222-222222222222",
+      hasStoreContext: true,
+      isStoreRequired: true,
+    });
+
+    render(
+      withRouter(
+        <StoreLayout>
+          <div>slot</div>
+        </StoreLayout>,
+      ),
+    );
+
+    expect(
+      screen.getByRole("button", { name: /^notifications$/i }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^search$/i })).toBeDisabled();
+  });
+});
+
+describe("mobile sidebar drawer", () => {
+  beforeEach(() => {
+    setAuth({ user: makeUser(), isAuthenticated: true });
+    setStore({
+      currentStoreId: "22222222-2222-2222-2222-222222222222",
+      hasStoreContext: true,
+      isStoreRequired: true,
+    });
+  });
+
+  it("renders the hamburger trigger from the topbar", () => {
+    render(
+      withRouter(
+        <StoreLayout>
+          <div>main-content-slot</div>
+        </StoreLayout>,
+      ),
+    );
+
+    expect(
+      screen.getByRole("button", { name: /open navigation menu/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("mobile-sidebar")).not.toBeInTheDocument();
+  });
+
+  it("opens the drawer when the hamburger is clicked and surfaces real routes", () => {
+    render(
+      withRouter(
+        <StoreLayout>
+          <div>main-content-slot</div>
+        </StoreLayout>,
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /open navigation menu/i }),
+    );
+
+    const drawer = screen.getByTestId("mobile-sidebar");
+    expect(drawer).toBeInTheDocument();
+
+    // Real hrefs are present inside the drawer — no fake nav from the ZIP.
+    for (const item of STORE_NAV_ITEMS) {
+      expect(
+        within(drawer).getByRole("link", { name: item.label }),
+      ).toHaveAttribute("href", item.href);
+    }
+    // No drift from the ZIP demo data.
+    expect(within(drawer).queryByText(/wynwood/i)).not.toBeInTheDocument();
+    expect(within(drawer).queryByText(/marketplace/i)).not.toBeInTheDocument();
+    expect(within(drawer).queryByText(/checkout/i)).not.toBeInTheDocument();
+  });
+
+  it("closes the drawer when a nav link is activated", () => {
+    render(
+      withRouter(
+        <StoreLayout>
+          <div>main-content-slot</div>
+        </StoreLayout>,
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /open navigation menu/i }),
+    );
+    const drawer = screen.getByTestId("mobile-sidebar");
+    fireEvent.click(within(drawer).getByRole("link", { name: "Products" }));
+
+    expect(screen.queryByTestId("mobile-sidebar")).not.toBeInTheDocument();
+  });
+
+  it("closes the drawer when the backdrop is tapped", () => {
+    render(
+      withRouter(
+        <StoreLayout>
+          <div>main-content-slot</div>
+        </StoreLayout>,
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /open navigation menu/i }),
+    );
+    expect(screen.getByTestId("mobile-sidebar")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /close navigation menu/i }),
+    );
+    expect(screen.queryByTestId("mobile-sidebar")).not.toBeInTheDocument();
+  });
+});
+
+describe("AppShell composition", () => {
+  it("renders sidebar, topbar and main content regardless of layout wrapper", () => {
+    setAuth({ user: makeUser(), isAuthenticated: true });
+
+    render(
+      withRouter(
+        <AppShell
+          surfaceLabel="Test Surface"
+          scopeLabel="Test scope"
+          navItems={STORE_NAV_ITEMS}
+        >
+          <div>raw-shell-slot</div>
+        </AppShell>,
+      ),
+    );
+
+    expect(getSidebar()).toBeInTheDocument();
+    // The topbar exposes itself through its aria-label, regardless of whether
+    // the host page nests <header> inside a sectioning element.
+    expect(screen.getByLabelText("Topbar")).toBeInTheDocument();
+    expect(
+      screen.getByRole("main", { name: /main content/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("raw-shell-slot")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-surface-scope")).toHaveTextContent(
+      "Test Surface",
+    );
+  });
+});
+
+describe("workspace switcher", () => {
+  const FAKE_ZIP_STRINGS = [
+    "Wynwood",
+    "Brickell",
+    "Doral",
+    "Hookah House",
+    "Vape Co",
+    "Fuenmayor",
+    "alex@",
+    "marketplace",
+    "checkout",
+    "driver",
+    "payments",
+    "signup",
+  ];
+
+  beforeEach(() => {
+    setAuth({
+      user: makeUser({ role: "admin", store_id: null }),
+      isAuthenticated: true,
+    });
+    setStore({
+      currentStoreId: "22222222-2222-2222-2222-222222222222",
+      hasStoreContext: true,
+      isStoreRequired: false,
+    });
+  });
+
+  it("AdminLayout exposes both Admin and Store workspaces with Admin marked active", () => {
+    render(
+      withRouter(
+        <AdminLayout>
+          <div>admin-slot</div>
+        </AdminLayout>,
+        "/app/admin",
+      ),
+    );
+
+    const switcher = within(getSidebar()).getByTestId("workspace-switcher");
+    const admin = within(switcher).getByRole("link", { name: "Admin" });
+    const store = within(switcher).getByRole("link", { name: "Store" });
+
+    expect(admin).toHaveAttribute("href", "/app/admin");
+    expect(store).toHaveAttribute("href", "/app/store");
+    expect(admin).toHaveAttribute("aria-current", "page");
+    expect(store).not.toHaveAttribute("aria-current", "page");
+  });
+
+  it("AdminLayout switcher activation does not depend on the current pathname", () => {
+    // The workspace switcher reflects the *layout* the user is inside, not
+    // the route segment. Inside AdminLayout the Admin workspace must stay
+    // active even if the test mounts the layout on a sub-route.
+    render(
+      withRouter(
+        <AdminLayout>
+          <div>nested-slot</div>
+        </AdminLayout>,
+        "/app/admin/stores/store-1",
+      ),
+    );
+
+    const switcher = within(getSidebar()).getByTestId("workspace-switcher");
+    expect(
+      within(switcher).getByRole("link", { name: "Admin" }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(
+      within(switcher).getByRole("link", { name: "Store" }),
+    ).not.toHaveAttribute("aria-current", "page");
+  });
+
+  it("StoreLayout exposes only the Store workspace — never Admin", () => {
+    setAuth({
+      user: makeUser({ role: "manager" }),
+      isAuthenticated: true,
+    });
+    setStore({
+      currentStoreId: "22222222-2222-2222-2222-222222222222",
+      hasStoreContext: true,
+      isStoreRequired: true,
+    });
+
+    render(
+      withRouter(
+        <StoreLayout>
+          <div>store-slot</div>
+        </StoreLayout>,
+        "/app/store",
+      ),
+    );
+
+    const sidebar = getSidebar();
+    const switcher = within(sidebar).getByTestId("workspace-switcher");
+    const store = within(switcher).getByRole("link", { name: "Store" });
+
+    expect(store).toHaveAttribute("href", "/app/store");
+    expect(store).toHaveAttribute("aria-current", "page");
+
+    // No Admin entry inside the switcher, in any form.
+    expect(
+      within(switcher).queryByRole("link", { name: "Admin" }),
+    ).not.toBeInTheDocument();
+    expect(within(switcher).queryByText(/admin/i)).not.toBeInTheDocument();
+    expect(within(switcher).queryByText(/platform/i)).not.toBeInTheDocument();
+    expect(within(switcher).queryByText(/global/i)).not.toBeInTheDocument();
+
+    // No /app/admin link anywhere inside the Store sidebar — switcher or otherwise.
+    for (const link of within(sidebar).queryAllByRole("link")) {
+      expect(link).not.toHaveAttribute("href", expect.stringMatching(/^\/app\/admin/));
+    }
+  });
+
+  it("Admin mobile drawer exposes both workspaces", () => {
+    render(
+      withRouter(
+        <AdminLayout>
+          <div>slot</div>
+        </AdminLayout>,
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /open navigation menu/i }),
+    );
+    const drawer = screen.getByTestId("mobile-sidebar");
+    const switcher = within(drawer).getByTestId("workspace-switcher");
+
+    expect(
+      within(switcher).getByRole("link", { name: "Admin" }),
+    ).toHaveAttribute("href", "/app/admin");
+    expect(
+      within(switcher).getByRole("link", { name: "Store" }),
+    ).toHaveAttribute("href", "/app/store");
+  });
+
+  it("Store mobile drawer never exposes the Admin workspace", () => {
+    setAuth({
+      user: makeUser({ role: "manager" }),
+      isAuthenticated: true,
+    });
+    setStore({
+      currentStoreId: "22222222-2222-2222-2222-222222222222",
+      hasStoreContext: true,
+      isStoreRequired: true,
+    });
+
+    render(
+      withRouter(
+        <StoreLayout>
+          <div>slot</div>
+        </StoreLayout>,
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /open navigation menu/i }),
+    );
+    const drawer = screen.getByTestId("mobile-sidebar");
+    const switcher = within(drawer).getByTestId("workspace-switcher");
+
+    expect(
+      within(switcher).queryByRole("link", { name: "Admin" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(switcher).getByRole("link", { name: "Store" }),
+    ).toHaveAttribute("href", "/app/store");
+
+    // Also defensively assert no /app/admin link anywhere in the drawer.
+    for (const link of within(drawer).queryAllByRole("link")) {
+      expect(link).not.toHaveAttribute(
+        "href",
+        expect.stringMatching(/^\/app\/admin/),
+      );
+    }
+  });
+
+  it("closes the mobile drawer when a workspace link is activated", () => {
+    render(
+      withRouter(
+        <AdminLayout>
+          <div>slot</div>
+        </AdminLayout>,
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /open navigation menu/i }),
+    );
+    const drawer = screen.getByTestId("mobile-sidebar");
+    fireEvent.click(within(drawer).getByRole("link", { name: "Store" }));
+
+    expect(screen.queryByTestId("mobile-sidebar")).not.toBeInTheDocument();
+  });
+
+  it("never surfaces fake / demo workspace identity from the design system ZIP", () => {
+    render(
+      withRouter(
+        <AdminLayout>
+          <div>slot</div>
+        </AdminLayout>,
+      ),
+    );
+    const switcher = within(getSidebar()).getByTestId("workspace-switcher");
+
+    for (const fake of FAKE_ZIP_STRINGS) {
+      expect(
+        within(switcher).queryByText(new RegExp(fake, "i")),
+      ).not.toBeInTheDocument();
+    }
+    // No fake numeric badges/counts inside the switcher.
+    expect(within(switcher).queryByText(/^\d+$/)).not.toBeInTheDocument();
+  });
+
+  it("StoreLayout sidebar contains no fake/demo workspace strings", () => {
+    setAuth({
+      user: makeUser({ role: "manager" }),
+      isAuthenticated: true,
+    });
+    setStore({
+      currentStoreId: "22222222-2222-2222-2222-222222222222",
+      hasStoreContext: true,
+      isStoreRequired: true,
+    });
+
+    render(
+      withRouter(
+        <StoreLayout>
+          <div>slot</div>
+        </StoreLayout>,
+      ),
+    );
+    const sidebar = getSidebar();
+
+    for (const fake of FAKE_ZIP_STRINGS) {
+      expect(
+        within(sidebar).queryByText(new RegExp(fake, "i")),
+      ).not.toBeInTheDocument();
+    }
   });
 });
 
