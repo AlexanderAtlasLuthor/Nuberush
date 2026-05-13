@@ -36,11 +36,12 @@ const AuthScreen = () => {
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // ProtectedRoute forwards the original location in router state. If
-  // present, return the user there post-login; otherwise default to
-  // the app shell index.
+  // ProtectedRoute forwards the original location in router state.
+  // Used by the redirect logic below only when the saved path is
+  // compatible with the authenticated user's role; otherwise the user
+  // is sent to /app so AppIndexRedirect can route by role.
   const fromState = location.state as { from?: { pathname?: string } } | null;
-  const redirectTo = fromState?.from?.pathname ?? '/app';
+  const fromPath = fromState?.from?.pathname;
 
   const handleSubmit = async () => {
     if (mode === 'signup') {
@@ -56,8 +57,27 @@ const AuthScreen = () => {
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      await login({ email, password });
-      navigate(redirectTo, { replace: true });
+      const me = await login({ email, password });
+      // Honor `from` only when it's compatible with the user's role
+      // area. Without this guard a stale `from` (e.g. /app/store
+      // saved when an owner was kicked to /login) would override the
+      // role-based redirect for a subsequent admin login, dropping
+      // the admin into the store shell. Fallback `/app` defers to
+      // AppIndexRedirect, which picks /app/admin vs /app/store by
+      // role.
+      const isAdminCompat = fromPath?.startsWith('/app/admin') ?? false;
+      const isStoreCompat = fromPath?.startsWith('/app/store') ?? false;
+      const isStoreUserRole =
+        me.role === 'owner' ||
+        me.role === 'manager' ||
+        me.role === 'staff';
+      const target =
+        me.role === 'admin' && isAdminCompat
+          ? fromPath!
+          : isStoreUserRole && isStoreCompat
+            ? fromPath!
+            : '/app';
+      navigate(target, { replace: true });
     } catch (err) {
       setErrorMsg(getApiErrorMessage(err));
     } finally {
