@@ -123,6 +123,7 @@ function makeSummary(
       ],
     },
     compliance: { blocked_count: 2 },
+    products: { pending_approvals_count: 3 },
     recent_audit: [
       {
         id: AUDIT_ID_1,
@@ -253,7 +254,7 @@ describe("AdminDashboardPage — error state", () => {
 // --------------------------------------------------------------------- //
 
 describe("AdminDashboardPage — KPI cards (backend values verbatim)", () => {
-  it("renders all six KPI values from backend summary", () => {
+  it("renders all seven KPI values from backend summary", () => {
     vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
       asQueryResult({ isSuccess: true, data: makeSummary() }),
     );
@@ -279,6 +280,9 @@ describe("AdminDashboardPage — KPI cards (backend values verbatim)", () => {
     expect(
       within(grid).getByTestId("kpi-compliance-blocked"),
     ).toHaveTextContent("2");
+    expect(
+      within(grid).getByTestId("kpi-products-pending-approvals"),
+    ).toHaveTextContent("3");
   });
 
   it("renders zeros as `0` (not hidden, not empty)", () => {
@@ -301,6 +305,7 @@ describe("AdminDashboardPage — KPI cards (backend values verbatim)", () => {
         recent: [],
       },
       compliance: { blocked_count: 0 },
+      products: { pending_approvals_count: 0 },
       recent_audit: [],
     });
     vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
@@ -318,6 +323,9 @@ describe("AdminDashboardPage — KPI cards (backend values verbatim)", () => {
     );
     expect(
       within(grid).getByTestId("kpi-compliance-blocked"),
+    ).toHaveTextContent("0");
+    expect(
+      within(grid).getByTestId("kpi-products-pending-approvals"),
     ).toHaveTextContent("0");
     // No "—" or "N/A" or any fake substitute.
     expect(within(grid).queryByText("—")).not.toBeInTheDocument();
@@ -350,6 +358,9 @@ describe("AdminDashboardPage — KPI cards (backend values verbatim)", () => {
     const complianceBlocked = within(grid)
       .getByTestId("kpi-compliance-blocked")
       .closest("a");
+    const pendingApprovals = within(grid)
+      .getByTestId("kpi-products-pending-approvals")
+      .closest("a");
 
     expect(storesTotal).toHaveAttribute("href", "/app/admin/stores");
     expect(storesActive).toHaveAttribute("href", "/app/admin/stores");
@@ -360,6 +371,12 @@ describe("AdminDashboardPage — KPI cards (backend values verbatim)", () => {
     );
     expect(ordersOpen).toHaveAttribute("href", "/app/admin/orders");
     expect(complianceBlocked).toHaveAttribute("href", "/app/admin/audit");
+    // The pending-approvals tile deep-links into the admin products
+    // list with the approval filter pre-applied.
+    expect(pendingApprovals).toHaveAttribute(
+      "href",
+      "/app/admin/products?approval_status=pending",
+    );
   });
 });
 

@@ -105,6 +105,18 @@ class AdminDashboardComplianceSummary(BaseModel):
     blocked_count: int = Field(ge=0)
 
 
+class AdminDashboardProductsSummary(BaseModel):
+    """Catalog-curation KPI: store-proposed products awaiting review.
+
+    Independent from compliance: a row counts here as long as
+    `approval_status = 'pending'`, regardless of its compliance state.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pending_approvals_count: int = Field(ge=0)
+
+
 class AdminDashboardSummary(BaseModel):
     """Top-level response for `GET /admin/dashboard`.
 
@@ -121,4 +133,5 @@ class AdminDashboardSummary(BaseModel):
     inventory: AdminDashboardInventorySummary
     orders: AdminDashboardOrdersSummary
     compliance: AdminDashboardComplianceSummary
+    products: AdminDashboardProductsSummary
     recent_audit: list[AuditEventRead]

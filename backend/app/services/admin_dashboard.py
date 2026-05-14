@@ -57,12 +57,14 @@ from app.db.models import InventoryItem
 from app.db.models import Order
 from app.db.models import OrderStatus
 from app.db.models import Product
+from app.db.models import ProductApprovalStatus
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
 from app.schemas.admin_dashboard import AdminDashboardComplianceSummary
 from app.schemas.admin_dashboard import AdminDashboardInventorySummary
 from app.schemas.admin_dashboard import AdminDashboardOrdersSummary
+from app.schemas.admin_dashboard import AdminDashboardProductsSummary
 from app.schemas.admin_dashboard import AdminDashboardStoresSummary
 from app.schemas.admin_dashboard import AdminDashboardSummary
 from app.schemas.admin_dashboard import AdminDashboardUsersSummary
@@ -212,6 +214,24 @@ def _orders_summary(db: Session) -> AdminDashboardOrdersSummary:
     )
 
 
+def _products_summary(db: Session) -> AdminDashboardProductsSummary:
+    """Count of store-proposed products awaiting admin review.
+
+    A product counts here when `approval_status = 'pending'`. Rejected
+    rows are NOT included (they have already been reviewed). This KPI
+    is orthogonal to the compliance one: a pending product can have
+    any compliance state — admin sets the final compliance at approval
+    time.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(Product)
+        .where(Product.approval_status == ProductApprovalStatus.pending)
+    )
+    count = int(db.scalar(stmt) or 0)
+    return AdminDashboardProductsSummary(pending_approvals_count=count)
+
+
 def _compliance_summary(db: Session) -> AdminDashboardComplianceSummary:
     """Count of products blocked from sale.
 
@@ -261,6 +281,7 @@ def get_admin_dashboard_summary(
     inventory = _inventory_summary(db)
     orders = _orders_summary(db)
     compliance = _compliance_summary(db)
+    products = _products_summary(db)
 
     audit_response = list_admin_audit(
         db,
@@ -275,5 +296,6 @@ def get_admin_dashboard_summary(
         inventory=inventory,
         orders=orders,
         compliance=compliance,
+        products=products,
         recent_audit=audit_response.items,
     )

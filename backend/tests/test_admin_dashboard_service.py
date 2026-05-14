@@ -49,6 +49,7 @@ from app.db.models import Order
 from app.db.models import OrderAuditLog
 from app.db.models import OrderStatus
 from app.db.models import Product
+from app.db.models import ProductApprovalStatus
 from app.db.models import ProductVariant
 from app.db.models import Store
 from app.db.models import User
@@ -120,13 +121,21 @@ def make_product(db_session: Session) -> Callable[..., Product]:
         compliance_status: ComplianceStatus = ComplianceStatus.allowed,
         allowed_for_sale: bool = True,
         is_active: bool = True,
+        approval_status: ProductApprovalStatus = ProductApprovalStatus.approved,
     ) -> Product:
+        rejection_reason: str | None = (
+            "Fixture-rejected"
+            if approval_status == ProductApprovalStatus.rejected
+            else None
+        )
         product = Product(
             name=f"P-{uuid.uuid4().hex[:6]}",
             category="vape",
             compliance_status=compliance_status,
             allowed_for_sale=allowed_for_sale,
             is_active=is_active,
+            approval_status=approval_status,
+            rejection_reason=rejection_reason,
         )
         db_session.add(product)
         db_session.commit()
@@ -272,6 +281,7 @@ class TestRBAC:
         assert all(v == 0 for v in summary.orders.by_status.values())
         assert summary.orders.recent == []
         assert summary.compliance.blocked_count == 0
+        assert summary.products.pending_approvals_count == 0
         assert summary.recent_audit == []
 
     @pytest.mark.parametrize(
@@ -604,6 +614,62 @@ class TestComplianceBlockedCount:
         )
         summary = svc.get_admin_dashboard_summary(db_session, actor=admin)
         assert summary.compliance.blocked_count == 0
+
+
+# --------------------------------------------------------------------- #
+# Products: pending approvals count
+# --------------------------------------------------------------------- #
+
+
+class TestProductsPendingApprovalsCount:
+    def test_counts_only_pending_rows(
+        self, db_session: Session, make_admin, make_product
+    ):
+        admin = make_admin()
+        make_product(approval_status=ProductApprovalStatus.pending)
+        make_product(approval_status=ProductApprovalStatus.pending)
+        make_product(approval_status=ProductApprovalStatus.approved)
+        make_product(approval_status=ProductApprovalStatus.rejected)
+
+        summary = svc.get_admin_dashboard_summary(db_session, actor=admin)
+        assert summary.products.pending_approvals_count == 2
+
+    def test_zero_when_no_pending_rows_exist(
+        self, db_session: Session, make_admin, make_product
+    ):
+        admin = make_admin()
+        # Only approved + rejected exist — neither is "work to do".
+        make_product(approval_status=ProductApprovalStatus.approved)
+        make_product(approval_status=ProductApprovalStatus.rejected)
+
+        summary = svc.get_admin_dashboard_summary(db_session, actor=admin)
+        assert summary.products.pending_approvals_count == 0
+
+    def test_independent_from_compliance_state(
+        self, db_session: Session, make_admin, make_product
+    ):
+        """Pending count ignores compliance fields by design.
+
+        A store-proposed product always lands `compliance_status=allowed`
+        and `allowed_for_sale=true` (service-forced), but the predicate
+        must not depend on those — only `approval_status`.
+        """
+        admin = make_admin()
+        make_product(
+            approval_status=ProductApprovalStatus.pending,
+            compliance_status=ComplianceStatus.allowed,
+            allowed_for_sale=True,
+        )
+        # A non-pending product with the same compliance state should
+        # NOT be counted.
+        make_product(
+            approval_status=ProductApprovalStatus.approved,
+            compliance_status=ComplianceStatus.allowed,
+            allowed_for_sale=True,
+        )
+
+        summary = svc.get_admin_dashboard_summary(db_session, actor=admin)
+        assert summary.products.pending_approvals_count == 1
 
 
 # --------------------------------------------------------------------- #

@@ -31,12 +31,16 @@
 
 import { useCallback, useState } from "react";
 import { Plus, ShoppingBag } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { ProductFormModal } from "@/features/products/components/ProductFormModal";
 
 import { useAdminProductsQuery } from "../hooks";
-import type { AdminProductsFilters as AdminProductsFiltersValue } from "../types";
+import type {
+  AdminProductsFilters as AdminProductsFiltersValue,
+  ProductApprovalStatus,
+} from "../types";
 import { AdminProductsFilters } from "../components/AdminProductsFilters";
 import { AdminProductsTable } from "../components/AdminProductsTable";
 import { EmptyState } from "@/components/common/empty-state";
@@ -50,6 +54,18 @@ const DEFAULT_FILTERS: AdminProductsFiltersValue = {
   limit: DEFAULT_LIMIT,
   offset: 0,
 };
+
+const VALID_APPROVAL_STATUSES: ReadonlySet<ProductApprovalStatus> =
+  new Set(["pending", "approved", "rejected"]);
+
+function parseApprovalStatusParam(
+  raw: string | null,
+): ProductApprovalStatus | undefined {
+  if (raw === null) return undefined;
+  return VALID_APPROVAL_STATUSES.has(raw as ProductApprovalStatus)
+    ? (raw as ProductApprovalStatus)
+    : undefined;
+}
 
 interface PaginationBarProps {
   limit: number;
@@ -150,8 +166,22 @@ function PageHeader({
 }
 
 export default function AdminProductsPage() {
-  const [filters, setFilters] =
-    useState<AdminProductsFiltersValue>(DEFAULT_FILTERS);
+  // Seed filters from the URL once on mount. Deep-links such as the
+  // dashboard's "Pending approvals" KPI use
+  // `/app/admin/products?approval_status=pending` to land here pre-filtered.
+  // We do NOT keep the filter state synchronized to the URL afterwards —
+  // the filter UI is controlled in-page and the URL is only a navigation
+  // entrypoint. Unknown / malformed values fall back to the defaults so
+  // a stray `?approval_status=foo` never produces an invalid filter.
+  const [searchParams] = useSearchParams();
+  const [filters, setFilters] = useState<AdminProductsFiltersValue>(() => {
+    const approval = parseApprovalStatusParam(
+      searchParams.get("approval_status"),
+    );
+    return approval === undefined
+      ? DEFAULT_FILTERS
+      : { ...DEFAULT_FILTERS, approval_status: approval };
+  });
   const [openCreate, setOpenCreate] = useState(false);
 
   const query = useAdminProductsQuery(filters);
