@@ -30,6 +30,8 @@ import { Link } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
+import { AdminEarningsWidget } from "@/features/admin-earnings/components/AdminEarningsWidget";
+
 import { KpiGrid } from "../components/KpiGrid";
 import { OrdersByStatusPanel } from "../components/OrdersByStatusPanel";
 import { RecentActivityPanel } from "../components/RecentActivityPanel";
@@ -152,6 +154,7 @@ export default function AdminDashboardPage() {
       {query.isSuccess && query.data ? (
         <>
           <KpiGrid summary={query.data} />
+          <AdminEarningsWidget />
           <OrdersByStatusPanel byStatus={query.data.orders.by_status} />
           <div className="grid gap-4 lg:grid-cols-2 md:gap-5">
             <RecentOrdersPanel orders={query.data.orders.recent} />

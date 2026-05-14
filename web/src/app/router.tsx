@@ -8,6 +8,8 @@ import CreateOrderPage from "@/features/orders/pages/CreateOrderPage";
 import OrderDetailPage from "@/features/orders/pages/OrderDetailPage";
 import InventoryPage from "@/features/inventory/pages/InventoryPage";
 import AdminDashboardPage from "@/features/admin-dashboard/pages/AdminDashboardPage";
+import AdminEarningsPage from "@/features/admin-earnings/pages/AdminEarningsPage";
+import StoreEarningsPage from "@/features/store-earnings/pages/StoreEarningsPage";
 import AdminOperationsPage from "@/features/admin-operations/pages/AdminOperationsPage";
 import AdminProductsPage from "@/features/admin-products/pages/AdminProductsPage";
 import AdminProductDetailPage from "@/features/admin-products/pages/AdminProductDetailPage";
@@ -131,6 +133,7 @@ export const appRoutes: RouteObject[] = [
           // convention used in F2.15.7, F2.18.3 and F2.18.4.
           { path: "inventory", element: <AdminInventoryPage /> },
           { path: "orders", element: <AdminOrdersPage /> },
+          { path: "earnings", element: <AdminEarningsPage /> },
           // F2.18.4: real admin global audit feed replaces the
           // placeholder. The placeholder component remains defined in
           // route-components.tsx (unused) so the deletion footprint is
@@ -177,6 +180,7 @@ export const appRoutes: RouteObject[] = [
               { path: "orders", element: <OrdersPage /> },
               { path: "orders/new", element: <CreateOrderPage /> },
               { path: "orders/:orderId", element: <OrderDetailPage /> },
+              { path: "earnings", element: <StoreEarningsPage /> },
               { path: "users", element: <UsersPage /> },
               { path: "audit", element: <AuditPage /> },
               { path: "settings", element: <StoreSettingsPage /> },
