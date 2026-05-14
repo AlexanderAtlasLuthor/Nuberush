@@ -58,13 +58,12 @@ vi.mock("@/features/dashboard", () => ({
   useStoreAlertsQuery: vi.fn(),
 }));
 
-// Stub the earnings widget. Two reasons:
-//   1. It calls useQuery internally and these tests don't wrap renders
-//      in a QueryClientProvider.
-//   2. Its real copy contains "Revenue" / "revenue", which collides
-//      with the FORBIDDEN_RUNTIME_COPY guard below. The widget's
-//      revenue framing is intentional, so the guard is intentionally
-//      not exercised against it here.
+// Replace the earnings widget with a tiny placeholder ONLY in these
+// dashboard tests. The widget calls useQuery internally and these
+// existing tests don't wrap renders in a QueryClientProvider, so
+// without this replacement they would crash on mount. The widget's
+// real behaviour is covered by its own dedicated test file in
+// features/store-earnings.
 vi.mock(
   "@/features/store-earnings/components/StoreEarningsWidget",
   () => ({
@@ -104,8 +103,9 @@ const FORBIDDEN_RUNTIME_COPY = [
   "F2.13",
   "coming soon",
   "backend integration pending",
-  // Financial / KPI claims
-  "revenue",
+  // Financial / KPI claims. "revenue" used to live here but the
+  // Earnings widget intentionally renders revenue copy now, so the
+  // word is no longer forbidden runtime-wide.
   "profit",
   "fake kpi",
   "simulated kpi card",

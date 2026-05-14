@@ -36,11 +36,12 @@ vi.mock("../../hooks", () => ({
   adminDashboardKeys: { all: ["admin-dashboard"] as const },
 }));
 
-// Stub the earnings widget — it calls useQuery internally and the
-// existing dashboard tests don't wrap renders in a QueryClientProvider.
-// The widget itself is not yet covered by a dedicated test suite (the
-// earnings feature ships without one); this stub keeps the rest of
-// the dashboard test surface from breaking on its introduction.
+// Replace the earnings widget with a tiny placeholder ONLY in these
+// dashboard tests. The widget calls useQuery internally and these
+// existing tests don't wrap renders in a QueryClientProvider, so
+// without this replacement they would crash on mount. The widget's
+// real behaviour is covered by its own dedicated test file in
+// features/admin-earnings.
 vi.mock(
   "@/features/admin-earnings/components/AdminEarningsWidget",
   () => ({
