@@ -36,6 +36,20 @@ vi.mock("../../hooks", () => ({
   adminDashboardKeys: { all: ["admin-dashboard"] as const },
 }));
 
+// Stub the earnings widget — it calls useQuery internally and the
+// existing dashboard tests don't wrap renders in a QueryClientProvider.
+// The widget itself is not yet covered by a dedicated test suite (the
+// earnings feature ships without one); this stub keeps the rest of
+// the dashboard test surface from breaking on its introduction.
+vi.mock(
+  "@/features/admin-earnings/components/AdminEarningsWidget",
+  () => ({
+    AdminEarningsWidget: () => (
+      <div data-testid="admin-earnings-widget-stub" />
+    ),
+  }),
+);
+
 const STORE_ID = "11111111-1111-1111-1111-111111111111";
 const ORDER_ID_1 = "22222222-2222-2222-2222-222222222222";
 const ORDER_ID_2 = "33333333-3333-3333-3333-333333333333";

@@ -58,6 +58,22 @@ vi.mock("@/features/dashboard", () => ({
   useStoreAlertsQuery: vi.fn(),
 }));
 
+// Stub the earnings widget. Two reasons:
+//   1. It calls useQuery internally and these tests don't wrap renders
+//      in a QueryClientProvider.
+//   2. Its real copy contains "Revenue" / "revenue", which collides
+//      with the FORBIDDEN_RUNTIME_COPY guard below. The widget's
+//      revenue framing is intentional, so the guard is intentionally
+//      not exercised against it here.
+vi.mock(
+  "@/features/store-earnings/components/StoreEarningsWidget",
+  () => ({
+    StoreEarningsWidget: () => (
+      <div data-testid="store-earnings-widget-stub" />
+    ),
+  }),
+);
+
 const STORE_ID = "22222222-2222-2222-2222-222222222222";
 const ITEM_ID = "11111111-1111-1111-1111-111111111111";
 const VARIANT_ID = "33333333-3333-3333-3333-333333333333";
