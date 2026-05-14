@@ -7,7 +7,7 @@ import { Link } from "react-router-dom";
 
 import { useAdminEarningsQuery } from "../hooks";
 import { EarningsHeroCard } from "./EarningsHeroCard";
-import { MoneyTile } from "./MoneyTile";
+import { MoneyTile, formatUsd } from "./MoneyTile";
 
 export function AdminEarningsWidget() {
   const query = useAdminEarningsQuery();
@@ -91,7 +91,16 @@ export function AdminEarningsWidget() {
           <MoneyTile
             title="Customer paid"
             value={query.data.customer_paid_total}
-            description={`${query.data.delivered_orders} orders · all-in total`}
+            description={`Avg ${
+              query.data.delivered_orders > 0
+                ? formatUsd(
+                    String(
+                      Number(query.data.customer_paid_total) /
+                        query.data.delivered_orders,
+                    ),
+                  )
+                : formatUsd("0")
+            } per order`}
             icon={Truck}
             data-testid="admin-earnings-widget-customer-paid"
           />
