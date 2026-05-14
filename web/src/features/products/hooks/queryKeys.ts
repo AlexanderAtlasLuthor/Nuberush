@@ -43,6 +43,7 @@ import type { ProductComplianceStatus } from "../types";
 export interface ProductsListQueryFilters {
   only_active?: boolean;
   only_sellable?: boolean;
+  only_blocked?: boolean;
   compliance_status?: ProductComplianceStatus;
   category?: string;
   limit?: number;

@@ -15,6 +15,7 @@
 
 import { useState } from "react";
 import { Boxes } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 
 import { useStoreContext } from "@/auth";
 import { LoadingState } from "@/components/common/loading-state";
@@ -181,9 +182,19 @@ function PaginationBar({
 export default function InventoryPage() {
   const { currentStoreId } = useStoreContext();
 
+  const [searchParams] = useSearchParams();
+
   const [limit] = useState(DEFAULT_LIMIT);
   const [offset, setOffset] = useState(0);
-  const [lowStockOnly, setLowStockOnly] = useState(false);
+  // Seed the low-stock filter from the URL so a link like
+  // `/app/store/inventory?low_stock_only=true` from the dashboard lands
+  // the user on a pre-filtered list. The filter remains user-mutable
+  // via the FilterBar checkbox after the initial mount; we deliberately
+  // do not keep the URL in sync on every toggle to avoid stomping the
+  // browser history with checkbox flips.
+  const [lowStockOnly, setLowStockOnly] = useState(
+    () => searchParams.get("low_stock_only") === "true",
+  );
 
   // Always called: useInventoryList internally short-circuits via
   // `enabled: currentStoreId !== null` so admin / no-store users

@@ -41,6 +41,7 @@ router = APIRouter(prefix="/products", tags=["products"])
 def list_products(
     only_active: bool = Query(default=False),
     only_sellable: bool = Query(default=False),
+    only_blocked: bool = Query(default=False),
     compliance_status: ComplianceStatus | None = Query(default=None),
     approval_status: ProductApprovalStatus | None = Query(default=None),
     category: str | None = Query(default=None, max_length=100),
@@ -54,6 +55,7 @@ def list_products(
         actor=current_user,
         only_active=only_active,
         only_sellable=only_sellable,
+        only_blocked=only_blocked,
         compliance_status=compliance_status,
         approval_status=approval_status,
         category=category,

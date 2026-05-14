@@ -171,17 +171,26 @@ def list_products(
     actor: User,
     only_active: bool = False,
     only_sellable: bool = False,
+    only_blocked: bool = False,
     compliance_status: ComplianceStatus | None = None,
     approval_status: ProductApprovalStatus | None = None,
     category: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[Product]:
-    """List products. `only_sellable` filters with the canonical rule
-    so callers don't have to combine the booleans themselves.
+    """List products with two orthogonal gates: compliance and approval.
+
+    Compliance filters:
+    - `only_sellable` filters with the canonical sellable rule
+      (active + allowed_for_sale + compliance_status == allowed +
+      approval_status == approved).
+    - `only_blocked` is the compliance-review inverse: products with
+      `allowed_for_sale = false` OR `compliance_status` in
+      `{restricted, banned}`. Mirrors the predicate used by
+      `app.services.admin_dashboard._compliance_summary` and the
+      store-scoped products summary.
 
     Approval-status visibility (server-enforced):
-
     - Admin sees every row. If `approval_status` is set, the filter
       applies as-is.
     - Non-admin sees `approved` rows AND their own store's `pending`
@@ -191,6 +200,8 @@ def list_products(
       window; passing `approval_status=approved` from a store call is
       effectively a no-op since the union already includes them.
     """
+    from sqlalchemy import or_
+
     stmt = select(Product)
     if only_active:
         stmt = stmt.where(Product.is_active.is_(True))
@@ -203,6 +214,18 @@ def list_products(
             Product.compliance_status == ComplianceStatus.allowed,
             Product.approval_status == ProductApprovalStatus.approved,
         )
+    if only_blocked:
+        stmt = stmt.where(
+            or_(
+                Product.allowed_for_sale.is_(False),
+                Product.compliance_status.in_(
+                    (
+                        ComplianceStatus.restricted,
+                        ComplianceStatus.banned,
+                    )
+                ),
+            )
+        )
     if compliance_status is not None:
         stmt = stmt.where(Product.compliance_status == compliance_status)
     if category is not None:
@@ -214,8 +237,6 @@ def list_products(
     else:
         visibility = Product.approval_status == ProductApprovalStatus.approved
         if actor.store_id is not None:
-            from sqlalchemy import or_
-
             visibility = or_(
                 visibility,
                 Product.proposed_by_store_id == actor.store_id,

@@ -8,6 +8,11 @@ import * as authModule from "@/auth";
 import type { StoreContextState } from "@/auth";
 import * as auditHooks from "@/features/audit/hooks";
 import type { StoreInventoryLogEntry } from "@/features/audit/types";
+import * as dashboardHooks from "@/features/dashboard";
+import type {
+  StoreAlertsListResponse,
+  StoreDashboardKpis,
+} from "@/features/dashboard";
 import * as inventoryHooks from "@/features/inventory/hooks";
 import type {
   InventoryItem,
@@ -48,18 +53,24 @@ vi.mock("@/features/audit/hooks", () => ({
   useStoreInventoryLogsQuery: vi.fn(),
 }));
 
+vi.mock("@/features/dashboard", () => ({
+  useStoreDashboardKpisQuery: vi.fn(),
+  useStoreAlertsQuery: vi.fn(),
+}));
+
 const STORE_ID = "22222222-2222-2222-2222-222222222222";
 const ITEM_ID = "11111111-1111-1111-1111-111111111111";
 const VARIANT_ID = "33333333-3333-3333-3333-333333333333";
 const PRODUCT_ID = "44444444-4444-4444-4444-444444444444";
 
 const SECTION_TITLES = [
+  "Key metrics",
+  "Operational alerts",
   "Quick actions",
   "Low-stock inventory",
   "Orders to review",
   "Product review",
   "Recent inventory activity",
-  "Dashboard summaries require backend support",
 ] as const;
 
 // Every banned phrase the spec enumerates. These are checked as a single
@@ -354,6 +365,57 @@ function mockInventoryLogsQuery(
   );
 }
 
+function makeKpis(
+  overrides: Partial<StoreDashboardKpis> = {},
+): StoreDashboardKpis {
+  return {
+    orders_open: 0,
+    orders_by_status: {
+      pending: 0,
+      accepted: 0,
+      preparing: 0,
+      ready: 0,
+      out_for_delivery: 0,
+      delivered: 0,
+      canceled: 0,
+      returned: 0,
+    },
+    inventory_total_items: 0,
+    inventory_low_stock: 0,
+    products_in_store: 0,
+    products_blocked: 0,
+    ...overrides,
+  };
+}
+
+function mockKpisQuery(
+  partial: Partial<UseQueryResult<StoreDashboardKpis>>,
+) {
+  vi.mocked(dashboardHooks.useStoreDashboardKpisQuery).mockReturnValue(
+    asQueryResult<StoreDashboardKpis>(partial),
+  );
+}
+
+function makeAlertsResponse(
+  overrides: Partial<StoreAlertsListResponse> = {},
+): StoreAlertsListResponse {
+  return {
+    items: [],
+    total: 0,
+    limit: 5,
+    offset: 0,
+    ...overrides,
+  };
+}
+
+function mockAlertsQuery(
+  partial: Partial<UseQueryResult<StoreAlertsListResponse>>,
+) {
+  vi.mocked(dashboardHooks.useStoreAlertsQuery).mockReturnValue(
+    asQueryResult<StoreAlertsListResponse>(partial),
+  );
+}
+
 function makeStoreContext(
   overrides: Partial<StoreContextState> = {},
 ): StoreContextState {
@@ -400,6 +462,22 @@ function mockEmptyData() {
     error: null,
     refetch: vi.fn() as never,
   });
+  mockKpisQuery({
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    data: makeKpis(),
+    error: null,
+    refetch: vi.fn() as never,
+  });
+  mockAlertsQuery({
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    data: makeAlertsResponse(),
+    error: null,
+    refetch: vi.fn() as never,
+  });
 }
 
 beforeEach(() => {
@@ -408,6 +486,8 @@ beforeEach(() => {
   vi.mocked(ordersHooks.useOrdersList).mockReset();
   vi.mocked(productsHooks.useProductsQuery).mockReset();
   vi.mocked(auditHooks.useStoreInventoryLogsQuery).mockReset();
+  vi.mocked(dashboardHooks.useStoreDashboardKpisQuery).mockReset();
+  vi.mocked(dashboardHooks.useStoreAlertsQuery).mockReset();
   // Default success/empty so the regression suite (which doesn't care
   // about widget-specific state) doesn't render a loading or error branch.
   mockEmptyData();
@@ -455,14 +535,6 @@ describe("DashboardHomePage - shell", () => {
     }
   });
 
-  it("renders the explicit no-simulated-KPIs disclaimer", () => {
-    renderPage();
-
-    expect(
-      screen.getByText(/no kpis are simulated in the frontend\./i),
-    ).toBeInTheDocument();
-  });
-
   it("does not expose forbidden runtime copy", () => {
     const { container } = renderPage();
 
@@ -493,22 +565,8 @@ describe("DashboardHomePage - shell", () => {
     expect(
       screen.getByTestId("dashboard-inventory-activity"),
     ).toBeInTheDocument();
-    expect(
-      screen.getByTestId("dashboard-backend-summary"),
-    ).toBeInTheDocument();
-  });
-
-  it("documents the future backend endpoints the page depends on", () => {
-    renderPage();
-
-    const list = screen.getByTestId("dashboard-future-endpoints");
-    expect(list).toBeInTheDocument();
-    expect(list.textContent).toContain("/stores/:storeId/dashboard");
-    expect(list.textContent).toContain("/stores/:storeId/orders/summary");
-    expect(list.textContent).toContain("/stores/:storeId/inventory/summary");
-    expect(list.textContent).toContain("/stores/:storeId/products/summary");
-    expect(list.textContent).toContain("/stores/:storeId/activity");
-    expect(list.textContent).toContain("/stores/:storeId/alerts");
+    expect(screen.getByTestId("dashboard-kpis")).toBeInTheDocument();
+    expect(screen.getByTestId("dashboard-alerts")).toBeInTheDocument();
   });
 });
 
@@ -657,7 +715,7 @@ describe("DashboardHomePage - Low-stock inventory widget", () => {
       screen.getByRole("heading", { level: 1, name: /store dashboard/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByTestId("dashboard-backend-summary"),
+      screen.getByTestId("dashboard-kpis"),
     ).toBeInTheDocument();
 
     // Retry button is wired to the query's refetch.
@@ -769,13 +827,19 @@ describe("DashboardHomePage - Low-stock inventory widget", () => {
     expect(within(card).getByText(/^flagged$/i)).toBeInTheDocument();
   });
 
-  it("links to the full inventory page", () => {
+  it("links to the inventory page with the low-stock filter pre-selected", () => {
     renderPage();
 
     const card = screen.getByTestId("dashboard-low-stock");
     const link = within(card).getByTestId("dashboard-low-stock-link");
     expect(link.tagName).toBe("A");
-    expect(link).toHaveAttribute("href", "/app/store/inventory");
+    // The dashboard hands the inventory page a `?low_stock_only=true`
+    // query param so the destination renders pre-filtered instead of
+    // dropping the user into the unfiltered default list.
+    expect(link).toHaveAttribute(
+      "href",
+      "/app/store/inventory?low_stock_only=true",
+    );
   });
 
   it("never renders fake KPIs, health scores, or alert copy", () => {
@@ -864,7 +928,7 @@ describe("DashboardHomePage - Orders to review widget", () => {
       screen.getByRole("heading", { level: 1, name: /store dashboard/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByTestId("dashboard-backend-summary"),
+      screen.getByTestId("dashboard-kpis"),
     ).toBeInTheDocument();
     // Other widgets still render their default branches.
     expect(screen.getByTestId("dashboard-low-stock")).toBeInTheDocument();
@@ -988,11 +1052,15 @@ describe("DashboardHomePage - Orders to review widget", () => {
 });
 
 describe("DashboardHomePage - Product review widget", () => {
-  it("calls useProductsQuery with limit 5", () => {
+  it("calls useProductsQuery with only_blocked + limit 5", () => {
     renderPage();
 
+    // The widget surfaces the compliance review queue, not the bare
+    // catalogue, so it must ask the backend for products in the
+    // `only_blocked` predicate set (allowed_for_sale=false OR
+    // compliance_status in {restricted, banned}).
     expect(productsHooks.useProductsQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 5 }),
+      expect.objectContaining({ limit: 5, only_blocked: true }),
     );
   });
 
@@ -1015,7 +1083,7 @@ describe("DashboardHomePage - Product review widget", () => {
     ).not.toBeInTheDocument();
     expect(
       within(card).queryByText(
-        /no product review items returned by the current filters\./i,
+        /no products are blocked from sale right now\./i,
       ),
     ).not.toBeInTheDocument();
   });
@@ -1042,7 +1110,7 @@ describe("DashboardHomePage - Product review widget", () => {
       screen.getByRole("heading", { level: 1, name: /store dashboard/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByTestId("dashboard-backend-summary"),
+      screen.getByTestId("dashboard-kpis"),
     ).toBeInTheDocument();
     // Other widgets still render their default branches.
     expect(screen.getByTestId("dashboard-low-stock")).toBeInTheDocument();
@@ -1070,7 +1138,7 @@ describe("DashboardHomePage - Product review widget", () => {
     const card = screen.getByTestId("dashboard-product-review");
     expect(
       within(card).getByText(
-        /no product review items returned by the current filters\./i,
+        /no products are blocked from sale right now\./i,
       ),
     ).toBeInTheDocument();
 
@@ -1259,7 +1327,7 @@ describe("DashboardHomePage - Recent inventory activity widget", () => {
       screen.getByRole("heading", { level: 1, name: /store dashboard/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByTestId("dashboard-backend-summary"),
+      screen.getByTestId("dashboard-kpis"),
     ).toBeInTheDocument();
     expect(screen.getByTestId("dashboard-low-stock")).toBeInTheDocument();
     expect(
@@ -1420,153 +1488,183 @@ describe("DashboardHomePage - Recent inventory activity widget", () => {
   });
 });
 
-describe("DashboardHomePage - Backend-required dashboard summary", () => {
-  it("renders the heading and the no-simulated-KPIs disclaimer", () => {
-    renderPage();
-
-    const card = screen.getByTestId("dashboard-backend-summary");
-    expect(
-      within(card).getByRole("heading", {
-        level: 3,
-        name: /dashboard summaries require backend support/i,
+describe("DashboardHomePage - KPI strip", () => {
+  it("renders the four KPI tiles wired to the kpis hook", () => {
+    mockKpisQuery({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: makeKpis({
+        orders_open: 15,
+        inventory_total_items: 30,
+        inventory_low_stock: 10,
+        products_in_store: 20,
+        products_blocked: 6,
       }),
-    ).toBeInTheDocument();
-    expect(
-      within(card).getByText(/no kpis are simulated in the frontend\./i),
-    ).toBeInTheDocument();
-  });
+      error: null,
+      refetch: vi.fn() as never,
+    });
 
-  it("explains the operational lists vs. summary endpoints split", () => {
     renderPage();
 
-    const card = screen.getByTestId("dashboard-backend-summary");
-    // The CardDescription covers the three contract points: real list
-    // endpoints today, summaries are not simulated, summaries need
-    // backend support.
+    const card = screen.getByTestId("dashboard-kpis");
     expect(
-      within(card).getByText(/real list endpoints/i),
-    ).toBeInTheDocument();
+      within(card).getByTestId("dashboard-kpi-orders-open"),
+    ).toHaveTextContent("15");
     expect(
-      within(card).getByText(/the frontend does not simulate them/i),
-    ).toBeInTheDocument();
+      within(card).getByTestId("dashboard-kpi-low-stock"),
+    ).toHaveTextContent("10");
+    expect(
+      within(card).getByTestId("dashboard-kpi-products"),
+    ).toHaveTextContent("20");
+    expect(
+      within(card).getByTestId("dashboard-kpi-blocked"),
+    ).toHaveTextContent("6");
   });
 
-  it("documents all 7 future backend endpoints exactly", () => {
+  it("renders a scoped loading state while the KPIs are loading", () => {
+    mockKpisQuery({
+      isLoading: true,
+      isError: false,
+      data: undefined,
+      error: null,
+    });
+
     renderPage();
 
-    const card = screen.getByTestId("dashboard-backend-summary");
-    // The list of future endpoints sits under a real <h4> sub-heading
-    // rather than a styled <p>, so screen readers can navigate the
-    // backend-required card by heading levels (h3 card title → h4
-    // future-endpoints sub-heading).
-    expect(
-      within(card).getByRole("heading", {
-        level: 4,
-        name: /^future backend endpoints$/i,
-      }),
-    ).toBeInTheDocument();
-
-    const list = screen.getByTestId("dashboard-future-endpoints");
-    const items = within(list).getAllByRole("listitem");
-    const expected = [
-      "GET /stores/:storeId/dashboard",
-      "GET /stores/:storeId/dashboard/kpis",
-      "GET /stores/:storeId/orders/summary",
-      "GET /stores/:storeId/inventory/summary",
-      "GET /stores/:storeId/products/summary",
-      "GET /stores/:storeId/activity",
-      "GET /stores/:storeId/alerts",
-    ];
-    expect(items).toHaveLength(expected.length);
-    for (const endpoint of expected) {
-      expect(within(list).getByText(endpoint)).toBeInTheDocument();
-    }
+    const card = screen.getByTestId("dashboard-kpis");
+    expect(within(card).getByRole("status")).toHaveTextContent(
+      /loading metrics/i,
+    );
   });
 
-  it("does not render fake KPI cards, charts, or simulated metrics", () => {
+  it("renders a scoped error state when the KPIs query fails", () => {
+    const refetch = vi.fn();
+    mockKpisQuery({
+      isLoading: false,
+      isError: true,
+      data: undefined,
+      error: new ApiError(503, "service unavailable", { detail: "boom" }),
+      refetch: refetch as never,
+    });
+
     renderPage();
 
-    const card = screen.getByTestId("dashboard-backend-summary");
-    const cardText = (card.textContent ?? "").toLowerCase();
-
-    // Fake KPI / score / financial labels must NOT appear in the
-    // backend-required card. The disclaimer "No KPIs are simulated..."
-    // contains the word "kpi" by design — these checks are deliberately
-    // narrower phrases so they don't collide with the disclaimer.
-    for (const banned of [
-      "revenue today",
-      "orders today",
-      "delayed orders",
-      "store health score",
-      "inventory health score",
-      "compliance risk score",
-      "order sla score",
-      "fake kpi",
-      "simulated kpi card",
-      "fake alert",
-      "fake activity count",
-      "$",
-    ]) {
-      expect(cardText).not.toContain(banned);
-    }
-
-    // No chart primitives in the summary card.
-    expect(card.querySelector("[data-testid*='chart']")).toBeNull();
-    expect(within(card).queryByRole("img", { name: /chart/i })).not
-      .toBeInTheDocument();
-  });
-
-  it("does not leak stale shell copy from earlier subphases", () => {
-    const { container } = renderPage();
-
-    // After F2.13.5, no widget renders a "Backend integration pending"
-    // badge or a "Planned" status — the helper PendingSection was
-    // removed once all four operational widgets were wired.
-    const visibleText = (container.textContent ?? "").toLowerCase();
-    for (const stale of [
-      "backend integration pending",
-      "coming soon",
-      "store operations dashboard will show daily",
-    ]) {
-      expect(visibleText).not.toContain(stale);
-    }
-    expect(screen.queryByText(/^Planned$/)).not.toBeInTheDocument();
+    const card = screen.getByTestId("dashboard-kpis");
+    expect(
+      within(card).getByText(/metrics failed to load\./i),
+    ).toBeInTheDocument();
   });
 });
 
-describe("DashboardHomePage - regression hardening (F2.13.8)", () => {
-  it("locks the page heading hierarchy: 1 × h1, 6 × h3, 1 × h4", () => {
+describe("DashboardHomePage - Operational alerts widget", () => {
+  it("renders the alerts list and the total badge", () => {
+    mockAlertsQuery({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: makeAlertsResponse({
+        total: 3,
+        items: [
+          {
+            id: "low_stock:item-1",
+            category: "low_stock",
+            severity: "high",
+            store_id: STORE_ID,
+            entity_type: "inventory_item",
+            entity_id: "item-1",
+            summary: "Low stock: 0 effective on hand.",
+            created_at: "2026-05-01T00:00:00Z",
+          },
+          {
+            id: "aging_order:order-1:60",
+            category: "aging_order",
+            severity: "medium",
+            store_id: STORE_ID,
+            entity_type: "order",
+            entity_id: "order-1",
+            summary: "Order open for 120 min.",
+            created_at: "2026-05-01T00:00:00Z",
+          },
+        ],
+      }),
+      error: null,
+      refetch: vi.fn() as never,
+    });
+
+    renderPage();
+
+    const card = screen.getByTestId("dashboard-alerts");
+    expect(within(card).getByTestId("dashboard-alerts-total")).toHaveTextContent(
+      "3",
+    );
+    const items = within(card).getAllByTestId("dashboard-alert-item");
+    expect(items).toHaveLength(2);
+    // Each row carries both the human summary AND the category label,
+    // so disambiguate with the exact summary text the wire ships.
+    expect(
+      within(items[0]).getByText(/low stock: 0 effective on hand/i),
+    ).toBeInTheDocument();
+    expect(
+      within(items[0]).getByText(/high/i),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the empty state when there are no alerts", () => {
+    mockAlertsQuery({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: makeAlertsResponse({ total: 0, items: [] }),
+      error: null,
+      refetch: vi.fn() as never,
+    });
+
+    renderPage();
+
+    const card = screen.getByTestId("dashboard-alerts");
+    expect(
+      within(card).getByText(/no active alerts/i),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("DashboardHomePage - regression hardening", () => {
+  it("locks the page heading hierarchy: 1 × h1, 7 × h3", () => {
     renderPage();
 
     // Locking exact counts catches accidental section adds/removes,
-    // header demotion/promotion, or losing the F2.13.7 h4 promotion.
-    // AlertTitle renders as <h5>, so it does not appear in these counts.
+    // header demotion/promotion. AlertTitle renders as <h5>, so it
+    // does not appear in these counts.
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(6);
-    expect(screen.getAllByRole("heading", { level: 4 })).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(7);
   });
 
-  it("mounts exactly 6 widget cards (no surprise dashboard-* sections)", () => {
+  it("mounts exactly 7 widget cards (no surprise dashboard-* sections)", () => {
     const { container } = renderPage();
 
     const allDashboardCards = Array.from(
       container.querySelectorAll<HTMLElement>("[data-testid^='dashboard-']"),
     ).filter((node) => {
       const id = node.getAttribute("data-testid") ?? "";
-      // Filter out structural inner testIds (lists, items, links, the
-      // future-endpoints <ul>) — only count the top-level card containers.
+      // Filter out structural inner testIds — only count the top-level
+      // card containers.
       return !id.includes("-list")
         && !id.includes("-item")
         && !id.includes("-link")
-        && id !== "dashboard-future-endpoints";
+        && !id.includes("-kpi-")
+        && !id.includes("-grid")
+        && id !== "dashboard-alerts-total"
+        && !id.includes("-activity-actor");
     });
     const cardTestIds = allDashboardCards
       .map((node) => node.getAttribute("data-testid"))
       .sort();
 
     expect(cardTestIds).toEqual([
-      "dashboard-backend-summary",
+      "dashboard-alerts",
       "dashboard-inventory-activity",
+      "dashboard-kpis",
       "dashboard-low-stock",
       "dashboard-orders-to-review",
       "dashboard-product-review",
@@ -1592,15 +1690,17 @@ describe("DashboardHomePage - regression hardening (F2.13.8)", () => {
   it("invokes each widget hook exactly once per render (N+1 guard)", () => {
     renderPage();
 
-    // The strongest N+1 guard available without spinning up real
-    // TanStack Query: each list hook must run exactly once on a single
-    // dashboard render. Re-introducing a per-item useProductSellableQuery,
-    // useInventoryItem, useOrder, etc. inside a list .map() would fail
-    // the per-render invocation count.
+    // Each list/aggregate hook must run exactly once on a single
+    // dashboard render. Re-introducing a per-item query inside a list
+    // .map() would fail the per-render invocation count.
     expect(inventoryHooks.useInventoryList).toHaveBeenCalledTimes(1);
     expect(ordersHooks.useOrdersList).toHaveBeenCalledTimes(1);
     expect(productsHooks.useProductsQuery).toHaveBeenCalledTimes(1);
     expect(auditHooks.useStoreInventoryLogsQuery).toHaveBeenCalledTimes(1);
+    expect(
+      dashboardHooks.useStoreDashboardKpisQuery,
+    ).toHaveBeenCalledTimes(1);
+    expect(dashboardHooks.useStoreAlertsQuery).toHaveBeenCalledTimes(1);
   });
 
   it("renders no chart primitives anywhere on the page", () => {
