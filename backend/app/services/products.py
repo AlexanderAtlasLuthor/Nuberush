@@ -112,14 +112,21 @@ def list_products(
     *,
     only_active: bool = False,
     only_sellable: bool = False,
+    only_blocked: bool = False,
     compliance_status: ComplianceStatus | None = None,
     category: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[Product]:
-    """List products. `only_sellable` filters with the canonical rule
-    so callers don't have to combine three boolean flags themselves.
+    """List products. `only_sellable` filters with the canonical
+    sellable rule; `only_blocked` is its inverse — products in the
+    compliance review queue (`allowed_for_sale = false` OR
+    `compliance_status` in `{restricted, banned}`). Mirrors the
+    predicate used by `app.services.admin_dashboard._compliance_summary`
+    and the store-scoped products summary.
     """
+    from sqlalchemy import or_
+
     stmt = select(Product)
     if only_active:
         stmt = stmt.where(Product.is_active.is_(True))
@@ -128,6 +135,18 @@ def list_products(
             Product.is_active.is_(True),
             Product.allowed_for_sale.is_(True),
             Product.compliance_status == ComplianceStatus.allowed,
+        )
+    if only_blocked:
+        stmt = stmt.where(
+            or_(
+                Product.allowed_for_sale.is_(False),
+                Product.compliance_status.in_(
+                    (
+                        ComplianceStatus.restricted,
+                        ComplianceStatus.banned,
+                    )
+                ),
+            )
         )
     if compliance_status is not None:
         stmt = stmt.where(Product.compliance_status == compliance_status)

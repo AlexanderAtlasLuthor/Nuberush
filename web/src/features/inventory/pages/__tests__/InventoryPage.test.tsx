@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import type { UseQueryResult } from "@tanstack/react-query";
 
 import { ApiError } from "@/api";
@@ -13,6 +14,18 @@ import * as auth from "@/auth";
 import InventoryPage from "../InventoryPage";
 import * as inventoryHooks from "../../hooks";
 import type { InventoryItem, InventoryListResponse } from "../../types";
+
+// `InventoryPage` now reads `?low_stock_only=true` from the URL via
+// `useSearchParams`, which requires a Router context. Tests wrap their
+// renders in this helper so each case can optionally pre-seed the
+// initial URL.
+function renderPage(initialUrl: string = "/app/store/inventory") {
+  return render(
+    <MemoryRouter initialEntries={[initialUrl]}>
+      <InventoryPage />
+    </MemoryRouter>,
+  );
+}
 
 vi.mock("@/auth", () => ({
   useStoreContext: vi.fn(),
@@ -131,7 +144,7 @@ describe("InventoryPage - store context", () => {
       error: null,
     });
 
-    render(<InventoryPage />);
+    renderPage();
 
     expect(screen.getByText(/no store selected/i)).toBeInTheDocument();
     expect(
@@ -153,7 +166,7 @@ describe("InventoryPage - render states", () => {
       error: null,
     });
 
-    render(<InventoryPage />);
+    renderPage();
 
     expect(screen.getByRole("status")).toHaveTextContent(/loading inventory/i);
     expect(screen.getByLabelText(/low stock only/i)).toBeDisabled();
@@ -173,7 +186,7 @@ describe("InventoryPage - render states", () => {
       refetch: refetch as never,
     });
 
-    render(<InventoryPage />);
+    renderPage();
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       /inventory failed to load/i,
@@ -195,7 +208,7 @@ describe("InventoryPage - render states", () => {
       error: null,
     });
 
-    render(<InventoryPage />);
+    renderPage();
 
     expect(screen.getByText(/no inventory yet/i)).toBeInTheDocument();
     expect(
@@ -213,7 +226,7 @@ describe("InventoryPage - render states", () => {
       error: null,
     });
 
-    render(<InventoryPage />);
+    renderPage();
     fireEvent.click(screen.getByLabelText(/low stock only/i));
 
     expect(screen.getByText(/no low-stock items/i)).toBeInTheDocument();
@@ -256,7 +269,7 @@ describe("InventoryPage - render states", () => {
       error: null,
     });
 
-    render(<InventoryPage />);
+    renderPage();
 
     expect(screen.getByTestId("inventory-total")).toHaveTextContent("Total: 42");
     expect(screen.queryByRole("searchbox")).toBeNull();
@@ -287,7 +300,7 @@ describe("InventoryPage - render states", () => {
 
 describe("InventoryPage - filters", () => {
   it("calls useInventoryList with the default backend-query params", () => {
-    render(<InventoryPage />);
+    renderPage();
 
     expect(inventoryHooks.useInventoryList).toHaveBeenCalledWith({
       limit: 20,
@@ -297,7 +310,7 @@ describe("InventoryPage - filters", () => {
   });
 
   it("sends low_stock_only=true when the low-stock checkbox is checked", () => {
-    render(<InventoryPage />);
+    renderPage();
 
     fireEvent.click(screen.getByLabelText(/low stock only/i));
 
@@ -308,6 +321,20 @@ describe("InventoryPage - filters", () => {
     });
   });
 
+  it("seeds low_stock_only from the URL search param", () => {
+    // Linking from the dashboard's "View all" with
+    // `?low_stock_only=true` must land the user on a pre-filtered
+    // list, with the checkbox already in the on state.
+    renderPage("/app/store/inventory?low_stock_only=true");
+
+    expect(inventoryHooks.useInventoryList).toHaveBeenCalledWith({
+      limit: 20,
+      offset: 0,
+      low_stock_only: true,
+    });
+    expect(screen.getByLabelText(/low stock only/i)).toBeChecked();
+  });
+
   it("resets offset to 0 when the low-stock filter changes", () => {
     mockInventoryQuery({
       isLoading: false,
@@ -316,7 +343,7 @@ describe("InventoryPage - filters", () => {
       data: makeListResponse({ items: [makeItem()], total: 45 }),
       error: null,
     });
-    render(<InventoryPage />);
+    renderPage();
 
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     expect(inventoryHooks.useInventoryList).toHaveBeenLastCalledWith({
@@ -343,7 +370,7 @@ describe("InventoryPage - pagination", () => {
       data: makeListResponse({ items: [makeItem()], total: 35 }),
       error: null,
     });
-    render(<InventoryPage />);
+    renderPage();
 
     const previous = screen.getByRole("button", { name: /previous/i });
     const next = screen.getByRole("button", { name: /next/i });
