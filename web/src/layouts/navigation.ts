@@ -8,6 +8,7 @@ import {
   Boxes,
   Building2,
   ClipboardList,
+  DollarSign,
   FileWarning,
   LayoutDashboard,
   RadioTower,
@@ -62,6 +63,12 @@ export const STORE_NAV_ITEMS: ReadonlyArray<NavItemConfig> = [
     href: "/app/store/orders",
     icon: ClipboardList,
     description: "Store orders",
+  },
+  {
+    label: "Earnings",
+    href: "/app/store/earnings",
+    icon: DollarSign,
+    description: "Revenue from products sold",
   },
   {
     label: "Users",
@@ -120,6 +127,12 @@ export const ADMIN_NAV_ITEMS: ReadonlyArray<NavItemConfig> = [
     href: "/app/admin/orders",
     icon: ClipboardList,
     description: "Global order visibility",
+  },
+  {
+    label: "Earnings",
+    href: "/app/admin/earnings",
+    icon: DollarSign,
+    description: "Platform commission and earnings",
   },
   {
     label: "Audit",

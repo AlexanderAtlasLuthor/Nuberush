@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.admin_compliance import router as admin_compliance_router
 from app.api.routes.admin_dashboard import router as admin_dashboard_router
+from app.api.routes.admin_earnings import router as admin_earnings_router
 from app.api.routes.admin_operations import router as admin_operations_router
 from app.api.routes.admin_products import router as admin_products_router
 from app.api.routes.admin_settings import router as admin_settings_router
@@ -13,6 +14,7 @@ from app.api.routes.orders import router as orders_router
 from app.api.routes.products import router as products_router
 from app.api.routes.products import variants_router
 from app.api.routes.store_dashboard import router as store_dashboard_router
+from app.api.routes.store_earnings import router as store_earnings_router
 from app.api.routes.stores import router as stores_router
 from app.api.routes.users import router as users_router
 from app.core.config import get_app_settings
@@ -42,8 +44,10 @@ app.include_router(inventory_router)
 app.include_router(orders_router)
 app.include_router(stores_router)
 app.include_router(store_dashboard_router)
+app.include_router(store_earnings_router)
 app.include_router(audit_router)
 app.include_router(admin_dashboard_router)
+app.include_router(admin_earnings_router)
 app.include_router(admin_operations_router)
 app.include_router(admin_products_router)
 app.include_router(admin_compliance_router)

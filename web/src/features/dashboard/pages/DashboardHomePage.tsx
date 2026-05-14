@@ -65,6 +65,7 @@ import { ProductComplianceBadge } from "@/features/products/components/ProductCo
 import { ProductStatusBadge } from "@/features/products/components/ProductStatusBadge";
 import { useProductsQuery } from "@/features/products/hooks";
 import type { Product } from "@/features/products/types";
+import { StoreEarningsWidget } from "@/features/store-earnings/components/StoreEarningsWidget";
 
 const SIGNED_QTY_FORMAT = new Intl.NumberFormat("en-US", {
   signDisplay: "exceptZero",
@@ -887,6 +888,8 @@ export default function DashboardHomePage() {
       <PageHeader />
 
       <KpiStripSection />
+
+      <StoreEarningsWidget />
 
       <OperationalAlertsSection />
 

@@ -58,6 +58,21 @@ vi.mock("@/features/dashboard", () => ({
   useStoreAlertsQuery: vi.fn(),
 }));
 
+// Replace the earnings widget with a tiny placeholder ONLY in these
+// dashboard tests. The widget calls useQuery internally and these
+// existing tests don't wrap renders in a QueryClientProvider, so
+// without this replacement they would crash on mount. The widget's
+// real behaviour is covered by its own dedicated test file in
+// features/store-earnings.
+vi.mock(
+  "@/features/store-earnings/components/StoreEarningsWidget",
+  () => ({
+    StoreEarningsWidget: () => (
+      <div data-testid="store-earnings-widget-stub" />
+    ),
+  }),
+);
+
 const STORE_ID = "22222222-2222-2222-2222-222222222222";
 const ITEM_ID = "11111111-1111-1111-1111-111111111111";
 const VARIANT_ID = "33333333-3333-3333-3333-333333333333";
@@ -88,8 +103,9 @@ const FORBIDDEN_RUNTIME_COPY = [
   "F2.13",
   "coming soon",
   "backend integration pending",
-  // Financial / KPI claims
-  "revenue",
+  // Financial / KPI claims. "revenue" used to live here but the
+  // Earnings widget intentionally renders revenue copy now, so the
+  // word is no longer forbidden runtime-wide.
   "profit",
   "fake kpi",
   "simulated kpi card",

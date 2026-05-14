@@ -36,6 +36,21 @@ vi.mock("../../hooks", () => ({
   adminDashboardKeys: { all: ["admin-dashboard"] as const },
 }));
 
+// Replace the earnings widget with a tiny placeholder ONLY in these
+// dashboard tests. The widget calls useQuery internally and these
+// existing tests don't wrap renders in a QueryClientProvider, so
+// without this replacement they would crash on mount. The widget's
+// real behaviour is covered by its own dedicated test file in
+// features/admin-earnings.
+vi.mock(
+  "@/features/admin-earnings/components/AdminEarningsWidget",
+  () => ({
+    AdminEarningsWidget: () => (
+      <div data-testid="admin-earnings-widget-stub" />
+    ),
+  }),
+);
+
 const STORE_ID = "11111111-1111-1111-1111-111111111111";
 const ORDER_ID_1 = "22222222-2222-2222-2222-222222222222";
 const ORDER_ID_2 = "33333333-3333-3333-3333-333333333333";
