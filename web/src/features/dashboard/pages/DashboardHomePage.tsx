@@ -1,41 +1,31 @@
-// F2 Phase D / Store Dashboard — operational home for /app/store.
+// Store operations home for /app/store.
 //
-// Each operational widget consumes a real backend list endpoint
-// (inventory, orders, products, store-scoped inventory logs).
-// Aggregate KPIs / store-wide summaries are NOT computed in the
-// frontend — those need backend summary endpoints that do not exist
-// yet, so BackendRequiredSection calls that gap out explicitly rather
-// than faking metrics, charts, scores, or a unified activity feed.
+// Widgets:
+//   - KPI strip (key metrics) — backed by /stores/:storeId/dashboard/kpis
+//   - Operational alerts      — backed by /stores/:storeId/alerts
+//   - Quick actions           — static nav tiles
+//   - Low-stock inventory     — backed by /stores/:storeId/inventory?low_stock_only
+//   - Orders to review        — backed by /stores/:storeId/orders
+//   - Product review          — backed by /products?only_blocked
+//   - Recent inventory activity — backed by /stores/:storeId/inventory/logs
 //
-// Phase D — visual polish only (no contract / hook / route changes):
-//   - PageHeader picks up the eyebrow + larger title rhythm used by
-//     the admin dashboard, admin operations, and modern shell.
-//   - Quick action tiles + section rows polished without altering
-//     wire fields, hrefs, testIds, or any rendered string the
-//     regression test pins.
-//   - Low-stock rows render a thin depletion bar whose width is
-//     computed *directly* from the real `quantity_on_hand /
-//     reorder_threshold` ratio. No fake percentages, no fake colors:
-//     the tone bucket maps a real ratio to a real status (under 25 %
-//     → destructive, under 60 % → warning, otherwise primary).
-//   - Order rows surface the real `order.status` value inside a
-//     colored pill. The pill is purely a visual wrapper — text
-//     content is the raw enum string the wire ships.
-//   - Inventory-activity rows render a vertical timeline with a
-//     dot colored from the real `movement_type` value.
+// Every value displayed is a real wire field; nothing on this page is
+// simulated.
 
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowRight,
   Boxes,
   ClipboardList,
+  Inbox,
   ListChecks,
   PackageSearch,
   Plus,
-  Server,
   Settings,
   ShieldCheck,
   ShoppingBag,
+  User as UserIcon,
   UserPlus,
   type LucideIcon,
 } from "lucide-react";
@@ -46,7 +36,7 @@ import { useStoreContext } from "@/auth";
 import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { LoadingState } from "@/components/common/loading-state";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -56,6 +46,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import {
+  useStoreAlertsQuery,
+  useStoreDashboardKpisQuery,
+} from "@/features/dashboard";
+import type {
+  StoreAlert,
+  StoreAlertSeverity,
+  StoreDashboardKpis,
+} from "@/features/dashboard";
 import { useStoreInventoryLogsQuery } from "@/features/audit/hooks";
 import type { StoreInventoryLogEntry } from "@/features/audit/types";
 import { useInventoryList } from "@/features/inventory/hooks";
@@ -66,16 +65,6 @@ import { ProductComplianceBadge } from "@/features/products/components/ProductCo
 import { ProductStatusBadge } from "@/features/products/components/ProductStatusBadge";
 import { useProductsQuery } from "@/features/products/hooks";
 import type { Product } from "@/features/products/types";
-
-const FUTURE_ENDPOINTS: ReadonlyArray<string> = [
-  "GET /stores/:storeId/dashboard",
-  "GET /stores/:storeId/dashboard/kpis",
-  "GET /stores/:storeId/orders/summary",
-  "GET /stores/:storeId/inventory/summary",
-  "GET /stores/:storeId/products/summary",
-  "GET /stores/:storeId/activity",
-  "GET /stores/:storeId/alerts",
-];
 
 const SIGNED_QTY_FORMAT = new Intl.NumberFormat("en-US", {
   signDisplay: "exceptZero",
@@ -141,9 +130,6 @@ const QUICK_ACTIONS: ReadonlyArray<QuickAction> = [
   },
 ];
 
-// Color tint per order status. Pure visual mapping — text content
-// inside the pill stays the raw wire string ("pending", "preparing",
-// etc.) so the regression's exact-text assertions still match.
 const ORDER_STATUS_PILL_CLASS: Record<OrderStatus, string> = {
   pending: "bg-secondary text-muted-foreground",
   accepted: "bg-primary/15 text-primary",
@@ -155,9 +141,6 @@ const ORDER_STATUS_PILL_CLASS: Record<OrderStatus, string> = {
   returned: "bg-muted text-muted-foreground",
 };
 
-// Color tint per inventory-log movement_type. Same approach as the
-// status pill — visual mapping with a neutral fallback for movement
-// types the frontend doesn't yet recognize.
 const MOVEMENT_DOT_CLASS: Record<string, string> = {
   receipt: "bg-success",
   adjustment: "bg-warning",
@@ -171,6 +154,12 @@ const MOVEMENT_DOT_CLASS: Record<string, string> = {
 function movementDotClass(movementType: string): string {
   return MOVEMENT_DOT_CLASS[movementType] ?? "bg-muted-foreground/60";
 }
+
+const SEVERITY_BADGE_CLASS: Record<StoreAlertSeverity, string> = {
+  high: "bg-destructive/15 text-destructive",
+  medium: "bg-warning/15 text-warning",
+  low: "bg-muted text-muted-foreground",
+};
 
 function PageHeader() {
   return (
@@ -192,9 +181,219 @@ function PageHeader() {
   );
 }
 
+// --------------------------------------------------------------------- //
+// KPI strip
+// --------------------------------------------------------------------- //
+
+interface KpiTileProps {
+  label: string;
+  value: number | string;
+  hint?: string;
+  tone?: "default" | "warning" | "destructive" | "success";
+  testId: string;
+}
+
+function KpiTile({ label, value, hint, tone = "default", testId }: KpiTileProps) {
+  const toneClass =
+    tone === "destructive"
+      ? "text-destructive"
+      : tone === "warning"
+        ? "text-warning"
+        : tone === "success"
+          ? "text-success"
+          : "text-foreground";
+  return (
+    <div
+      data-testid={testId}
+      className="flex flex-col gap-1 rounded-xl border border-border bg-card p-4"
+    >
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      <span
+        className={cn(
+          "text-2xl font-semibold tabular-nums leading-tight",
+          toneClass,
+        )}
+      >
+        {value}
+      </span>
+      {hint ? (
+        <span className="text-xs text-muted-foreground">{hint}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function KpiStripContent({ kpis }: { kpis: StoreDashboardKpis }) {
+  const lowStockTone =
+    kpis.inventory_low_stock > 0 ? "warning" : "success";
+  const blockedTone =
+    kpis.products_blocked > 0 ? "destructive" : "default";
+  return (
+    <div
+      className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+      data-testid="dashboard-kpi-grid"
+    >
+      <KpiTile
+        testId="dashboard-kpi-orders-open"
+        label="Open orders"
+        value={kpis.orders_open}
+        hint="Pending through out-for-delivery"
+      />
+      <KpiTile
+        testId="dashboard-kpi-low-stock"
+        label="Low-stock items"
+        value={kpis.inventory_low_stock}
+        hint={`of ${kpis.inventory_total_items} tracked`}
+        tone={lowStockTone}
+      />
+      <KpiTile
+        testId="dashboard-kpi-products"
+        label="Products in store"
+        value={kpis.products_in_store}
+      />
+      <KpiTile
+        testId="dashboard-kpi-blocked"
+        label="Blocked products"
+        value={kpis.products_blocked}
+        hint="Restricted or banned"
+        tone={blockedTone}
+      />
+    </div>
+  );
+}
+
+function KpiStripSection() {
+  const { currentStoreId } = useStoreContext();
+  const query = useStoreDashboardKpisQuery({ storeId: currentStoreId });
+
+  return (
+    <Card data-testid="dashboard-kpis">
+      <CardHeader>
+        <CardTitle className="text-base">Key metrics</CardTitle>
+        <CardDescription>
+          Live counts pulled from inventory, orders, and product compliance.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {query.isLoading ? (
+          <LoadingState message="Loading metrics…" />
+        ) : query.isError ? (
+          <ErrorState
+            title="Metrics failed to load."
+            message={getApiErrorMessage(query.error)}
+            onRetry={() => query.refetch()}
+          />
+        ) : query.data ? (
+          <KpiStripContent kpis={query.data} />
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+// --------------------------------------------------------------------- //
+// Operational alerts
+// --------------------------------------------------------------------- //
+
+function AlertRow({ alert }: { alert: StoreAlert }) {
+  return (
+    <li
+      className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0"
+      data-testid="dashboard-alert-item"
+    >
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="text-sm font-medium leading-tight">
+          {alert.summary}
+        </p>
+        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          {alert.category.replace(/_/g, " ")}
+        </p>
+      </div>
+      <Badge
+        variant="outline"
+        className={cn(
+          "shrink-0 border-0 text-[11px] font-medium uppercase",
+          SEVERITY_BADGE_CLASS[alert.severity],
+        )}
+      >
+        {alert.severity}
+      </Badge>
+    </li>
+  );
+}
+
+function OperationalAlertsSection() {
+  const { currentStoreId } = useStoreContext();
+  const query = useStoreAlertsQuery({
+    storeId: currentStoreId,
+    limit: 5,
+  });
+
+  const total = query.data?.total ?? 0;
+  return (
+    <Card data-testid="dashboard-alerts">
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div className="space-y-1">
+          <CardTitle className="text-base flex items-center gap-2">
+            <AlertCircle
+              className="h-4 w-4 text-warning"
+              aria-hidden="true"
+            />
+            Operational alerts
+            {total > 0 ? (
+              <Badge
+                variant="secondary"
+                className="ml-1 text-[11px]"
+                data-testid="dashboard-alerts-total"
+              >
+                {total}
+              </Badge>
+            ) : null}
+          </CardTitle>
+          <CardDescription>
+            Low-stock items, aging orders, and store-level issues
+            computed live by the backend.
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {query.isLoading ? (
+          <LoadingState message="Loading alerts…" />
+        ) : query.isError ? (
+          <ErrorState
+            title="Alerts failed to load."
+            message={getApiErrorMessage(query.error)}
+            onRetry={() => query.refetch()}
+          />
+        ) : query.data && query.data.items.length === 0 ? (
+          <EmptyState
+            icon={ShieldCheck}
+            title="No active alerts"
+            message="Nothing requires attention right now."
+          />
+        ) : query.data ? (
+          <ul
+            className="divide-y divide-border"
+            data-testid="dashboard-alerts-list"
+          >
+            {query.data.items.map((alert) => (
+              <AlertRow key={alert.id} alert={alert} />
+            ))}
+          </ul>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+// --------------------------------------------------------------------- //
+// Quick actions
+// --------------------------------------------------------------------- //
+
 function QuickActionTile({ action }: { action: QuickAction }) {
   const Icon = action.icon;
-
   return (
     <Link
       to={action.href}
@@ -243,10 +442,11 @@ function QuickActionsSection() {
   );
 }
 
+// --------------------------------------------------------------------- //
+// Low-stock inventory
+// --------------------------------------------------------------------- //
+
 function depletionPercent(onHand: number, threshold: number): number {
-  // Real data only: clamp the on_hand/threshold ratio to [0, 100].
-  // When threshold is 0 (would be a divide-by-zero) treat the row as
-  // "fully depleted" — the bar fills to 0 % rather than NaN.
   if (threshold <= 0) return 0;
   const ratio = (onHand / threshold) * 100;
   if (Number.isNaN(ratio)) return 0;
@@ -333,8 +533,12 @@ function LowStockInventorySection() {
           </CardDescription>
         </div>
         <Button variant="ghost" size="sm" asChild>
+          {/* The link carries the filter as a URL search param so the
+              inventory page can seed its initial filter state from the
+              URL — clicking "View all" lands the user on a pre-filtered
+              list instead of the unfiltered default. */}
           <Link
-            to="/app/store/inventory"
+            to="/app/store/inventory?low_stock_only=true"
             data-testid="dashboard-low-stock-link"
           >
             View all
@@ -363,6 +567,10 @@ function LowStockInventorySection() {
     </Card>
   );
 }
+
+// --------------------------------------------------------------------- //
+// Orders to review
+// --------------------------------------------------------------------- //
 
 function OrdersToReviewList({ orders }: { orders: OrderRead[] }) {
   return (
@@ -414,10 +622,7 @@ function OrdersToReviewList({ orders }: { orders: OrderRead[] }) {
 }
 
 function OrdersToReviewSection() {
-  const query = useOrdersList({
-    limit: 5,
-    offset: 0,
-  });
+  const query = useOrdersList({ limit: 5, offset: 0 });
 
   return (
     <Card data-testid="dashboard-orders-to-review">
@@ -460,6 +665,10 @@ function OrdersToReviewSection() {
   );
 }
 
+// --------------------------------------------------------------------- //
+// Product review (compliance queue)
+// --------------------------------------------------------------------- //
+
 function ProductReviewList({ products }: { products: Product[] }) {
   return (
     <ul
@@ -498,7 +707,10 @@ function ProductReviewList({ products }: { products: Product[] }) {
 }
 
 function ProductReviewSection() {
-  const query = useProductsQuery({ limit: 5 });
+  // Backend predicate: allowed_for_sale=false OR compliance_status in
+  // {restricted, banned}. Same set the dashboard `products_blocked`
+  // KPI counts, so the widget and the KPI strip never disagree.
+  const query = useProductsQuery({ only_blocked: true, limit: 5 });
 
   return (
     <Card data-testid="dashboard-product-review">
@@ -531,7 +743,7 @@ function ProductReviewSection() {
           <EmptyState
             icon={PackageSearch}
             title="No product review items"
-            message="No product review items returned by the current filters."
+            message="No products are blocked from sale right now."
           />
         ) : query.data ? (
           <ProductReviewList products={query.data} />
@@ -539,6 +751,20 @@ function ProductReviewSection() {
       </CardContent>
     </Card>
   );
+}
+
+// --------------------------------------------------------------------- //
+// Recent inventory activity
+// --------------------------------------------------------------------- //
+
+function actorLabel(actorId: string | null): string {
+  // `performed_by_user_id` is the only actor field on the wire (no
+  // user-name resolution endpoint is consumed here). Show a short id
+  // prefix when an actor is present so the operator can cross-reference
+  // the audit page, and "SYSTEM" when null (movement happened with no
+  // bound user — e.g. soft-deleted actor or background process).
+  if (actorId === null || actorId.length === 0) return "SYSTEM";
+  return actorId.slice(0, 8);
 }
 
 function RecentInventoryActivityList({
@@ -551,7 +777,6 @@ function RecentInventoryActivityList({
       className="relative space-y-3 pl-5"
       data-testid="dashboard-inventory-activity-list"
     >
-      {/* Vertical guide line — decorative, ignored by AT. */}
       <span
         aria-hidden="true"
         className="pointer-events-none absolute left-[5px] top-2 bottom-2 w-px bg-border"
@@ -573,8 +798,16 @@ function RecentInventoryActivityList({
             <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
               {log.movement_type}
             </p>
-            <p className="text-xs text-muted-foreground">
-              {log.created_at}
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <UserIcon className="h-3 w-3" aria-hidden="true" />
+              <span
+                className="font-mono"
+                data-testid="dashboard-inventory-activity-actor"
+              >
+                {actorLabel(log.performed_by_user_id)}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>{log.created_at}</span>
             </p>
             {log.reason ? (
               <p className="truncate text-xs text-muted-foreground">
@@ -632,7 +865,7 @@ function RecentInventoryActivitySection() {
           />
         ) : query.data && query.data.length === 0 ? (
           <EmptyState
-            icon={ListChecks}
+            icon={Inbox}
             title="No inventory activity"
             message="No inventory activity returned yet."
           />
@@ -644,56 +877,18 @@ function RecentInventoryActivitySection() {
   );
 }
 
-function BackendRequiredSection() {
-  return (
-    <Card data-testid="dashboard-backend-summary">
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <Server
-            className="h-4 w-4 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <CardTitle className="text-base">
-            Dashboard summaries require backend support
-          </CardTitle>
-        </div>
-        <CardDescription>
-          The widgets above use real list endpoints (inventory, orders,
-          products, inventory activity). Aggregate KPIs and store-wide
-          summaries need backend endpoints that do not exist yet — the
-          frontend does not simulate them.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <Alert>
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-          <AlertTitle>Dashboard summaries require backend support.</AlertTitle>
-          <AlertDescription>
-            No KPIs are simulated in the frontend.
-          </AlertDescription>
-        </Alert>
-        <div className="space-y-2">
-          <h4 className="text-sm font-semibold">Future backend endpoints</h4>
-          <ul
-            className="list-disc space-y-1 pl-5 text-sm text-muted-foreground"
-            data-testid="dashboard-future-endpoints"
-          >
-            {FUTURE_ENDPOINTS.map((endpoint) => (
-              <li key={endpoint}>
-                <code className="font-mono text-xs">{endpoint}</code>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+// --------------------------------------------------------------------- //
+// Page
+// --------------------------------------------------------------------- //
 
 export default function DashboardHomePage() {
   return (
     <div className="px-4 py-5 md:px-8 md:py-7 max-w-[1320px] mx-auto w-full space-y-5 md:space-y-6">
       <PageHeader />
+
+      <KpiStripSection />
+
+      <OperationalAlertsSection />
 
       <QuickActionsSection />
 
@@ -706,8 +901,6 @@ export default function DashboardHomePage() {
 
         <RecentInventoryActivitySection />
       </div>
-
-      <BackendRequiredSection />
     </div>
   );
 }

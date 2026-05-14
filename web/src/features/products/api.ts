@@ -68,6 +68,13 @@ export interface ProductListFilters {
    * frontend never re-derives this rule.
    */
   only_sellable?: boolean;
+  /**
+   * If true, returns products in the compliance review queue —
+   * `allowed_for_sale === false` OR `compliance_status` in
+   * `{restricted, banned}`. Server-evaluated; mirrors the
+   * `/stores/{store_id}/products/summary` blocked predicate.
+   */
+  only_blocked?: boolean;
   /** Optional compliance filter. */
   compliance_status?: ProductComplianceStatus;
   /** Optional category filter. Backend bound: max 100 chars. */
@@ -99,6 +106,9 @@ export function listProducts(
   }
   if (filters.only_sellable !== undefined) {
     query.set("only_sellable", String(filters.only_sellable));
+  }
+  if (filters.only_blocked !== undefined) {
+    query.set("only_blocked", String(filters.only_blocked));
   }
   if (filters.compliance_status !== undefined) {
     query.set("compliance_status", filters.compliance_status);
