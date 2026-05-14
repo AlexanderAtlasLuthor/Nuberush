@@ -166,6 +166,10 @@ function CreateProductModal({
               The backend validates the combination and stores the product;
               the UI does not enforce business rules. Variants are created
               separately from the product detail page.
+              {" "}
+              If you are not an admin, the product is submitted as a
+              pending proposal and a platform admin must approve it before
+              it becomes visible to other stores or sellable.
             </DialogDescription>
           </DialogHeader>
 

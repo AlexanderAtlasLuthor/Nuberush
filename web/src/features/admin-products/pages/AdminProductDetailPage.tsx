@@ -49,6 +49,8 @@ import { ProductDetailHeader } from "@/features/products/components/ProductDetai
 import { ProductVariantsTable } from "@/features/products/components/ProductVariantsTable";
 import { useProductQuery } from "@/features/products/hooks";
 
+import { AdminProductApprovalPanel } from "../components/AdminProductApprovalPanel";
+
 const EM_DASH = "—";
 
 function PageHeader({ productId }: { productId: string }) {
@@ -150,6 +152,7 @@ export default function AdminProductDetailPage() {
     >
       <PageHeader productId={productId} />
       <ProductDetailHeader product={product} />
+      <AdminProductApprovalPanel product={product} />
       <ProductActionsBar product={product} />
       <ProductCompliancePanel product={product} />
       <ProductVariantsTable productId={product.id} />

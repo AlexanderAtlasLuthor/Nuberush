@@ -31,11 +31,14 @@ from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryStatus
 from app.db.models import Product
+from app.db.models import ProductApprovalStatus
 from app.db.models import ProductComplianceAuditLog
 from app.db.models import ProductVariant
 from app.db.models import User
+from app.db.models import UserRole
 from app.schemas.products import ProductComplianceUpdate
 from app.schemas.products import ProductCreate
+from app.schemas.products import ProductReject
 from app.schemas.products import ProductUpdate
 from app.schemas.products import VariantCreate
 from app.schemas.products import VariantUpdate
@@ -78,8 +81,63 @@ def _variant_unique_violation(exc: IntegrityError) -> HTTPException:
 # --------------------------------------------------------------------- #
 
 
-def create_product(db: Session, payload: ProductCreate) -> Product:
-    product = Product(**payload.model_dump())
+def create_product(
+    db: Session,
+    payload: ProductCreate,
+    *,
+    actor: User,
+) -> Product:
+    """Create a product, branching on the actor's role.
+
+    - Admin → goes straight into the catalog as `approved` with the
+      actor recorded as the reviewer (so admin-curated rows aren't
+      visually distinguishable from a proposal that the same admin
+      approved).
+    - Manager / owner → inserted as `pending` and tied to the actor's
+      store via `proposed_by_*`. Compliance fields are forced to the
+      conservative `allowed` / `allowed_for_sale=True` defaults
+      because store users are not authoritative on compliance; the
+      admin sets the final compliance state at approval time via
+      the existing compliance flow.
+
+    Callers other than admin/manager/owner are rejected by the route
+    via `require_manager_or_above`; we still re-validate role here
+    so service-level callers cannot bypass the rule.
+    """
+    fields = payload.model_dump()
+    now = datetime.now(UTC)
+
+    if actor.role == UserRole.admin:
+        fields["approval_status"] = ProductApprovalStatus.approved
+        fields["reviewed_by_user_id"] = actor.id
+        fields["reviewed_at"] = now
+    elif actor.role in (UserRole.owner, UserRole.manager):
+        if actor.store_id is None:
+            # Defensive: the data model says non-admin users have a
+            # store_id. If that invariant is ever broken, surface it
+            # as 422 instead of writing a half-formed proposal.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Store users must be bound to a store to propose "
+                    "products."
+                ),
+            )
+        fields["approval_status"] = ProductApprovalStatus.pending
+        fields["proposed_by_store_id"] = actor.store_id
+        fields["proposed_by_user_id"] = actor.id
+        # Store-proposed rows always land with conservative compliance
+        # defaults; admin is the source of truth on compliance and
+        # decides the final state at approval time.
+        fields["compliance_status"] = ComplianceStatus.allowed
+        fields["allowed_for_sale"] = True
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient privileges to create products.",
+        )
+
+    product = Product(**fields)
     db.add(product)
     try:
         db.commit()
@@ -110,29 +168,62 @@ def get_product(db: Session, product_id: UUID) -> Product:
 def list_products(
     db: Session,
     *,
+    actor: User,
     only_active: bool = False,
     only_sellable: bool = False,
     compliance_status: ComplianceStatus | None = None,
+    approval_status: ProductApprovalStatus | None = None,
     category: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[Product]:
     """List products. `only_sellable` filters with the canonical rule
-    so callers don't have to combine three boolean flags themselves.
+    so callers don't have to combine the booleans themselves.
+
+    Approval-status visibility (server-enforced):
+
+    - Admin sees every row. If `approval_status` is set, the filter
+      applies as-is.
+    - Non-admin sees `approved` rows AND their own store's `pending`
+      proposals. Rejected rows are visible to the proposing store too
+      (so they can see why) but not to other stores. The optional
+      `approval_status` query narrows further within that visibility
+      window; passing `approval_status=approved` from a store call is
+      effectively a no-op since the union already includes them.
     """
     stmt = select(Product)
     if only_active:
         stmt = stmt.where(Product.is_active.is_(True))
     if only_sellable:
+        # Mirror assert_product_sellable: only approved + compliant +
+        # active + allowed rows are sellable.
         stmt = stmt.where(
             Product.is_active.is_(True),
             Product.allowed_for_sale.is_(True),
             Product.compliance_status == ComplianceStatus.allowed,
+            Product.approval_status == ProductApprovalStatus.approved,
         )
     if compliance_status is not None:
         stmt = stmt.where(Product.compliance_status == compliance_status)
     if category is not None:
         stmt = stmt.where(Product.category == category)
+
+    if actor.role == UserRole.admin:
+        if approval_status is not None:
+            stmt = stmt.where(Product.approval_status == approval_status)
+    else:
+        visibility = Product.approval_status == ProductApprovalStatus.approved
+        if actor.store_id is not None:
+            from sqlalchemy import or_
+
+            visibility = or_(
+                visibility,
+                Product.proposed_by_store_id == actor.store_id,
+            )
+        stmt = stmt.where(visibility)
+        if approval_status is not None:
+            stmt = stmt.where(Product.approval_status == approval_status)
+
     stmt = stmt.order_by(Product.created_at.desc()).limit(limit).offset(offset)
     return list(db.scalars(stmt).all())
 
@@ -281,6 +372,10 @@ def assert_product_sellable(product: Product) -> None:
 
     Raises HTTPException(422) listing the failing flags so the caller
     knows exactly why a sale path is blocked.
+
+    A product must clear BOTH the compliance gate (compliance_status,
+    allowed_for_sale, is_active) AND the approval gate
+    (approval_status == approved) to sell.
     """
     reasons: list[str] = []
     if product.compliance_status != ComplianceStatus.allowed:
@@ -291,12 +386,87 @@ def assert_product_sellable(product: Product) -> None:
         reasons.append("allowed_for_sale is false")
     if not product.is_active:
         reasons.append("is_active is false")
+    if product.approval_status != ProductApprovalStatus.approved:
+        reasons.append(
+            f"approval_status is '{product.approval_status.value}'"
+        )
 
     if reasons:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Product is not sellable: " + ", ".join(reasons) + ".",
         )
+
+
+# --------------------------------------------------------------------- #
+# Approval workflow (admin-only)
+# --------------------------------------------------------------------- #
+
+
+def approve_product(
+    db: Session,
+    product_id: UUID,
+    *,
+    actor: User,
+) -> Product:
+    """Mark a product as approved. Admin-only at the service layer.
+
+    Idempotent on already-approved rows — re-approving a row simply
+    refreshes the reviewer / timestamp. Approving a previously-rejected
+    row clears the rejection_reason so the row obeys the
+    `ck_products_rejected_iff_reason` constraint and so stale rejection
+    text never lingers on a now-curated product.
+    """
+    if actor.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required.",
+        )
+    product = get_product(db, product_id)
+    product.approval_status = ProductApprovalStatus.approved
+    product.reviewed_by_user_id = actor.id
+    product.reviewed_at = datetime.now(UTC)
+    product.rejection_reason = None
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Approval violates database constraints.",
+        ) from exc
+    db.refresh(product)
+    return product
+
+
+def reject_product(
+    db: Session,
+    product_id: UUID,
+    payload: ProductReject,
+    *,
+    actor: User,
+) -> Product:
+    """Mark a product as rejected with a required reason. Admin-only."""
+    if actor.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required.",
+        )
+    product = get_product(db, product_id)
+    product.approval_status = ProductApprovalStatus.rejected
+    product.reviewed_by_user_id = actor.id
+    product.reviewed_at = datetime.now(UTC)
+    product.rejection_reason = payload.reason
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Rejection violates database constraints.",
+        ) from exc
+    db.refresh(product)
+    return product
 
 
 def write_compliance_audit_log(

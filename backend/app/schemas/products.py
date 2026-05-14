@@ -30,6 +30,7 @@ from pydantic import field_validator
 from pydantic import model_validator
 
 from app.db.models import ComplianceStatus
+from app.db.models import ProductApprovalStatus
 
 
 # --------------------------------------------------------------------- #
@@ -165,7 +166,14 @@ class ProductComplianceUpdate(BaseModel):
 
 
 class ProductRead(BaseModel):
-    """Response shape for any endpoint returning a product."""
+    """Response shape for any endpoint returning a product.
+
+    Approval fields surface the proposal/review workflow alongside the
+    existing compliance fields. The two gates are independent:
+    `approval_status` tracks whether the catalog row is curated;
+    `compliance_status` tracks regulatory state. A product must be
+    approved AND compliant AND active AND allowed_for_sale to sell.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -180,8 +188,29 @@ class ProductRead(BaseModel):
     hold_reason: str | None
     jurisdiction: str
     last_compliance_check: datetime | None
+    approval_status: ProductApprovalStatus
+    proposed_by_store_id: UUID | None
+    proposed_by_user_id: UUID | None
+    reviewed_by_user_id: UUID | None
+    reviewed_at: datetime | None
+    rejection_reason: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ProductReject(BaseModel):
+    """Payload accepted by POST /products/{id}/reject.
+
+    `reason` is required and stored verbatim on the product so the
+    proposing store can see why their submission was declined.
+    """
+
+    reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def _strip_reason(cls, value: str) -> str:
+        return _strip_required(value)
 
 
 # --------------------------------------------------------------------- #

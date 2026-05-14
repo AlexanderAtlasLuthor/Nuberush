@@ -1,9 +1,16 @@
 // F2.20.5: real Admin Products oversight page over the F2.20.1 backend.
 //
 // Mounted at /app/admin/products. Replaces the F2.17/F2.18 placeholder
-// with a real, contract-bound READ-ONLY admin products surface. Per
-// F2.20.0 §6 the page renders backend-served products only — the
-// frontend never derives compliance state, never invents rows.
+// with a real, contract-bound admin products surface. Per F2.20.0 §6
+// the page renders backend-served products only — the frontend never
+// derives compliance state, never invents rows.
+//
+// Create flow: the "Create product" button mounts the shared
+// ProductFormModal (canonical create UX, lives in features/products).
+// POST /products is admin-only on the backend (require_admin) so the
+// authoritative gate stays server-side; the affordance lives here
+// because only the admin surface is reachable by an admin in normal
+// navigation.
 //
 // Wiring:
 //   useAdminProductsQuery(filters)
@@ -11,23 +18,22 @@
 //     -> AdminProductsTable    (rows + drill-down to /app/admin/products/:id)
 //     -> PaginationBar         (offset/limit over response.total)
 //
-// Architecture rules in force here (mirroring AdminOperationsPage /
-// AdminDashboardPage):
+// Architecture rules in force here:
 //   - No fetch, no apiRequest, no axios, no business logic.
 //   - No useAuth, no currentUser inspection, no role-based gating.
 //     Backend is the security authority; non-admin callers get an
 //     ApiError(403) which surfaces in the error state.
 //   - No useStoreContext — Product is global per F2.20.0 §4; store-
 //     specific availability lives on InventoryItem.
-//   - No useMutation here — mutations live on the detail page via
-//     the existing canonical components.
+//   - Edit / compliance / variant mutations stay on the detail page.
 //   - No client-side compliance / queue generation.
 //   - No fake rows, no placeholder data.
-//   - No product media, reporting/export, or admin settings work.
 
 import { useCallback, useState } from "react";
+import { Plus, ShoppingBag } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ProductFormModal } from "@/features/products/components/ProductFormModal";
 
 import { useAdminProductsQuery } from "../hooks";
 import type { AdminProductsFilters as AdminProductsFiltersValue } from "../types";
@@ -37,7 +43,6 @@ import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { LoadingState } from "@/components/common/loading-state";
 import { getApiErrorMessage } from "@/api";
-import { ShoppingBag } from "lucide-react";
 
 const DEFAULT_LIMIT = 50;
 
@@ -106,24 +111,40 @@ function PaginationBar({
   );
 }
 
-function PageHeader({ total }: { total: number | null }) {
+function PageHeader({
+  total,
+  onCreate,
+}: {
+  total: number | null;
+  onCreate: () => void;
+}) {
   return (
-    <header>
-      <h1 className="text-xl font-semibold">Admin Products</h1>
-      <p className="text-sm text-muted-foreground">
-        Global product oversight. Read-only platform view of every
-        product across the catalog, regardless of store. Compliance
-        review and product edits happen on the per-product page;
-        store-specific availability lives in inventory, not here.
-      </p>
-      {total !== null ? (
-        <p
-          className="text-sm text-muted-foreground mt-2"
-          data-testid="admin-products-total"
-        >
-          {total === 1 ? "1 product" : `${total} products`}
+    <header className="flex items-start justify-between gap-4">
+      <div>
+        <h1 className="text-xl font-semibold">Admin Products</h1>
+        <p className="text-sm text-muted-foreground">
+          Global product oversight. Platform view of every product across
+          the catalog, regardless of store. Compliance review and product
+          edits happen on the per-product page; store-specific
+          availability lives in inventory, not here.
         </p>
-      ) : null}
+        {total !== null ? (
+          <p
+            className="text-sm text-muted-foreground mt-2"
+            data-testid="admin-products-total"
+          >
+            {total === 1 ? "1 product" : `${total} products`}
+          </p>
+        ) : null}
+      </div>
+      <Button
+        size="sm"
+        onClick={onCreate}
+        data-testid="admin-products-create-button"
+      >
+        <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
+        Create product
+      </Button>
     </header>
   );
 }
@@ -131,6 +152,7 @@ function PageHeader({ total }: { total: number | null }) {
 export default function AdminProductsPage() {
   const [filters, setFilters] =
     useState<AdminProductsFiltersValue>(DEFAULT_FILTERS);
+  const [openCreate, setOpenCreate] = useState(false);
 
   const query = useAdminProductsQuery(filters);
 
@@ -169,7 +191,10 @@ export default function AdminProductsPage() {
       className="p-6 md:p-8 space-y-6 max-w-7xl"
       data-testid="admin-products-page"
     >
-      <PageHeader total={query.isSuccess ? total : null} />
+      <PageHeader
+        total={query.isSuccess ? total : null}
+        onCreate={() => setOpenCreate(true)}
+      />
 
       <AdminProductsFilters
         filters={filters}
@@ -206,6 +231,14 @@ export default function AdminProductsPage() {
           itemsLength={items.length}
           onPrev={handlePrev}
           onNext={handleNext}
+        />
+      ) : null}
+
+      {openCreate ? (
+        <ProductFormModal
+          mode="create"
+          open={openCreate}
+          onOpenChange={setOpenCreate}
         />
       ) : null}
     </div>

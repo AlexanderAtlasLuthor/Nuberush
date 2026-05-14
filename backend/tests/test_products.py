@@ -155,6 +155,12 @@ class TestProductReadAccess:
             "hold_reason",
             "jurisdiction",
             "last_compliance_check",
+            "approval_status",
+            "proposed_by_store_id",
+            "proposed_by_user_id",
+            "reviewed_by_user_id",
+            "reviewed_at",
+            "rejection_reason",
             "created_at",
             "updated_at",
         }
@@ -195,21 +201,63 @@ class TestProductCreate:
         assert body["compliance_status"] == "allowed"
         assert body["allowed_for_sale"] is True
         assert body["is_active"] is True
+        # Admin-created rows are approved immediately and record the
+        # admin as the reviewer (so the audit field is never empty for
+        # rows that bypass the proposal queue).
+        assert body["approval_status"] == "approved"
+        assert body["reviewed_by_user_id"] == str(admin.id)
+        assert body["reviewed_at"] is not None
+        assert body["proposed_by_store_id"] is None
+        assert body["proposed_by_user_id"] is None
 
     def test_anonymous_returns_401(self, client: TestClient):
         resp = client.post("/products", json=_product_payload())
         assert resp.status_code == 401
 
+    @pytest.mark.parametrize("role", [UserRole.owner, UserRole.manager])
+    def test_manager_or_owner_creates_pending_proposal(
+        self, client: TestClient, make_user, role: UserRole
+    ):
+        user = make_user(role)
+        resp = client.post(
+            "/products",
+            json=_product_payload(),
+            headers=_auth(user),
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["approval_status"] == "pending"
+        assert body["proposed_by_store_id"] == str(user.store_id)
+        assert body["proposed_by_user_id"] == str(user.id)
+        assert body["reviewed_by_user_id"] is None
+        assert body["reviewed_at"] is None
+        assert body["rejection_reason"] is None
+        # Store-proposed rows always land with conservative compliance
+        # defaults regardless of what the client tried to send.
+        assert body["compliance_status"] == "allowed"
+        assert body["allowed_for_sale"] is True
+
+    def test_store_proposal_ignores_client_compliance_overrides(
+        self, client: TestClient, make_user
+    ):
+        manager = make_user(UserRole.manager)
+        resp = client.post(
+            "/products",
+            json=_product_payload(
+                compliance_status="restricted", allowed_for_sale=False
+            ),
+            headers=_auth(manager),
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["compliance_status"] == "allowed"
+        assert body["allowed_for_sale"] is True
+
     @pytest.mark.parametrize(
         "role",
-        [
-            UserRole.owner,
-            UserRole.manager,
-            UserRole.staff,
-            UserRole.driver,
-        ],
+        [UserRole.staff, UserRole.driver],
     )
-    def test_non_admin_blocked(
+    def test_staff_and_driver_still_blocked(
         self, client: TestClient, make_user, role: UserRole
     ):
         user = make_user(role)
@@ -794,3 +842,221 @@ class TestProductSellability:
         )
         assert resp.status_code == 422
         assert "allowed_for_sale" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Approval workflow — admin approves / rejects store-proposed products
+# ---------------------------------------------------------------------------
+
+
+def _propose_product(client: TestClient, proposer: User) -> dict:
+    """Helper: store-side POST that returns the response body."""
+    resp = client.post(
+        "/products",
+        json=_product_payload(name=f"Proposal-{uuid.uuid4().hex[:6]}"),
+        headers=_auth(proposer),
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+class TestProductApprovalActions:
+    def test_admin_approves_pending_product(
+        self, client: TestClient, make_user
+    ):
+        manager = make_user(UserRole.manager)
+        admin = make_user(UserRole.admin)
+        proposal = _propose_product(client, manager)
+        assert proposal["approval_status"] == "pending"
+
+        resp = client.post(
+            f"/products/{proposal['id']}/approve",
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["approval_status"] == "approved"
+        assert body["reviewed_by_user_id"] == str(admin.id)
+        assert body["reviewed_at"] is not None
+        assert body["rejection_reason"] is None
+
+    def test_admin_rejects_with_reason(
+        self, client: TestClient, make_user
+    ):
+        owner = make_user(UserRole.owner)
+        admin = make_user(UserRole.admin)
+        proposal = _propose_product(client, owner)
+
+        resp = client.post(
+            f"/products/{proposal['id']}/reject",
+            json={"reason": "Duplicate of existing SKU family"},
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["approval_status"] == "rejected"
+        assert body["rejection_reason"] == "Duplicate of existing SKU family"
+        assert body["reviewed_by_user_id"] == str(admin.id)
+
+    def test_rejection_requires_reason(
+        self, client: TestClient, make_user
+    ):
+        manager = make_user(UserRole.manager)
+        admin = make_user(UserRole.admin)
+        proposal = _propose_product(client, manager)
+
+        resp = client.post(
+            f"/products/{proposal['id']}/reject",
+            json={"reason": "   "},
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 422
+
+    def test_re_approving_rejected_clears_reason(
+        self, client: TestClient, make_user
+    ):
+        manager = make_user(UserRole.manager)
+        admin = make_user(UserRole.admin)
+        proposal = _propose_product(client, manager)
+        client.post(
+            f"/products/{proposal['id']}/reject",
+            json={"reason": "Too risky for now"},
+            headers=_auth(admin),
+        )
+
+        resp = client.post(
+            f"/products/{proposal['id']}/approve",
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["rejection_reason"] is None
+        assert resp.json()["approval_status"] == "approved"
+
+    @pytest.mark.parametrize(
+        "role",
+        [
+            UserRole.owner,
+            UserRole.manager,
+            UserRole.staff,
+            UserRole.driver,
+        ],
+    )
+    def test_non_admin_cannot_approve(
+        self, client: TestClient, make_user, role: UserRole
+    ):
+        manager = make_user(UserRole.manager)
+        proposal = _propose_product(client, manager)
+        actor = make_user(role)
+        resp = client.post(
+            f"/products/{proposal['id']}/approve",
+            headers=_auth(actor),
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.parametrize(
+        "role",
+        [
+            UserRole.owner,
+            UserRole.manager,
+            UserRole.staff,
+            UserRole.driver,
+        ],
+    )
+    def test_non_admin_cannot_reject(
+        self, client: TestClient, make_user, role: UserRole
+    ):
+        manager = make_user(UserRole.manager)
+        proposal = _propose_product(client, manager)
+        actor = make_user(role)
+        resp = client.post(
+            f"/products/{proposal['id']}/reject",
+            json={"reason": "nope"},
+            headers=_auth(actor),
+        )
+        assert resp.status_code == 403
+
+    def test_approve_unknown_product_is_404(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(UserRole.admin)
+        resp = client.post(
+            f"/products/{uuid.uuid4()}/approve",
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 404
+
+
+class TestProductListVisibility:
+    """Pending proposals are scoped per-store; admin sees everything."""
+
+    def test_other_stores_do_not_see_my_pending_proposal(
+        self, client: TestClient, make_user, db_session
+    ):
+        store_a_manager = make_user(UserRole.manager)
+        _propose_product(client, store_a_manager)
+
+        store_b_manager = make_user(UserRole.manager)
+        resp = client.get("/products", headers=_auth(store_b_manager))
+        assert resp.status_code == 200
+        items = resp.json()
+        # Store B sees no items because only one product exists and it
+        # belongs to store A's pending queue.
+        assert all(p["approval_status"] == "approved" for p in items)
+        assert all(
+            p["proposed_by_store_id"] != str(store_a_manager.store_id)
+            for p in items
+        )
+
+    def test_owner_sees_own_store_pending(
+        self, client: TestClient, make_user
+    ):
+        manager = make_user(UserRole.manager)
+        proposal = _propose_product(client, manager)
+
+        resp = client.get("/products", headers=_auth(manager))
+        assert resp.status_code == 200
+        ids = [p["id"] for p in resp.json()]
+        assert proposal["id"] in ids
+
+    def test_admin_sees_all_pending(
+        self, client: TestClient, make_user
+    ):
+        manager = make_user(UserRole.manager)
+        _propose_product(client, manager)
+
+        admin = make_user(UserRole.admin)
+        resp = client.get(
+            "/products?approval_status=pending",
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 200
+        items = resp.json()
+        assert len(items) >= 1
+        assert all(p["approval_status"] == "pending" for p in items)
+
+    def test_pending_product_is_not_sellable(
+        self, client: TestClient, make_user
+    ):
+        manager = make_user(UserRole.manager)
+        proposal = _propose_product(client, manager)
+        resp = client.get(
+            f"/products/{proposal['id']}/sellable",
+            headers=_auth(manager),
+        )
+        assert resp.status_code == 422
+        assert "approval_status" in resp.json()["detail"]
+
+    def test_only_sellable_excludes_pending(
+        self, client: TestClient, make_user
+    ):
+        manager = make_user(UserRole.manager)
+        _propose_product(client, manager)
+
+        resp = client.get(
+            "/products?only_sellable=true",
+            headers=_auth(manager),
+        )
+        assert resp.status_code == 200
+        statuses = {p["approval_status"] for p in resp.json()}
+        assert "pending" not in statuses
+        assert "rejected" not in statuses

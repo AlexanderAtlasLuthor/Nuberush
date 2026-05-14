@@ -87,6 +87,12 @@ _PRODUCT_ITEM_KEYS = {
     "hold_reason",
     "jurisdiction",
     "last_compliance_check",
+    "approval_status",
+    "proposed_by_store_id",
+    "proposed_by_user_id",
+    "reviewed_by_user_id",
+    "reviewed_at",
+    "rejection_reason",
     "created_at",
     "updated_at",
 }

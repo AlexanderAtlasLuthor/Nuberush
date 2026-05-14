@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ComplianceStatus
 from app.db.models import Product
+from app.db.models import ProductApprovalStatus
 from app.db.models import User
 from app.db.models import UserRole
 from app.schemas.admin_products import AdminProductsListResponse
@@ -72,6 +73,7 @@ def list_admin_products(
     offset: int = 0,
     q: str | None = None,
     compliance_status: ComplianceStatus | None = None,
+    approval_status: ProductApprovalStatus | None = None,
     allowed_for_sale: bool | None = None,
     is_active: bool | None = None,
     category: str | None = None,
@@ -114,6 +116,12 @@ def list_admin_products(
         stmt = stmt.where(Product.compliance_status == compliance_status)
         count_stmt = count_stmt.where(
             Product.compliance_status == compliance_status
+        )
+
+    if approval_status is not None:
+        stmt = stmt.where(Product.approval_status == approval_status)
+        count_stmt = count_stmt.where(
+            Product.approval_status == approval_status
         )
 
     if allowed_for_sale is not None:

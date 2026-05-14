@@ -18,6 +18,7 @@
 
 import type {
   Product,
+  ProductApprovalStatus,
   ProductComplianceAuditLog,
   ProductComplianceStatus,
   ProductVariant,
@@ -27,6 +28,7 @@ import type {
 // have to reach into the products feature directly.
 export type {
   Product,
+  ProductApprovalStatus,
   ProductComplianceAuditLog,
   ProductComplianceStatus,
   ProductVariant,
@@ -53,6 +55,8 @@ export interface AdminProductsFilters {
   /** Free-text search across name / brand / category / description. */
   q?: string;
   compliance_status?: ProductComplianceStatus;
+  /** Optional approval-workflow filter. Admin can isolate the pending queue. */
+  approval_status?: ProductApprovalStatus;
   allowed_for_sale?: boolean;
   is_active?: boolean;
   /** Optional category filter. Backend match is case-insensitive. */

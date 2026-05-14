@@ -61,6 +61,20 @@ class ComplianceStatus(str, enum.Enum):
     banned = "banned"
 
 
+class ProductApprovalStatus(str, enum.Enum):
+    """Catalog-curation gate for product rows.
+
+    Pending → store-proposed; not visible to other stores, not sellable.
+    Approved → curated by an admin (or admin-created); behaves as a normal
+    catalog row (still subject to the separate compliance gate).
+    Rejected → admin declined the proposal; rejection_reason is set.
+    """
+
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+
+
 class InventoryStatus(str, enum.Enum):
     available = "available"
     reserved = "reserved"
@@ -170,10 +184,22 @@ class Product(Base):
             "compliance_status != 'banned' OR allowed_for_sale = false",
             name="ck_products_banned_implies_not_allowed_for_sale",
         ),
+        # rejected ⇔ rejection_reason set. Pending / approved must have
+        # rejection_reason NULL so a row never carries a stale reason
+        # after an admin re-approves a previously-rejected proposal.
+        CheckConstraint(
+            "(approval_status = 'rejected') = (rejection_reason IS NOT NULL)",
+            name="ck_products_rejected_iff_reason",
+        ),
         Index("ix_products_category", "category"),
         Index("ix_products_allowed_for_sale", "allowed_for_sale"),
         Index("ix_products_compliance_status", "compliance_status"),
         Index("ix_products_is_active", "is_active"),
+        Index("ix_products_approval_status", "approval_status"),
+        Index(
+            "ix_products_proposed_by_store_id",
+            "proposed_by_store_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -197,6 +223,31 @@ class Product(Base):
     hold_reason: Mapped[str | None] = mapped_column(Text)
     jurisdiction: Mapped[str] = mapped_column(String(50), server_default=text("'FL'"), nullable=False)
     last_compliance_check: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Catalog approval workflow. Admin-created rows start `approved`;
+    # store-proposed rows start `pending` and become `approved` /
+    # `rejected` after admin review. Existing rows are backfilled to
+    # `approved` by the migration so the catalog stays unchanged.
+    approval_status: Mapped[ProductApprovalStatus] = mapped_column(
+        Enum(ProductApprovalStatus, name="product_approval_status"),
+        server_default=text("'approved'"),
+        nullable=False,
+    )
+    proposed_by_store_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="SET NULL"),
+    )
+    proposed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = timestamp_created_at()
     updated_at: Mapped[datetime] = timestamp_updated_at()
 

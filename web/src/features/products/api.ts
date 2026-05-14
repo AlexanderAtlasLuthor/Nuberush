@@ -47,6 +47,7 @@ import type {
   Product,
   ProductComplianceAuditLog,
   ProductComplianceStatus,
+  ProductApprovalStatus,
   ProductComplianceUpdateRequest,
   ProductCreateRequest,
   ProductUpdateRequest,
@@ -70,6 +71,12 @@ export interface ProductListFilters {
   only_sellable?: boolean;
   /** Optional compliance filter. */
   compliance_status?: ProductComplianceStatus;
+  /**
+   * Optional approval filter. For non-admin callers the backend
+   * already restricts visibility to approved rows + the caller's own
+   * store's proposals; this narrows further inside that window.
+   */
+  approval_status?: ProductApprovalStatus;
   /** Optional category filter. Backend bound: max 100 chars. */
   category?: string;
   /** Page size. Backend bounds: 1 <= limit <= 500 (default 100 server-side). */
@@ -102,6 +109,9 @@ export function listProducts(
   }
   if (filters.compliance_status !== undefined) {
     query.set("compliance_status", filters.compliance_status);
+  }
+  if (filters.approval_status !== undefined) {
+    query.set("approval_status", filters.approval_status);
   }
   if (filters.category !== undefined) {
     query.set("category", filters.category);
@@ -228,14 +238,77 @@ export interface CreateProductParams {
 /**
  * POST /products
  *
- * Admin-only. Returns the persisted `Product` (201 Created) including
- * server-generated id and timestamps.
+ * Manager-or-above. Returns the persisted `Product` (201 Created)
+ * including server-generated id and timestamps.
+ *
+ * Role-dependent server behaviour (see backend
+ * `services.products.create_product`):
+ *   - admin               → row is approved immediately
+ *   - owner / manager     → row is pending; admin reviews via the
+ *                           approve/reject endpoints
+ *   - staff / driver      → 403
+ *
+ * For store-side callers the server forces conservative compliance
+ * defaults (allowed + allowed_for_sale=true) regardless of payload.
  */
 export function createProduct(
   params: CreateProductParams,
   signal?: AbortSignal,
 ): Promise<Product> {
   return apiRequest<Product>("/products", {
+    method: "POST",
+    body: params.body,
+    signal,
+  });
+}
+
+// --------------------------------------------------------------------- //
+// Approve / reject (admin) — catalog curation workflow
+// --------------------------------------------------------------------- //
+
+export interface ApproveProductParams {
+  /** Product UUID. */
+  productId: string;
+}
+
+/**
+ * POST /products/{product_id}/approve
+ *
+ * Admin-only. Returns the updated `Product` with
+ * `approval_status === "approved"` and `rejection_reason` cleared
+ * (so re-approving a previously rejected row does not leave stale text).
+ */
+export function approveProduct(
+  params: ApproveProductParams,
+  signal?: AbortSignal,
+): Promise<Product> {
+  const path = `/products/${encodeURIComponent(params.productId)}/approve`;
+  return apiRequest<Product>(path, { method: "POST", signal });
+}
+
+export interface RejectProductParams {
+  /** Product UUID. */
+  productId: string;
+  /**
+   * Validated payload. `reason` is required and stored verbatim on the
+   * product so the proposing store can see why their submission was
+   * declined.
+   */
+  body: { reason: string };
+}
+
+/**
+ * POST /products/{product_id}/reject
+ *
+ * Admin-only. Returns the updated `Product` with
+ * `approval_status === "rejected"` and `rejection_reason` set.
+ */
+export function rejectProduct(
+  params: RejectProductParams,
+  signal?: AbortSignal,
+): Promise<Product> {
+  const path = `/products/${encodeURIComponent(params.productId)}/reject`;
+  return apiRequest<Product>(path, {
     method: "POST",
     body: params.body,
     signal,

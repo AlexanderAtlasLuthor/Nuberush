@@ -23,6 +23,8 @@ export {
   type DeleteVariantMutationVariables,
 } from "./useDeleteVariantMutation";
 export { useUpdateComplianceMutation } from "./useUpdateComplianceMutation";
+export { useApproveProductMutation } from "./useApproveProductMutation";
+export { useRejectProductMutation } from "./useRejectProductMutation";
 
 export {
   productsKeys,

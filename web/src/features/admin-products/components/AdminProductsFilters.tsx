@@ -36,6 +36,7 @@ import {
 
 import type {
   AdminProductsFilters,
+  ProductApprovalStatus,
   ProductComplianceStatus,
 } from "../types";
 
@@ -50,6 +51,15 @@ const COMPLIANCE_OPTIONS: ReadonlyArray<{
   { value: "allowed", label: "Allowed" },
   { value: "restricted", label: "Restricted" },
   { value: "banned", label: "Banned" },
+];
+
+const APPROVAL_OPTIONS: ReadonlyArray<{
+  readonly value: ProductApprovalStatus;
+  readonly label: string;
+}> = [
+  { value: "pending", label: "Pending" },
+  { value: "approved", label: "Approved" },
+  { value: "rejected", label: "Rejected" },
 ];
 
 export interface AdminProductsFiltersProps {
@@ -123,6 +133,16 @@ export function AdminProductsFilters({
     onChange(withOffsetReset(next));
   };
 
+  const handleApprovalStatusChange = (value: string) => {
+    const next: AdminProductsFilters = { ...filters };
+    if (value === ALL) {
+      delete next.approval_status;
+    } else {
+      next.approval_status = value as ProductApprovalStatus;
+    }
+    onChange(withOffsetReset(next));
+  };
+
   const handleAllowedForSaleChange = (value: string) => {
     const next: AdminProductsFilters = { ...filters };
     const parsed = booleanFromSelect(value);
@@ -147,7 +167,7 @@ export function AdminProductsFilters({
 
   return (
     <div
-      className="grid gap-4 md:grid-cols-2 lg:grid-cols-5 md:items-end"
+      className="grid gap-4 md:grid-cols-2 lg:grid-cols-6 md:items-end"
       data-testid="admin-products-filters"
     >
       <div className="space-y-2">
@@ -174,6 +194,30 @@ export function AdminProductsFilters({
           onChange={(e) => handleCategoryChange(e.target.value)}
           data-testid="admin-products-filter-category"
         />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="admin-products-filter-approval">Approval</Label>
+        <Select
+          value={filters.approval_status ?? ALL}
+          disabled={disabled}
+          onValueChange={handleApprovalStatusChange}
+        >
+          <SelectTrigger
+            id="admin-products-filter-approval"
+            data-testid="admin-products-filter-approval-trigger"
+          >
+            <SelectValue placeholder="All approval" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>All approval</SelectItem>
+            {APPROVAL_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="space-y-2">

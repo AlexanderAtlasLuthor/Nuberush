@@ -18,6 +18,7 @@ import { useUpdateVariantMutation } from "../useUpdateVariantMutation";
 import { useDeleteVariantMutation } from "../useDeleteVariantMutation";
 import { useUpdateComplianceMutation } from "../useUpdateComplianceMutation";
 import { productsKeys } from "../queryKeys";
+import { adminProductsQueryKeys } from "@/features/admin-products/hooks";
 import * as productsApi from "../../api";
 
 vi.mock("../../api", () => ({
@@ -92,7 +93,7 @@ describe("useCreateProductMutation", () => {
     });
   });
 
-  it("invalidates lists() and detail(data.id) on success", async () => {
+  it("invalidates store-side lists, the new detail, and the admin-products list on success", async () => {
     vi.mocked(productsApi.createProduct).mockResolvedValue({
       id: NEW_PRODUCT_ID,
     } as never);
@@ -116,7 +117,10 @@ describe("useCreateProductMutation", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: productsKeys.detail(NEW_PRODUCT_ID),
     });
-    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: adminProductsQueryKeys.lists(),
+    });
+    expect(invalidateSpy).toHaveBeenCalledTimes(3);
   });
 });
 

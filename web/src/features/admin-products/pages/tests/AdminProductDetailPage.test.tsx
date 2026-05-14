@@ -32,6 +32,21 @@ import type { Product } from "@/features/products/types";
 
 vi.mock("@/features/products/hooks", () => ({
   useProductQuery: vi.fn(),
+  // AdminProductApprovalPanel is stubbed below; these still need to
+  // exist on the mock so other code paths that import the hooks
+  // barrel (e.g. the panel under test if not stubbed) don't blow up.
+  useApproveProductMutation: vi.fn(() => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  })),
+  useRejectProductMutation: vi.fn(() => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  })),
 }));
 
 // Stub the canonical inner components so the page render is
@@ -112,6 +127,12 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
     hold_reason: null,
     jurisdiction: "FL",
     last_compliance_check: "2026-05-12T08:00:00Z",
+    approval_status: "approved",
+    proposed_by_store_id: null,
+    proposed_by_user_id: null,
+    reviewed_by_user_id: null,
+    reviewed_at: null,
+    rejection_reason: null,
     created_at: "2026-05-10T12:00:00Z",
     updated_at: "2026-05-12T08:00:00Z",
     ...overrides,

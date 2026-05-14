@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.api.deps import require_admin
+from app.api.deps import require_manager_or_above
 from app.db.models import ComplianceStatus
 from app.db.models import Product
+from app.db.models import ProductApprovalStatus
 from app.db.models import ProductComplianceAuditLog
 from app.db.models import User
 from app.db.session import get_db
@@ -19,6 +21,7 @@ from app.schemas.products import ProductComplianceAuditLogRead
 from app.schemas.products import ProductComplianceUpdate
 from app.schemas.products import ProductCreate
 from app.schemas.products import ProductRead
+from app.schemas.products import ProductReject
 from app.schemas.products import ProductUpdate
 from app.schemas.products import VariantCreate
 from app.schemas.products import VariantRead
@@ -39,6 +42,7 @@ def list_products(
     only_active: bool = Query(default=False),
     only_sellable: bool = Query(default=False),
     compliance_status: ComplianceStatus | None = Query(default=None),
+    approval_status: ProductApprovalStatus | None = Query(default=None),
     category: str | None = Query(default=None, max_length=100),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -47,9 +51,11 @@ def list_products(
 ) -> list[Product]:
     return svc.list_products(
         db,
+        actor=current_user,
         only_active=only_active,
         only_sellable=only_sellable,
         compliance_status=compliance_status,
+        approval_status=approval_status,
         category=category,
         limit=limit,
         offset=offset,
@@ -97,7 +103,11 @@ def check_product_sellable(
 
 
 # --------------------------------------------------------------------- #
-# Products — admin only
+# Products — create open to manager-or-above; admin still owns the
+# update / delete paths. The role split lives in services.products.create_product:
+#   - admin     → row is approved on insert
+#   - owner /   → row is pending; admin reviews via /approve or /reject
+#     manager
 # --------------------------------------------------------------------- #
 
 
@@ -108,10 +118,10 @@ def check_product_sellable(
 )
 def create_product(
     payload: ProductCreate,
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
 ) -> Product:
-    return svc.create_product(db, payload)
+    return svc.create_product(db, payload, actor=current_user)
 
 
 @router.patch("/{product_id}", response_model=ProductRead)
@@ -122,6 +132,31 @@ def update_product(
     db: Session = Depends(get_db),
 ) -> Product:
     return svc.update_product(db, product_id, payload)
+
+
+@router.post(
+    "/{product_id}/approve",
+    response_model=ProductRead,
+)
+def approve_product(
+    product_id: UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Product:
+    return svc.approve_product(db, product_id, actor=current_user)
+
+
+@router.post(
+    "/{product_id}/reject",
+    response_model=ProductRead,
+)
+def reject_product(
+    product_id: UUID,
+    payload: ProductReject,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Product:
+    return svc.reject_product(db, product_id, payload, actor=current_user)
 
 
 @router.delete(

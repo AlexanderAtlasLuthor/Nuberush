@@ -41,6 +41,16 @@
  */
 export type ProductComplianceStatus = "allowed" | "restricted" | "banned";
 
+/**
+ * Source: app.db.models.ProductApprovalStatus.
+ *
+ * Catalog-curation gate for store-proposed products. Independent from
+ * `ProductComplianceStatus`: a row needs BOTH gates plus is_active and
+ * allowed_for_sale to be sellable. The frontend never derives the
+ * status — the backend is authoritative.
+ */
+export type ProductApprovalStatus = "pending" | "approved" | "rejected";
+
 // --------------------------------------------------------------------- //
 // Read shapes
 // --------------------------------------------------------------------- //
@@ -93,6 +103,18 @@ export interface Product {
   jurisdiction: string;
   /** ISO-8601 datetime string, or null if compliance has never been checked. */
   last_compliance_check: string | null;
+  /** Catalog curation status — separate from `compliance_status`. */
+  approval_status: ProductApprovalStatus;
+  /** Store that proposed this product (null for admin-created rows). */
+  proposed_by_store_id: string | null;
+  /** User who proposed this product (null for admin-created rows). */
+  proposed_by_user_id: string | null;
+  /** Admin who last approved or rejected; null until reviewed. */
+  reviewed_by_user_id: string | null;
+  /** ISO-8601 timestamp of the last admin review; null until reviewed. */
+  reviewed_at: string | null;
+  /** Free-form reason set when `approval_status === "rejected"`. */
+  rejection_reason: string | null;
   created_at: string;
   updated_at: string;
 }

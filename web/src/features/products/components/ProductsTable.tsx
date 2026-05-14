@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Product } from "../types";
 
+import { ProductApprovalBadge } from "./ProductApprovalBadge";
 import { ProductComplianceBadge } from "./ProductComplianceBadge";
 import { ProductStatusBadge } from "./ProductStatusBadge";
 
@@ -40,6 +41,7 @@ export function ProductsTable({ products }: ProductsTableProps) {
             <TableHead>Name</TableHead>
             <TableHead>Brand</TableHead>
             <TableHead>Category</TableHead>
+            <TableHead>Approval</TableHead>
             <TableHead>Compliance</TableHead>
             <TableHead>Allowed for sale</TableHead>
             <TableHead>Status</TableHead>
@@ -56,6 +58,9 @@ export function ProductsTable({ products }: ProductsTableProps) {
                 {product.brand ?? "—"}
               </TableCell>
               <TableCell className="text-sm">{product.category}</TableCell>
+              <TableCell>
+                <ProductApprovalBadge status={product.approval_status} />
+              </TableCell>
               <TableCell>
                 <ProductComplianceBadge status={product.compliance_status} />
               </TableCell>

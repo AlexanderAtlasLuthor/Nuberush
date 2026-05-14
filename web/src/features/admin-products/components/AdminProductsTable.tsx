@@ -27,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+import { ProductApprovalBadge } from "@/features/products/components/ProductApprovalBadge";
 import { ProductComplianceBadge } from "@/features/products/components/ProductComplianceBadge";
 import type { Product } from "../types";
 
@@ -55,6 +56,7 @@ export function AdminProductsTable({ products }: AdminProductsTableProps) {
             <TableHead>Product</TableHead>
             <TableHead>Brand</TableHead>
             <TableHead>Category</TableHead>
+            <TableHead>Approval</TableHead>
             <TableHead>Compliance</TableHead>
             <TableHead>Allowed for sale</TableHead>
             <TableHead>Active</TableHead>
@@ -78,6 +80,9 @@ export function AdminProductsTable({ products }: AdminProductsTableProps) {
               </TableCell>
               <TableCell data-testid="admin-products-row-category">
                 {product.category}
+              </TableCell>
+              <TableCell data-testid="admin-products-row-approval">
+                <ProductApprovalBadge status={product.approval_status} />
               </TableCell>
               <TableCell data-testid="admin-products-row-compliance">
                 <ProductComplianceBadge

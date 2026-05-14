@@ -65,6 +65,10 @@ function buildQueryString(filters: AdminProductsFilters): string {
     query.set("compliance_status", filters.compliance_status);
   }
 
+  if (filters.approval_status !== undefined) {
+    query.set("approval_status", filters.approval_status);
+  }
+
   // Booleans preserve `false`. We never want to collapse "explicit
   // false filter" into "no filter".
   if (filters.allowed_for_sale !== undefined) {

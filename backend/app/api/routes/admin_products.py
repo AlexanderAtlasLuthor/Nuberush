@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin
 from app.db.models import ComplianceStatus
+from app.db.models import ProductApprovalStatus
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.admin_products import AdminProductsListResponse
@@ -48,6 +49,7 @@ def list_admin_products_endpoint(
     offset: int = Query(default=0, ge=0),
     q: str | None = Query(default=None, max_length=200),
     compliance_status: ComplianceStatus | None = Query(default=None),
+    approval_status: ProductApprovalStatus | None = Query(default=None),
     allowed_for_sale: bool | None = Query(default=None),
     is_active: bool | None = Query(default=None),
     category: str | None = Query(default=None, max_length=100),
@@ -59,6 +61,7 @@ def list_admin_products_endpoint(
         offset=offset,
         q=q,
         compliance_status=compliance_status,
+        approval_status=approval_status,
         allowed_for_sale=allowed_for_sale,
         is_active=is_active,
         category=category,
