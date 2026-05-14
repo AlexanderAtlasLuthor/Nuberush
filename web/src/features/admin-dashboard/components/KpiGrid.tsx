@@ -27,6 +27,7 @@
 
 import {
   Boxes,
+  ClipboardCheck,
   ClipboardList,
   FileWarning,
   Store,
@@ -95,6 +96,14 @@ export function KpiGrid({ summary }: KpiGridProps) {
         icon={FileWarning}
         to="/app/admin/audit"
         data-testid="kpi-compliance-blocked"
+      />
+      <KpiCard
+        title="Pending approvals"
+        value={summary.products.pending_approvals_count}
+        description="Store-proposed products awaiting review"
+        icon={ClipboardCheck}
+        to="/app/admin/products?approval_status=pending"
+        data-testid="kpi-products-pending-approvals"
       />
     </div>
   );

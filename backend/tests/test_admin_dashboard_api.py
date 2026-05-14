@@ -38,6 +38,7 @@ from app.db.models import InventoryStatus
 from app.db.models import Order
 from app.db.models import OrderStatus
 from app.db.models import Product
+from app.db.models import ProductApprovalStatus
 from app.db.models import ProductVariant
 from app.db.models import Store
 from app.db.models import User
@@ -52,6 +53,7 @@ _TOP_LEVEL_KEYS = {
     "inventory",
     "orders",
     "compliance",
+    "products",
     "recent_audit",
 }
 
@@ -60,6 +62,7 @@ _USERS_KEYS = {"total", "active"}
 _INVENTORY_KEYS = {"low_stock_count"}
 _ORDERS_KEYS = {"open_count", "by_status", "recent"}
 _COMPLIANCE_KEYS = {"blocked_count"}
+_PRODUCTS_KEYS = {"pending_approvals_count"}
 
 _NON_ADMIN_ROLES = (
     UserRole.owner,
@@ -127,13 +130,25 @@ def make_product(db_session: Session) -> Callable[..., Product]:
         *,
         compliance_status: ComplianceStatus = ComplianceStatus.allowed,
         allowed_for_sale: bool = True,
+        approval_status: ProductApprovalStatus = ProductApprovalStatus.approved,
     ) -> Product:
+        # `ck_products_rejected_iff_reason` requires every rejected row
+        # to carry a non-null `rejection_reason`. Surface a sentinel
+        # reason for rejected fixtures so tests don't have to remember
+        # the constraint.
+        rejection_reason: str | None = (
+            "Fixture-rejected"
+            if approval_status == ProductApprovalStatus.rejected
+            else None
+        )
         product = Product(
             name=f"P-{uuid.uuid4().hex[:6]}",
             category="vape",
             compliance_status=compliance_status,
             allowed_for_sale=allowed_for_sale,
             is_active=True,
+            approval_status=approval_status,
+            rejection_reason=rejection_reason,
         )
         db_session.add(product)
         db_session.commit()
@@ -322,6 +337,7 @@ class TestResponseEnvelope:
         assert set(body["inventory"].keys()) == _INVENTORY_KEYS
         assert set(body["orders"].keys()) == _ORDERS_KEYS
         assert set(body["compliance"].keys()) == _COMPLIANCE_KEYS
+        assert set(body["products"].keys()) == _PRODUCTS_KEYS
 
     def test_orders_by_status_includes_every_enum_member(
         self, client: TestClient, make_user
@@ -518,6 +534,37 @@ class TestBackendComputed:
         )
         body = resp.json()
         assert body["compliance"]["blocked_count"] == 3
+
+    def test_products_pending_approvals_count_counts_only_pending(
+        self,
+        client: TestClient,
+        make_user,
+        make_product,
+    ):
+        admin = make_user(role=UserRole.admin)
+        # Two pending products waiting on admin review.
+        make_product(approval_status=ProductApprovalStatus.pending)
+        make_product(approval_status=ProductApprovalStatus.pending)
+        # Approved + rejected rows are not "work to do" anymore and
+        # must NOT be counted.
+        make_product(approval_status=ProductApprovalStatus.approved)
+        make_product(approval_status=ProductApprovalStatus.rejected)
+
+        resp = client.get(
+            ADMIN_DASHBOARD_URL, headers=_auth(admin)
+        )
+        body = resp.json()
+        assert body["products"]["pending_approvals_count"] == 2
+
+    def test_products_pending_approvals_count_zero_on_empty_db(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(
+            ADMIN_DASHBOARD_URL, headers=_auth(admin)
+        )
+        body = resp.json()
+        assert body["products"]["pending_approvals_count"] == 0
 
 
 # --------------------------------------------------------------------- #

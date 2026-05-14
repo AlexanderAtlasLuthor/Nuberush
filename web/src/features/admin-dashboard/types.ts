@@ -91,6 +91,16 @@ export interface AdminDashboardComplianceSummary {
 }
 
 /**
+ * Catalog-curation KPI. Count of store-proposed products with
+ * `approval_status = 'pending'`. Independent from the compliance gate:
+ * pending rows can carry any compliance state — admin sets the final
+ * compliance at approval time.
+ */
+export interface AdminDashboardProductsSummary {
+  pending_approvals_count: number;
+}
+
+/**
  * Top-level response shape for `GET /admin/dashboard`.
  *
  * Bundles every KPI section plus the bounded recent audit tail.
@@ -107,5 +117,6 @@ export interface AdminDashboardSummary {
   inventory: AdminDashboardInventorySummary;
   orders: AdminDashboardOrdersSummary;
   compliance: AdminDashboardComplianceSummary;
+  products: AdminDashboardProductsSummary;
   recent_audit: AuditEvent[];
 }

@@ -215,9 +215,9 @@ function makeResponse(
   };
 }
 
-function renderPage() {
+function renderPage(path: string = "/app/admin/products") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <AdminProductsPage />
     </MemoryRouter>,
   );
@@ -379,6 +379,26 @@ describe("AdminProductsPage — filters", () => {
   it("default initial filters include limit 50 / offset 0", () => {
     renderPage();
     expect(lastFilters()).toEqual({ limit: 50, offset: 0 });
+  });
+
+  it("seeds approval_status from the ?approval_status= URL param on mount", () => {
+    renderPage("/app/admin/products?approval_status=pending");
+    expect(lastFilters()).toEqual({
+      limit: 50,
+      offset: 0,
+      approval_status: "pending",
+    });
+  });
+
+  it("accepts approved and rejected via the URL param too", () => {
+    renderPage("/app/admin/products?approval_status=approved");
+    expect(lastFilters()?.approval_status).toBe("approved");
+  });
+
+  it("ignores an unknown approval_status value (falls back to defaults)", () => {
+    renderPage("/app/admin/products?approval_status=bogus");
+    expect(lastFilters()).toEqual({ limit: 50, offset: 0 });
+    expect(lastFilters()?.approval_status).toBeUndefined();
   });
 
   it("typing in q forwards the trimmed value to the next query", () => {
