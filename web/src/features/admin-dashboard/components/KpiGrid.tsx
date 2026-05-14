@@ -97,14 +97,21 @@ export function KpiGrid({ summary }: KpiGridProps) {
         to="/app/admin/audit"
         data-testid="kpi-compliance-blocked"
       />
-      <KpiCard
-        title="Pending approvals"
-        value={summary.products.pending_approvals_count}
-        description="Store-proposed products awaiting review"
-        icon={ClipboardCheck}
-        to="/app/admin/products?approval_status=pending"
-        data-testid="kpi-products-pending-approvals"
-      />
+      {/* Pending approvals fills the rest of the bento row. On lg+ the
+          tile spans 3 of the 4 grid columns so the row that started with
+          "Compliance blockers" finishes flush against the hero — no
+          dead space on the right edge. On sm the tile spans both
+          columns so it doesn't look orphaned on the narrower layout. */}
+      <div className="sm:col-span-2 lg:col-span-3">
+        <KpiCard
+          title="Pending approvals"
+          value={summary.products.pending_approvals_count}
+          description="Store-proposed products awaiting review"
+          icon={ClipboardCheck}
+          to="/app/admin/products?approval_status=pending"
+          data-testid="kpi-products-pending-approvals"
+        />
+      </div>
     </div>
   );
 }
