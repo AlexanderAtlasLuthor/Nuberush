@@ -650,7 +650,7 @@ describe("workspace switcher", () => {
     });
   });
 
-  it("AdminLayout exposes both Admin and Store workspaces with Admin marked active", () => {
+  it("AdminLayout suppresses the workspace switcher entirely", () => {
     render(
       withRouter(
         <AdminLayout>
@@ -660,20 +660,20 @@ describe("workspace switcher", () => {
       ),
     );
 
-    const switcher = within(getSidebar()).getByTestId("workspace-switcher");
-    const admin = within(switcher).getByRole("link", { name: "Admin" });
-    const store = within(switcher).getByRole("link", { name: "Store" });
-
-    expect(admin).toHaveAttribute("href", "/app/admin");
-    expect(store).toHaveAttribute("href", "/app/store");
-    expect(admin).toHaveAttribute("aria-current", "page");
-    expect(store).not.toHaveAttribute("aria-current", "page");
+    const sidebar = getSidebar();
+    expect(
+      within(sidebar).queryByTestId("workspace-switcher"),
+    ).not.toBeInTheDocument();
+    // No cross-surface jump link should appear anywhere in the admin sidebar.
+    for (const link of within(sidebar).queryAllByRole("link")) {
+      expect(link).not.toHaveAttribute(
+        "href",
+        expect.stringMatching(/^\/app\/store/),
+      );
+    }
   });
 
-  it("AdminLayout switcher activation does not depend on the current pathname", () => {
-    // The workspace switcher reflects the *layout* the user is inside, not
-    // the route segment. Inside AdminLayout the Admin workspace must stay
-    // active even if the test mounts the layout on a sub-route.
+  it("AdminLayout omits the switcher regardless of the current pathname", () => {
     render(
       withRouter(
         <AdminLayout>
@@ -683,13 +683,9 @@ describe("workspace switcher", () => {
       ),
     );
 
-    const switcher = within(getSidebar()).getByTestId("workspace-switcher");
     expect(
-      within(switcher).getByRole("link", { name: "Admin" }),
-    ).toHaveAttribute("aria-current", "page");
-    expect(
-      within(switcher).getByRole("link", { name: "Store" }),
-    ).not.toHaveAttribute("aria-current", "page");
+      within(getSidebar()).queryByTestId("workspace-switcher"),
+    ).not.toBeInTheDocument();
   });
 
   it("StoreLayout exposes only the Store workspace — never Admin", () => {
@@ -733,7 +729,7 @@ describe("workspace switcher", () => {
     }
   });
 
-  it("Admin mobile drawer exposes both workspaces", () => {
+  it("Admin mobile drawer also omits the workspace switcher", () => {
     render(
       withRouter(
         <AdminLayout>
@@ -746,14 +742,16 @@ describe("workspace switcher", () => {
       screen.getByRole("button", { name: /open navigation menu/i }),
     );
     const drawer = screen.getByTestId("mobile-sidebar");
-    const switcher = within(drawer).getByTestId("workspace-switcher");
 
     expect(
-      within(switcher).getByRole("link", { name: "Admin" }),
-    ).toHaveAttribute("href", "/app/admin");
-    expect(
-      within(switcher).getByRole("link", { name: "Store" }),
-    ).toHaveAttribute("href", "/app/store");
+      within(drawer).queryByTestId("workspace-switcher"),
+    ).not.toBeInTheDocument();
+    for (const link of within(drawer).queryAllByRole("link")) {
+      expect(link).not.toHaveAttribute(
+        "href",
+        expect.stringMatching(/^\/app\/store/),
+      );
+    }
   });
 
   it("Store mobile drawer never exposes the Admin workspace", () => {
@@ -797,7 +795,7 @@ describe("workspace switcher", () => {
     }
   });
 
-  it("closes the mobile drawer when a workspace link is activated", () => {
+  it("closes the mobile drawer when a sidebar nav link is activated", () => {
     render(
       withRouter(
         <AdminLayout>
@@ -810,12 +808,12 @@ describe("workspace switcher", () => {
       screen.getByRole("button", { name: /open navigation menu/i }),
     );
     const drawer = screen.getByTestId("mobile-sidebar");
-    fireEvent.click(within(drawer).getByRole("link", { name: "Store" }));
+    fireEvent.click(within(drawer).getByRole("link", { name: "Stores" }));
 
     expect(screen.queryByTestId("mobile-sidebar")).not.toBeInTheDocument();
   });
 
-  it("never surfaces fake / demo workspace identity from the design system ZIP", () => {
+  it("AdminLayout sidebar never surfaces fake/demo workspace identity from the design system ZIP", () => {
     render(
       withRouter(
         <AdminLayout>
@@ -823,15 +821,13 @@ describe("workspace switcher", () => {
         </AdminLayout>,
       ),
     );
-    const switcher = within(getSidebar()).getByTestId("workspace-switcher");
+    const sidebar = getSidebar();
 
     for (const fake of FAKE_ZIP_STRINGS) {
       expect(
-        within(switcher).queryByText(new RegExp(fake, "i")),
+        within(sidebar).queryByText(new RegExp(fake, "i")),
       ).not.toBeInTheDocument();
     }
-    // No fake numeric badges/counts inside the switcher.
-    expect(within(switcher).queryByText(/^\d+$/)).not.toBeInTheDocument();
   });
 
   it("StoreLayout sidebar contains no fake/demo workspace strings", () => {
