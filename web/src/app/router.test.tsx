@@ -149,6 +149,15 @@ vi.mock(
   }),
 );
 
+// /app/admin/settings now mounts the real AdminSettingsPage. Same
+// mock convention.
+vi.mock(
+  "@/features/admin-settings/pages/AdminSettingsPage",
+  () => ({
+    default: () => <div>Admin settings page</div>,
+  }),
+);
+
 import { appRoutes } from "./router";
 
 function makeUser(overrides: Partial<AuthUser> = {}): AuthUser {
@@ -391,78 +400,14 @@ describe("app route split", () => {
     ).not.toBeInTheDocument();
   });
 
-  // F2.15.7 + F2.18.3 + F2.19.5: /app/admin/users, /app/admin/stores,
-  // /app/admin/stores/:storeId and /app/admin no longer render
-  // placeholders — they mount real pages. The placeholder-blocker
-  // matrix intentionally excludes them.
-  it.each([
-    // F2.20.5: /app/admin/products is no longer a placeholder — it
-    // mounts the real AdminProductsPage. The placeholder-blocker
-    // matrix intentionally excludes it.
-    // F2.20.6: /app/admin/compliance is no longer a placeholder
-    // either — it mounts the real AdminCompliancePage.
-    [
-      "/app/admin/settings",
-      "Admin Settings",
-      "Platform settings endpoint",
-    ],
-  ])(
-    "renders admin placeholder route %s with backend blockers",
-    async (path, heading, blocker) => {
-      renderRoute(
-        path,
-        makeUser({ role: "admin", store_id: null }),
-        {
-          currentStoreId: null,
-          hasStoreContext: false,
-          isStoreRequired: false,
-        },
-      );
+  // F2.15.7 + F2.18.3 + F2.19.5 + …: every admin route now mounts
+  // a real page. The placeholder-blocker matrix is intentionally
+  // empty — the only thing left to assert is that the real page is
+  // mounted and that the legacy placeholder copy is gone.
 
-      expect(
-        await screen.findByRole("heading", { name: heading }),
-      ).toBeInTheDocument();
-      expect(screen.getAllByText("Platform Admin").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("Global scope").length).toBeGreaterThan(0);
-      expect(screen.getByText("Status")).toBeInTheDocument();
-      expect(screen.getByText("Backend Required")).toBeInTheDocument();
-      expect(
-        screen.getByText("Required backend capabilities"),
-      ).toBeInTheDocument();
-      expect(screen.getByText("Not simulated in frontend")).toBeInTheDocument();
-      expect(screen.getByText("Future capabilities")).toBeInTheDocument();
-      expect(screen.getByText(blocker)).toBeInTheDocument();
-      expect(
-        screen.getByText("No fake admin data is rendered."),
-      ).toBeInTheDocument();
-      expect(screen.queryByTestId("store-gate")).not.toBeInTheDocument();
-      expect(screen.queryByText("Store Operations")).not.toBeInTheDocument();
-      expect(screen.queryByText(/Store: /)).not.toBeInTheDocument();
-    },
-  );
-
-  it.each([
-    // F2.15.7: /app/admin/users now renders the real UsersPage.
-    // F2.18.3: /app/admin/stores now renders the real AdminStoresPage.
-    // F2.18.4: /app/admin/audit now renders the real AdminAuditPage.
-    // F2.18.5: /app/admin/inventory and /app/admin/orders now render
-    //          the real AdminInventoryPage and AdminOrdersPage.
-    // F2.19.5: /app/admin now renders the real AdminDashboardPage —
-    //          its "No simulated KPIs" / "No fake global metrics"
-    //          rows are gone with the placeholder.
-    // F2.19.6: /app/admin/operations now renders the real
-    //          AdminOperationsPage — its "No fake incidents" row is
-    //          gone with the placeholder.
-    // F2.20.5: /app/admin/products now renders the real
-    //          AdminProductsPage — its "No fake product data" row
-    //          is gone with the placeholder.
-    // F2.20.6: /app/admin/compliance now renders the real
-    //          AdminCompliancePage — its "No fake compliance queue"
-    //          row is gone with the placeholder.
-    ["/app/admin/settings", "No billing simulation"],
-  ])("renders admin non-goal %s", async (path, nonGoal) => {
+  it("renders the real AdminSettingsPage at /app/admin/settings (no longer a placeholder)", async () => {
     renderRoute(
-      path,
+      "/app/admin/settings",
       makeUser({ role: "admin", store_id: null }),
       {
         currentStoreId: null,
@@ -470,8 +415,20 @@ describe("app route split", () => {
         isStoreRequired: false,
       },
     );
-
-    expect(await screen.findByText(nonGoal)).toBeInTheDocument();
+    expect(
+      await screen.findByText("Admin settings page"),
+    ).toBeInTheDocument();
+    // Placeholder copy must NOT be present anywhere.
+    expect(
+      screen.queryByRole("heading", { name: "Admin Settings" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Platform settings endpoint"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Backend Required")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("No billing simulation"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the real UsersPage at /app/admin/users (no longer a placeholder)", async () => {

@@ -5,6 +5,7 @@ from app.api.routes.admin_compliance import router as admin_compliance_router
 from app.api.routes.admin_dashboard import router as admin_dashboard_router
 from app.api.routes.admin_operations import router as admin_operations_router
 from app.api.routes.admin_products import router as admin_products_router
+from app.api.routes.admin_settings import router as admin_settings_router
 from app.api.routes.audit import router as audit_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.inventory import router as inventory_router
@@ -46,6 +47,7 @@ app.include_router(admin_dashboard_router)
 app.include_router(admin_operations_router)
 app.include_router(admin_products_router)
 app.include_router(admin_compliance_router)
+app.include_router(admin_settings_router)
 
 
 @app.get("/health", tags=["system"])

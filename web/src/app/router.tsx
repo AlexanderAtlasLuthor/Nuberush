@@ -12,6 +12,7 @@ import AdminOperationsPage from "@/features/admin-operations/pages/AdminOperatio
 import AdminProductsPage from "@/features/admin-products/pages/AdminProductsPage";
 import AdminProductDetailPage from "@/features/admin-products/pages/AdminProductDetailPage";
 import AdminCompliancePage from "@/features/admin-compliance/pages/AdminCompliancePage";
+import AdminSettingsPage from "@/features/admin-settings/pages/AdminSettingsPage";
 import AdminInventoryPage from "@/features/inventory/pages/AdminInventoryPage";
 import AdminOrdersPage from "@/features/orders/pages/AdminOrdersPage";
 import ProductsPage from "@/features/products/pages/ProductsPage";
@@ -36,7 +37,6 @@ import MerchantAgreementPage from "@/features/public/legal/MerchantAgreementPage
 import AcceptableUsePage from "@/features/public/legal/AcceptableUsePage";
 import CookiesPage from "@/features/public/legal/CookiesPage";
 import {
-  AdminSettingsPlaceholder,
   AdminShell,
   AppIndexRedirect,
   LegacyInventoryRedirect,
@@ -150,7 +150,13 @@ export const appRoutes: RouteObject[] = [
           // limited to the router; same convention used in F2.15.7,
           // F2.18.3, F2.18.4, F2.18.5, and F2.19.5.
           { path: "operations", element: <AdminOperationsPage /> },
-          { path: "settings", element: <AdminSettingsPlaceholder /> },
+          // Real admin settings page replaces the placeholder. The
+          // placeholder component remains defined in
+          // route-components.tsx (unused) so the deletion footprint
+          // is limited to the router; same convention used in
+          // F2.15.7, F2.18.3, F2.18.4, F2.18.5, F2.19.5, F2.19.6,
+          // F2.20.5 and F2.20.6.
+          { path: "settings", element: <AdminSettingsPage /> },
         ],
       },
       {
