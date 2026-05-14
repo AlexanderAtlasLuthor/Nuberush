@@ -2,11 +2,12 @@
 // earns from products sold — no delivery, no tip, no tax, no platform
 // commission (those live on the admin earnings surface).
 
-import { AlertCircle, Package, TrendingUp } from "lucide-react";
+import { AlertCircle, Package, ShoppingBag, Wallet } from "lucide-react";
 
 import { useStoreContext } from "@/auth";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { EarningsHeroCard } from "@/features/admin-earnings/components/EarningsHeroCard";
 import {
   MoneyTile,
   formatUsd,
@@ -73,9 +74,38 @@ function ErrorState({ error, onRetry }: ErrorStateProps) {
   );
 }
 
+interface RevenueShareBarProps {
+  value: string;
+  max: string;
+}
+
+function RevenueShareBar({ value, max }: RevenueShareBarProps) {
+  const valueNumber = Number(value);
+  const maxNumber = Number(max);
+  if (!Number.isFinite(valueNumber) || !Number.isFinite(maxNumber) || maxNumber <= 0) {
+    return null;
+  }
+  const pct = Math.min(100, Math.max(0, (valueNumber / maxNumber) * 100));
+  return (
+    <div className="h-1.5 w-24 rounded-full bg-foreground/5 overflow-hidden">
+      <div
+        className="h-full rounded-full bg-success"
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
 export default function StoreEarningsPage() {
   const { currentStoreId } = useStoreContext();
   const query = useStoreEarningsQuery({ storeId: currentStoreId });
+
+  const maxProductRevenue = query.data
+    ? query.data.top_products.reduce(
+        (acc, row) => Math.max(acc, Number(row.revenue)),
+        0,
+      )
+    : 0;
 
   return (
     <div
@@ -106,47 +136,76 @@ export default function StoreEarningsPage() {
 
       {query.isSuccess && query.data ? (
         <>
-          <section className="grid gap-3 md:gap-4 grid-cols-1 sm:grid-cols-3">
-            <MoneyTile
-              title="Product revenue"
+          <section className="grid gap-3 md:gap-4 grid-cols-1 lg:grid-cols-[2fr_1fr]">
+            <EarningsHeroCard
+              eyebrow="Product revenue"
               value={query.data.product_revenue}
-              description={`From ${query.data.delivered_orders} delivered orders`}
-              variant="hero"
-              icon={TrendingUp}
+              description={`From ${query.data.delivered_orders} delivered orders · ${query.data.total_items_sold} units sold`}
+              icon={ShoppingBag}
+              composition={
+                query.data.top_products.length > 0
+                  ? [
+                      ...query.data.top_products
+                        .slice(0, 3)
+                        .map((product, index) => ({
+                          label: product.product_name,
+                          amount: product.revenue,
+                          highlight: index === 0,
+                        })),
+                      ...(query.data.top_products.length > 3
+                        ? [
+                            {
+                              label: `+${query.data.top_products.length - 3} more`,
+                              amount: query.data.top_products
+                                .slice(3)
+                                .reduce(
+                                  (acc, p) => acc + Number(p.revenue),
+                                  0,
+                                )
+                                .toFixed(2),
+                            },
+                          ]
+                        : []),
+                    ]
+                  : undefined
+              }
               data-testid="store-earnings-revenue"
             />
-            <div
-              className="relative h-full rounded-xl border border-border bg-card p-4 md:p-5 flex flex-col gap-2"
-              data-testid="store-earnings-items"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground truncate">
-                  Items sold
+            <div className="grid grid-cols-1 gap-3 md:gap-4">
+              <div
+                className="relative h-full rounded-xl border border-border bg-card p-4 md:p-5 flex flex-col gap-2"
+                data-testid="store-earnings-items"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground truncate">
+                    Items sold
+                  </p>
+                  <span className="inline-flex items-center justify-center rounded-md shrink-0 h-7 w-7 bg-secondary/60 text-muted-foreground">
+                    <Package className="h-3.5 w-3.5" aria-hidden="true" />
+                  </span>
+                </div>
+                <p className="font-semibold tabular-nums tracking-tight leading-none text-2xl md:text-3xl">
+                  {query.data.total_items_sold}
                 </p>
-                <span className="inline-flex items-center justify-center rounded-md shrink-0 h-7 w-7 bg-secondary/60 text-muted-foreground">
-                  <Package className="h-3.5 w-3.5" aria-hidden="true" />
-                </span>
+                <p className="text-xs text-muted-foreground leading-snug">
+                  Total units across delivered orders
+                </p>
               </div>
-              <p className="font-semibold tabular-nums tracking-tight leading-none text-2xl md:text-3xl">
-                {query.data.total_items_sold}
-              </p>
-              <p className="text-xs text-muted-foreground leading-snug">
-                Total units across delivered orders
-              </p>
+              <MoneyTile
+                title="Avg per order"
+                value={
+                  query.data.delivered_orders > 0
+                    ? String(
+                        Number(query.data.product_revenue) /
+                          query.data.delivered_orders,
+                      )
+                    : "0"
+                }
+                description="Product revenue / delivered orders"
+                icon={Wallet}
+                data-testid="store-earnings-avg"
+              />
             </div>
-            <MoneyTile
-              title="Avg revenue per order"
-              value={
-                query.data.delivered_orders > 0
-                  ? String(
-                      Number(query.data.product_revenue) /
-                        query.data.delivered_orders,
-                    )
-                  : "0"
-              }
-              description="Product revenue / delivered orders"
-              data-testid="store-earnings-avg"
-            />
           </section>
 
           <section
@@ -178,6 +237,7 @@ export default function StoreEarningsPage() {
                       <th className="px-5 py-3 text-left">Product</th>
                       <th className="px-5 py-3 text-left">Variant</th>
                       <th className="px-5 py-3 text-right">Units sold</th>
+                      <th className="px-5 py-3 text-right">Share</th>
                       <th className="px-5 py-3 text-right">Revenue</th>
                     </tr>
                   </thead>
@@ -197,7 +257,15 @@ export default function StoreEarningsPage() {
                         <td className="px-5 py-3 text-right tabular-nums">
                           {row.quantity_sold}
                         </td>
-                        <td className="px-5 py-3 text-right tabular-nums font-semibold">
+                        <td className="px-5 py-3">
+                          <div className="flex justify-end">
+                            <RevenueShareBar
+                              value={row.revenue}
+                              max={String(maxProductRevenue)}
+                            />
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 text-right tabular-nums font-semibold text-success">
                           {formatUsd(row.revenue)}
                         </td>
                       </tr>

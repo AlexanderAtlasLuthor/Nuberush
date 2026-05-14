@@ -2,11 +2,12 @@
 // Renders above "Orders by status" and links into the dedicated
 // `/app/admin/earnings` page for the full breakdown.
 
-import { ArrowRight, DollarSign, Wallet } from "lucide-react";
+import { ArrowRight, Receipt, Truck } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useAdminEarningsQuery } from "../hooks";
-import { MoneyTile, formatUsd } from "./MoneyTile";
+import { EarningsHeroCard } from "./EarningsHeroCard";
+import { MoneyTile } from "./MoneyTile";
 
 export function AdminEarningsWidget() {
   const query = useAdminEarningsQuery();
@@ -26,7 +27,7 @@ export function AdminEarningsWidget() {
         </div>
         <Link
           to="/app/admin/earnings"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline self-start"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-success hover:underline self-start"
           data-testid="admin-earnings-widget-link"
         >
           View details
@@ -53,36 +54,45 @@ export function AdminEarningsWidget() {
       ) : null}
 
       {query.isSuccess && query.data ? (
-        <div className="grid gap-3 md:gap-4 grid-cols-1 md:grid-cols-3">
-          <MoneyTile
-            title="Commission earned"
+        <div className="grid gap-3 md:gap-4 grid-cols-1 lg:grid-cols-[1.6fr_1fr_1fr]">
+          <EarningsHeroCard
+            eyebrow="Commission earned"
             value={query.data.commission_total}
-            description={`${query.data.delivered_orders} delivered orders`}
-            variant="hero"
-            icon={DollarSign}
+            description={`${query.data.delivered_orders} delivered orders · 20% of gross base`}
+            composition={[
+              {
+                label: "Subtotal",
+                amount: query.data.subtotal_total,
+              },
+              {
+                label: "Delivery",
+                amount: query.data.delivery_total,
+              },
+              {
+                label: "Tax",
+                amount: query.data.tax_total,
+              },
+              {
+                label: "Commission",
+                amount: query.data.commission_total,
+                highlight: true,
+              },
+            ]}
+            to="/app/admin/earnings"
             data-testid="admin-earnings-widget-commission"
           />
           <MoneyTile
             title="Gross base"
             value={query.data.gross_base_total}
             description="Subtotal + delivery + tip + tax"
-            icon={Wallet}
+            icon={Receipt}
             data-testid="admin-earnings-widget-gross-base"
           />
           <MoneyTile
             title="Customer paid"
             value={query.data.customer_paid_total}
-            description={`Avg ${
-              query.data.delivered_orders > 0
-                ? formatUsd(
-                    String(
-                      Number(query.data.customer_paid_total) /
-                        query.data.delivered_orders,
-                    ),
-                  )
-                : formatUsd("0")
-            } per order`}
-            icon={Wallet}
+            description={`${query.data.delivered_orders} orders · all-in total`}
+            icon={Truck}
             data-testid="admin-earnings-widget-customer-paid"
           />
         </div>

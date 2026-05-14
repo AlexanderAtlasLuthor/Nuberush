@@ -2,10 +2,11 @@
 // product revenue + units sold and links into the dedicated
 // `/app/store/earnings` page for the full top-products breakdown.
 
-import { ArrowRight, Package, TrendingUp } from "lucide-react";
+import { ArrowRight, Package, ShoppingBag } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useStoreContext } from "@/auth";
+import { EarningsHeroCard } from "@/features/admin-earnings/components/EarningsHeroCard";
 import {
   MoneyTile,
   formatUsd,
@@ -32,7 +33,7 @@ export function StoreEarningsWidget() {
         </div>
         <Link
           to="/app/store/earnings"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline self-start"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-success hover:underline self-start"
           data-testid="store-earnings-widget-link"
         >
           View details
@@ -59,13 +60,40 @@ export function StoreEarningsWidget() {
       ) : null}
 
       {query.isSuccess && query.data ? (
-        <div className="grid gap-3 md:gap-4 grid-cols-1 md:grid-cols-3">
-          <MoneyTile
-            title="Product revenue"
+        <div className="grid gap-3 md:gap-4 grid-cols-1 lg:grid-cols-[1.6fr_1fr_1fr]">
+          <EarningsHeroCard
+            eyebrow="Product revenue"
             value={query.data.product_revenue}
-            description={`From ${query.data.delivered_orders} delivered orders`}
-            variant="hero"
-            icon={TrendingUp}
+            description={`From ${query.data.delivered_orders} delivered orders · ${query.data.total_items_sold} units sold`}
+            composition={
+              query.data.top_products.length > 0
+                ? [
+                    ...query.data.top_products
+                      .slice(0, 3)
+                      .map((product, index) => ({
+                        label: product.product_name,
+                        amount: product.revenue,
+                        highlight: index === 0,
+                      })),
+                    ...(query.data.top_products.length > 3
+                      ? [
+                          {
+                            label: `+${query.data.top_products.length - 3} more`,
+                            amount: query.data.top_products
+                              .slice(3)
+                              .reduce(
+                                (acc, p) => acc + Number(p.revenue),
+                                0,
+                              )
+                              .toFixed(2),
+                          },
+                        ]
+                      : []),
+                  ]
+                : undefined
+            }
+            icon={ShoppingBag}
+            to="/app/store/earnings"
             data-testid="store-earnings-widget-revenue"
           />
           <div

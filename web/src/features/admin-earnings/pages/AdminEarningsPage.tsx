@@ -4,11 +4,18 @@
 // `GET /admin/earnings` aggregator — the frontend never recomputes
 // commission, gross base, or per-store breakdowns.
 
-import { AlertCircle, DollarSign, Receipt, Truck, Wallet } from "lucide-react";
+import {
+  AlertCircle,
+  Coins,
+  Receipt,
+  Truck,
+  Wallet,
+} from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
+import { EarningsHeroCard } from "../components/EarningsHeroCard";
 import { MoneyTile, formatUsd } from "../components/MoneyTile";
 import { useAdminEarningsQuery } from "../hooks";
 
@@ -23,9 +30,9 @@ function PageHeader() {
       </h1>
       <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground leading-relaxed">
         20% commission on every delivered order. Pricing breakdown per
-        order: product subtotal + ${"10"} delivery + tip (if any) +
-        taxes + 20% platform commission. Read-only — every value is
-        computed by the backend from existing orders on each request.
+        order: product subtotal + $10 delivery + tip (if any) + taxes +
+        20% platform commission. Read-only — every value is computed by
+        the backend from existing orders on each request.
       </p>
     </header>
   );
@@ -72,8 +79,37 @@ function ErrorState({ error, onRetry }: ErrorStateProps) {
   );
 }
 
+interface StoreShareBarProps {
+  value: string;
+  max: string;
+}
+
+function StoreShareBar({ value, max }: StoreShareBarProps) {
+  const valueNumber = Number(value);
+  const maxNumber = Number(max);
+  if (!Number.isFinite(valueNumber) || !Number.isFinite(maxNumber) || maxNumber <= 0) {
+    return null;
+  }
+  const pct = Math.min(100, Math.max(0, (valueNumber / maxNumber) * 100));
+  return (
+    <div className="h-1.5 w-24 rounded-full bg-foreground/5 overflow-hidden">
+      <div
+        className="h-full rounded-full bg-success"
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
 export default function AdminEarningsPage() {
   const query = useAdminEarningsQuery();
+
+  const maxStoreCommission = query.data
+    ? query.data.by_store.reduce(
+        (acc, row) => Math.max(acc, Number(row.commission)),
+        0,
+      )
+    : 0;
 
   return (
     <div
@@ -95,15 +131,51 @@ export default function AdminEarningsPage() {
 
       {query.isSuccess && query.data ? (
         <>
-          <section className="grid gap-3 md:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-            <MoneyTile
-              title="Commission earned"
+          <section className="grid gap-3 md:gap-4 grid-cols-1 lg:grid-cols-[2fr_1fr]">
+            <EarningsHeroCard
+              eyebrow="Commission earned"
               value={query.data.commission_total}
-              description={`${query.data.delivered_orders} delivered orders`}
-              variant="hero"
-              icon={DollarSign}
+              description={`${query.data.delivered_orders} delivered orders · 20% of gross base across all stores`}
+              composition={[
+                {
+                  label: "Product subtotal",
+                  amount: query.data.subtotal_total,
+                },
+                {
+                  label: "Delivery",
+                  amount: query.data.delivery_total,
+                },
+                {
+                  label: "Tax",
+                  amount: query.data.tax_total,
+                },
+                {
+                  label: "Commission (yours)",
+                  amount: query.data.commission_total,
+                  highlight: true,
+                },
+              ]}
               data-testid="admin-earnings-commission"
             />
+            <div className="grid grid-cols-1 gap-3 md:gap-4">
+              <MoneyTile
+                title="Gross base"
+                value={query.data.gross_base_total}
+                description="Subtotal + delivery + tip + tax"
+                icon={Wallet}
+                data-testid="admin-earnings-gross-base"
+              />
+              <MoneyTile
+                title="Customer paid"
+                value={query.data.customer_paid_total}
+                description="What customers were charged total"
+                icon={Coins}
+                data-testid="admin-earnings-customer-paid"
+              />
+            </div>
+          </section>
+
+          <section className="grid gap-3 md:gap-4 grid-cols-2 lg:grid-cols-4">
             <MoneyTile
               title="Subtotal (products)"
               value={query.data.subtotal_total}
@@ -125,25 +197,11 @@ export default function AdminEarningsPage() {
               icon={Wallet}
               data-testid="admin-earnings-tax"
             />
-          </section>
-
-          <section className="grid gap-3 md:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-            <MoneyTile
-              title="Gross base"
-              value={query.data.gross_base_total}
-              description="Subtotal + delivery + tip + tax"
-              data-testid="admin-earnings-gross-base"
-            />
-            <MoneyTile
-              title="Customer paid"
-              value={query.data.customer_paid_total}
-              description="What customers were charged total"
-              data-testid="admin-earnings-customer-paid"
-            />
             <MoneyTile
               title="Tips collected"
               value={query.data.tip_total}
               description="Currently $0 — tips not tracked yet"
+              icon={Coins}
               data-testid="admin-earnings-tip"
             />
           </section>
@@ -175,6 +233,7 @@ export default function AdminEarningsPage() {
                       <th className="px-5 py-3 text-left">Store</th>
                       <th className="px-5 py-3 text-right">Delivered orders</th>
                       <th className="px-5 py-3 text-right">Gross base</th>
+                      <th className="px-5 py-3 text-right">Share</th>
                       <th className="px-5 py-3 text-right">Commission</th>
                     </tr>
                   </thead>
@@ -194,7 +253,15 @@ export default function AdminEarningsPage() {
                         <td className="px-5 py-3 text-right tabular-nums">
                           {formatUsd(row.gross_base)}
                         </td>
-                        <td className="px-5 py-3 text-right tabular-nums font-semibold">
+                        <td className="px-5 py-3">
+                          <div className="flex justify-end">
+                            <StoreShareBar
+                              value={row.commission}
+                              max={String(maxStoreCommission)}
+                            />
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 text-right tabular-nums font-semibold text-success">
                           {formatUsd(row.commission)}
                         </td>
                       </tr>
