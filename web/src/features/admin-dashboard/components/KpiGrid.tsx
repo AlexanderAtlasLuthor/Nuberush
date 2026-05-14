@@ -50,6 +50,7 @@ export function KpiGrid({ summary }: KpiGridProps) {
       <div className="sm:col-span-2 lg:col-span-2 lg:row-span-2">
         <KpiCard
           variant="hero"
+          accent="primary"
           title="Open orders"
           value={summary.orders.open_count}
           description="Pending through out-for-delivery — orders currently in flight across every store."
@@ -67,6 +68,7 @@ export function KpiGrid({ summary }: KpiGridProps) {
         data-testid="kpi-stores-total"
       />
       <KpiCard
+        accent="success"
         title="Active stores"
         value={summary.stores.active}
         icon={Store}
@@ -82,6 +84,7 @@ export function KpiGrid({ summary }: KpiGridProps) {
         data-testid="kpi-users-total"
       />
       <KpiCard
+        accent="warning"
         title="Low-stock items"
         value={summary.inventory.low_stock_count}
         description="At or below reorder threshold"
@@ -90,6 +93,7 @@ export function KpiGrid({ summary }: KpiGridProps) {
         data-testid="kpi-inventory-low-stock"
       />
       <KpiCard
+        accent="destructive"
         title="Compliance blockers"
         value={summary.compliance.blocked_count}
         description="Products blocked from sale"
@@ -104,6 +108,7 @@ export function KpiGrid({ summary }: KpiGridProps) {
           columns so it doesn't look orphaned on the narrower layout. */}
       <div className="sm:col-span-2 lg:col-span-3">
         <KpiCard
+          accent="primary"
           title="Pending approvals"
           value={summary.products.pending_approvals_count}
           description="Store-proposed products awaiting review"
