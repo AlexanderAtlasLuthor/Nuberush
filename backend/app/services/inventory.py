@@ -137,12 +137,20 @@ def _lock_inventory_item(db: Session, item_id: UUID) -> InventoryItem:
     (`_assert_item_operable`, which reads `item.variant.product`)
     do not fire lazy loads inside the locked transaction. Raises 404
     when the row is missing.
+
+    `populate_existing=True` makes the locked SELECT overwrite any
+    stale identity-map copy of this row — e.g. one pre-loaded by an
+    unlocked read upstream, as the orders create path does via
+    `_resolve_inventory_item`. Without it SQLAlchemy keeps the cached
+    attributes and availability checks would run against a pre-lock
+    snapshot, letting two concurrent reservations both pass.
     """
     stmt = (
         select(InventoryItem)
         .where(InventoryItem.id == item_id)
         .options(_inventory_item_load_options())
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     item = db.scalar(stmt)
     if item is None:
