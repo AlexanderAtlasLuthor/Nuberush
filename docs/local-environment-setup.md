@@ -219,6 +219,27 @@ If both pass, your local matches the sandbox.
 
 ---
 
+## F2.22.1 Supabase Postgres cutover
+
+F2.22.1 moves Postgres hosting to Supabase. It changes only the
+database connection — auth, RLS, storage, realtime, and business
+logic are out of scope.
+
+- The FastAPI runtime and Alembic both read `DATABASE_URL`.
+- The test suite reads `DATABASE_URL_TEST`.
+- Supabase URLs must use the Supavisor **session** pooler and end
+  with `?sslmode=require`.
+- The Supavisor **transaction** pooler is forbidden: it breaks
+  SQLAlchemy session semantics, psycopg prepared statements,
+  `SELECT ... FOR UPDATE` locks, and the concurrency tests.
+- `DATABASE_URL_TEST` must point at an isolated test database or a
+  separate Supabase project — never production. The suite can run
+  `alembic downgrade base` and drop schema objects.
+
+See `backend/.env.example` for the exact URL shapes.
+
+---
+
 ## Common errors and fixes
 
 | Error | Root cause | Fix |
