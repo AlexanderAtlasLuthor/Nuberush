@@ -103,6 +103,38 @@ class AuthSettings(CommonSettings):
         return self
 
 
+class SupabaseAuthSettings(CommonSettings):
+    """Supabase Auth verification config (F2.22.2.D).
+
+    FastAPI verifies Supabase-issued access tokens against the project's
+    JWKS endpoint. The JWT establishes IDENTITY only — role, store_id and
+    is_active always come from public.users, never from token claims.
+
+    All fields default to empty so the app still imports/starts without
+    Supabase configured (the test suite monkeypatches the JWKS resolver).
+    A real deployment must set SUPABASE_URL (or SUPABASE_JWKS_URL directly).
+    """
+
+    supabase_url: str = ""
+    supabase_jwks_url: str = ""
+    supabase_jwt_audience: str = "authenticated"
+    supabase_jwt_issuer: str = ""
+    # F2.22.2.E will use the service-role key for the Supabase Admin API
+    # (user creation). It is declared here so the env contract is stable,
+    # but it is deliberately NOT read or used anywhere in F2.22.2.D.
+    supabase_service_role_key: str = ""
+
+    @model_validator(mode="after")
+    def _derive_supabase_urls(self) -> "SupabaseAuthSettings":
+        base = self.supabase_url.strip().rstrip("/")
+        if base:
+            if not self.supabase_jwks_url:
+                self.supabase_jwks_url = f"{base}/auth/v1/.well-known/jwks.json"
+            if not self.supabase_jwt_issuer:
+                self.supabase_jwt_issuer = f"{base}/auth/v1"
+        return self
+
+
 @lru_cache
 def get_app_settings() -> AppSettings:
     return AppSettings()
@@ -116,3 +148,8 @@ def get_db_settings() -> DatabaseSettings:
 @lru_cache
 def get_auth_settings() -> AuthSettings:
     return AuthSettings()
+
+
+@lru_cache
+def get_supabase_auth_settings() -> SupabaseAuthSettings:
+    return SupabaseAuthSettings()

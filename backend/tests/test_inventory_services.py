@@ -31,7 +31,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password
+from tests.helpers.auth import make_password_hash
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
@@ -76,7 +76,7 @@ def make_admin(db_session: Session) -> Callable[..., User]:
         admin = User(
             full_name="Inv Svc Admin",
             email=f"isa-{uuid.uuid4().hex[:8]}@example.com",
-            password_hash=hash_password("supersecret123"),
+            password_hash=make_password_hash("supersecret123"),
             role=UserRole.admin,
             store_id=None,
             is_active=True,
@@ -906,7 +906,7 @@ def make_non_admin(db_session: Session, make_store) -> Callable[..., User]:
         user = User(
             full_name=f"Inv Svc {role.value}",
             email=f"{role.value}-{uuid.uuid4().hex[:8]}@example.com",
-            password_hash=hash_password("supersecret123"),
+            password_hash=make_password_hash("supersecret123"),
             role=role,
             store_id=store.id,
             is_active=True,

@@ -38,7 +38,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password
+from tests.helpers.auth import make_password_hash
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
@@ -104,7 +104,7 @@ def make_user(db_session: Session) -> Callable[..., User]:
         user = User(
             full_name=full_name or f"User {role.value}",
             email=email or f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
-            password_hash=hash_password("irrelevant-pw-1234"),
+            password_hash=make_password_hash("irrelevant-pw-1234"),
             role=role,
             store_id=store_id,
             is_active=is_active,

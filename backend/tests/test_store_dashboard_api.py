@@ -32,8 +32,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token
-from app.core.security import hash_password
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
@@ -46,6 +44,8 @@ from app.db.models import ProductVariant
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
+from tests.helpers.auth import auth_headers_for as _auth
+from tests.helpers.auth import make_user as central_make_user
 
 
 # --------------------------------------------------------------------- #
@@ -71,6 +71,7 @@ def make_store(db_session: Session) -> Callable[..., Store]:
     return _create
 
 
+# Thin adapter over tests.helpers.auth.make_user (F2.22.2.C2).
 @pytest.fixture
 def make_user(
     db_session: Session, make_store
@@ -82,18 +83,14 @@ def make_user(
             sid = None
         else:
             sid = store_id if store_id is not None else make_store().id
-        user = User(
-            full_name=f"SDash {role.value}",
-            email=f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
-            password_hash=hash_password("supersecret123"),
+        return central_make_user(
+            db_session,
             role=role,
             store_id=sid,
+            full_name=f"SDash {role.value}",
             is_active=True,
+            password="supersecret123",
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
-        return user
 
     return _create
 
@@ -225,10 +222,6 @@ def make_log(db_session: Session) -> Callable[..., InventoryLog]:
         return log
 
     return _create
-
-
-def _auth(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(str(user.id))}"}
 
 
 # All seven endpoints, parameterized for the cross-cutting auth/RBAC

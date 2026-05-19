@@ -144,6 +144,11 @@ class User(Base):
         Index("ix_users_store_id", "store_id"),
         Index("ix_users_role", "role"),
         Index("ix_users_is_active", "is_active"),
+        # F2.22.2 identity bridge. Unique so a Supabase auth.users row maps
+        # to at most one public.users row. A unique index (not a plain
+        # constraint) keeps the lookup `WHERE auth_user_id = :sub` indexed
+        # — that becomes the hot path once get_current_user is migrated.
+        Index("ix_users_auth_user_id", "auth_user_id", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -157,6 +162,13 @@ class User(Base):
     )
     full_name: Mapped[str] = mapped_column(String(150), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # F2.22.2 identity bridge: links this row to a Supabase `auth.users`
+    # record (= the Supabase JWT `sub`). Nullable only during the F2.22.2
+    # migration window — existing rows have no Supabase identity yet, and
+    # the active login flow still uses `id`/`password_hash`. No cross-schema
+    # FK to `auth.users` is declared here: that schema is owned by Supabase
+    # and the relationship stays conceptual for this subphase.
+    auth_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     phone: Mapped[str | None] = mapped_column(String(30))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), nullable=False)

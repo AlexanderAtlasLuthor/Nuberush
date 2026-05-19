@@ -14,11 +14,11 @@ from app.api.deps import require_owner_or_admin
 from app.api.deps import require_staff_or_above
 from app.api.deps import require_store_member
 from app.core.permissions import resolve_store_scope
-from app.core.security import create_access_token
-from app.core.security import hash_password
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
+from tests.helpers.auth import auth_headers_for as _auth
+from tests.helpers.auth import make_user as central_make_user
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +95,7 @@ def make_store(db_session: Session) -> Callable[..., Store]:
     return _create
 
 
+# Thin adapter over tests.helpers.auth.make_user (F2.22.2.C2).
 @pytest.fixture
 def make_user(db_session: Session) -> Callable[..., User]:
     def _create(
@@ -102,24 +103,16 @@ def make_user(db_session: Session) -> Callable[..., User]:
         store_id: uuid.UUID | None = None,
         is_active: bool = True,
     ) -> User:
-        user = User(
-            full_name=f"Tenancy {role.value}",
-            email=f"{role.value}-{uuid.uuid4().hex[:8]}@example.com",
-            password_hash=hash_password("irrelevant-pw-1234"),
+        return central_make_user(
+            db_session,
             role=role,
             store_id=store_id,
             is_active=is_active,
+            full_name=f"Tenancy {role.value}",
+            password="irrelevant-pw-1234",
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
-        return user
 
     return _create
-
-
-def _auth(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(str(user.id))}"}
 
 
 # ---------------------------------------------------------------------------

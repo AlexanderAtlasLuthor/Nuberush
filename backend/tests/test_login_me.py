@@ -1,24 +1,53 @@
+"""Auth endpoint tests: POST /auth/login and GET /auth/me.
+
+F2.22.2.D — `/auth/me` (via `get_current_user`) now authenticates with
+**Supabase-issued JWTs**, verified against the project JWKS. The token
+establishes identity only; its `sub` is matched against
+`public.users.auth_user_id`. Role / store_id / is_active come from the
+`public.users` row, never from token claims.
+
+`POST /auth/login` is a legacy endpoint not yet removed in F2.22.2.D: it
+still verifies a bcrypt password and issues a self-hosted token. Its
+tests below confirm it is not broken, but that token is NOT accepted by
+`/auth/me` anymore — the `/auth/me` suite mints Supabase-style tokens
+directly via `tests.helpers.auth`.
+
+Test JWT strategy: tokens are signed with a test-only RSA keypair
+(`tests.helpers.auth`); `conftest._supabase_jwt_verifier` points the
+verifier's JWKS client at its public half. Verification is fully real
+(signature / audience / expiry / required claims) but offline.
+"""
+
 import uuid
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from typing import Any
 from typing import Callable
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.config import get_auth_settings
-from app.core.security import hash_password
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
+from tests.helpers.auth import auth_headers_for
+from tests.helpers.auth import make_supabase_token
+from tests.helpers.auth import make_user as central_make_user
+
+
+# A second keypair, unrelated to the suite's signing key, used only to
+# produce a token with a signature the verifier must reject.
+_WRONG_SIGNING_KEY = rsa.generate_private_key(
+    public_exponent=65537, key_size=2048
+)
 
 
 # ---------------------------------------------------------------------------
-# Fixtures local to this suite
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -36,7 +65,13 @@ def make_store(db_session: Session) -> Callable[..., Store]:
 
 @pytest.fixture
 def make_user(db_session: Session) -> Callable[..., tuple[User, str]]:
-    """Returns (user, plaintext_password) so login tests can use real creds."""
+    """Returns (user, plaintext_password) so login tests can use real creds.
+
+    Thin adapter over tests.helpers.auth.make_user: keeps this suite's
+    (user, password) return shape and "supersecret123" default. The
+    central helper assigns an `auth_user_id`, so the user is reachable
+    by the F2.22.2.D Supabase identity bridge.
+    """
 
     def _create(
         role: UserRole,
@@ -45,50 +80,21 @@ def make_user(db_session: Session) -> Callable[..., tuple[User, str]]:
         password: str = "supersecret123",
         is_active: bool = True,
     ) -> tuple[User, str]:
-        user = User(
-            full_name=f"Login {role.value}",
-            email=email or f"{role.value}-{uuid.uuid4().hex[:8]}@example.com",
-            password_hash=hash_password(password),
+        user = central_make_user(
+            db_session,
             role=role,
             store_id=store_id,
+            email=email,
+            password=password,
             is_active=is_active,
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
         return user, password
 
     return _create
 
 
-def _forge_token(claims: dict[str, Any]) -> str:
-    """Encode an arbitrary claim set with the test secret/algorithm.
-
-    Used to build tokens that violate one specific rule (missing sub, wrong
-    iss, expired, etc.) without relying on create_access_token.
-    """
-    settings = get_auth_settings()
-    return jwt.encode(
-        claims, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
-    )
-
-
-def _base_claims(sub: str | None = None, **overrides: Any) -> dict[str, Any]:
-    settings = get_auth_settings()
-    now = datetime.now(UTC)
-    claims: dict[str, Any] = {
-        "sub": sub if sub is not None else str(uuid.uuid4()),
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=10)).timestamp()),
-        "iss": settings.jwt_issuer,
-        "aud": settings.jwt_audience,
-    }
-    claims.update(overrides)
-    return claims
-
-
 # ---------------------------------------------------------------------------
-# /auth/login
+# POST /auth/login  (legacy endpoint — still issues a self-hosted token)
 # ---------------------------------------------------------------------------
 
 
@@ -186,21 +192,18 @@ class TestLoginFailures:
 
 
 # ---------------------------------------------------------------------------
-# /auth/me
+# GET /auth/me  —  Supabase JWT verification
 # ---------------------------------------------------------------------------
 
 
-class TestMeSuccess:
-    def test_valid_token_returns_user(
+class TestMeValidToken:
+    def test_valid_supabase_token_returns_user(
         self, client: TestClient, make_store, make_user
     ):
         store = make_store()
-        user, password = make_user(UserRole.owner, store_id=store.id)
-        login = client.post(
-            "/auth/login",
-            json={"email": user.email, "password": password},
-        )
-        token = login.json()["access_token"]
+        user, _ = make_user(UserRole.owner, store_id=store.id)
+        # Token `sub` == user.auth_user_id is the identity bridge.
+        token = make_supabase_token(sub=user.auth_user_id)
         resp = client.get(
             "/auth/me", headers={"Authorization": f"Bearer {token}"}
         )
@@ -211,22 +214,28 @@ class TestMeSuccess:
         assert body["role"] == UserRole.owner.value
         assert body["store_id"] == str(store.id)
 
+    def test_auth_headers_for_helper_is_accepted(
+        self, client: TestClient, make_store, make_user
+    ):
+        store = make_store()
+        user, _ = make_user(UserRole.staff, store_id=store.id)
+        resp = client.get("/auth/me", headers=auth_headers_for(user))
+        assert resp.status_code == 200
+        assert resp.json()["id"] == str(user.id)
+
     def test_response_does_not_leak_password_hash(
         self, client: TestClient, make_store, make_user
     ):
         store = make_store()
-        user, password = make_user(UserRole.staff, store_id=store.id)
-        login = client.post(
-            "/auth/login",
-            json={"email": user.email, "password": password},
-        )
+        user, _ = make_user(UserRole.staff, store_id=store.id)
+        token = make_supabase_token(sub=user.auth_user_id)
         resp = client.get(
-            "/auth/me",
-            headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+            "/auth/me", headers={"Authorization": f"Bearer {token}"}
         )
         body = resp.json()
         assert "password_hash" not in body
         assert "password" not in body
+        assert "auth_user_id" not in body
         assert set(body.keys()) == {
             "id",
             "full_name",
@@ -248,8 +257,6 @@ class TestMeAuthHeaderRules:
         resp = client.get(
             "/auth/me", headers={"Authorization": "Basic dXNlcjpwYXNz"}
         )
-        # FastAPI's HTTPBearer with auto_error=False treats a non-Bearer
-        # scheme as "no credentials" and yields None, which we map to 401.
         assert resp.status_code == 401
 
     def test_garbage_token_returns_401_invalid(self, client: TestClient):
@@ -259,46 +266,62 @@ class TestMeAuthHeaderRules:
         assert resp.status_code == 401
         assert resp.json()["detail"] == "Invalid token"
 
-    def test_token_signed_with_wrong_secret_returns_401(
+
+class TestMeTokenVerification:
+    """Signature / audience / expiry / claim checks on the Supabase JWT."""
+
+    def test_invalid_signature_is_rejected(
         self, client: TestClient, make_store, make_user
     ):
         store = make_store()
         user, _ = make_user(UserRole.staff, store_id=store.id)
-        bad_token = jwt.encode(
-            _base_claims(sub=str(user.id)),
-            "this-is-not-the-real-secret",
-            algorithm="HS256",
-        )
-        resp = client.get(
-            "/auth/me", headers={"Authorization": f"Bearer {bad_token}"}
-        )
-        assert resp.status_code == 401
-
-
-class TestMeTokenClaimsValidation:
-    def test_expired_token_returns_401_with_specific_detail(
-        self, client: TestClient, make_store, make_user
-    ):
-        store = make_store()
-        user, _ = make_user(UserRole.staff, store_id=store.id)
-        now = datetime.now(UTC)
-        token = _forge_token(
-            _base_claims(
-                sub=str(user.id),
-                iat=int((now - timedelta(hours=2)).timestamp()),
-                exp=int((now - timedelta(hours=1)).timestamp()),
-            )
+        # Signed with an unrelated key the verifier does not trust.
+        token = make_supabase_token(
+            sub=user.auth_user_id, signing_key=_WRONG_SIGNING_KEY
         )
         resp = client.get(
             "/auth/me", headers={"Authorization": f"Bearer {token}"}
         )
         assert resp.status_code == 401
-        assert resp.json()["detail"] == "Token expired"
+        assert resp.json()["detail"] == "Invalid token"
 
-    def test_token_missing_sub_is_rejected(self, client: TestClient):
-        claims = _base_claims()
-        claims.pop("sub")
-        token = _forge_token(claims)
+    def test_wrong_audience_is_rejected(
+        self, client: TestClient, make_store, make_user
+    ):
+        store = make_store()
+        user, _ = make_user(UserRole.staff, store_id=store.id)
+        token = make_supabase_token(
+            sub=user.auth_user_id, audience="not-authenticated"
+        )
+        resp = client.get(
+            "/auth/me", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "Invalid token"
+
+    def test_expired_token_is_rejected(
+        self, client: TestClient, make_store, make_user
+    ):
+        store = make_store()
+        user, _ = make_user(UserRole.staff, store_id=store.id)
+        # Issued two hours ago, valid for one hour → expired.
+        token = make_supabase_token(
+            sub=user.auth_user_id,
+            issued_at=datetime.now(UTC) - timedelta(hours=2),
+            expires_in_seconds=3600,
+        )
+        resp = client.get(
+            "/auth/me", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "Invalid token"
+
+    def test_token_missing_sub_is_rejected(
+        self, client: TestClient, make_store, make_user
+    ):
+        store = make_store()
+        make_user(UserRole.staff, store_id=store.id)
+        token = make_supabase_token(sub=None, include_sub=False)
         resp = client.get(
             "/auth/me", headers={"Authorization": f"Bearer {token}"}
         )
@@ -306,58 +329,72 @@ class TestMeTokenClaimsValidation:
         assert resp.json()["detail"] == "Invalid token"
 
     def test_token_with_non_uuid_sub_is_rejected(self, client: TestClient):
-        token = _forge_token(_base_claims(sub="not-a-uuid"))
+        token = make_supabase_token(sub="not-a-uuid")
         resp = client.get(
             "/auth/me", headers={"Authorization": f"Bearer {token}"}
         )
         assert resp.status_code == 401
         assert resp.json()["detail"] == "Invalid token"
 
-    def test_token_for_unknown_user_is_rejected(self, client: TestClient):
-        token = _forge_token(_base_claims(sub=str(uuid.uuid4())))
+
+class TestMeIdentityMapping:
+    def test_token_without_mapped_user_is_rejected(self, client: TestClient):
+        # Token verifies, but no public.users row has this auth_user_id.
+        token = make_supabase_token(sub=uuid.uuid4())
         resp = client.get(
             "/auth/me", headers={"Authorization": f"Bearer {token}"}
         )
         assert resp.status_code == 401
         assert resp.json()["detail"] == "Invalid token"
 
-    def test_token_with_wrong_issuer_is_rejected(self, client: TestClient):
-        token = _forge_token(_base_claims(iss="someone-else"))
-        resp = client.get(
-            "/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
-        assert resp.status_code == 401
-        assert resp.json()["detail"] == "Invalid token"
-
-    def test_token_with_wrong_audience_is_rejected(self, client: TestClient):
-        token = _forge_token(_base_claims(aud="someone-else"))
-        resp = client.get(
-            "/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
-        assert resp.status_code == 401
-        assert resp.json()["detail"] == "Invalid token"
-
-    def test_token_missing_iat_is_rejected(self, client: TestClient):
-        claims = _base_claims()
-        claims.pop("iat")
-        token = _forge_token(claims)
-        resp = client.get(
-            "/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
-        assert resp.status_code == 401
-
-
-class TestMeUserState:
-    def test_inactive_user_returns_403(
+    def test_inactive_mapped_user_returns_403(
         self, client: TestClient, make_store, make_user
     ):
         store = make_store()
         user, _ = make_user(
             UserRole.staff, store_id=store.id, is_active=False
         )
-        token = _forge_token(_base_claims(sub=str(user.id)))
+        token = make_supabase_token(sub=user.auth_user_id)
         resp = client.get(
             "/auth/me", headers={"Authorization": f"Bearer {token}"}
         )
         assert resp.status_code == 403
         assert "inactive" in resp.json()["detail"].lower()
+
+
+class TestMeClaimsAreNotAuthority:
+    """The JWT identifies; public.users authorizes.
+
+    Even if a token carries role / store_id / app_metadata claims, the
+    response must reflect the database row, never the claims.
+    """
+
+    def test_role_and_store_come_from_db_not_claims(
+        self, client: TestClient, make_store, make_user
+    ):
+        store = make_store()
+        # DB user is a plain staff member bound to `store`.
+        user, _ = make_user(UserRole.staff, store_id=store.id)
+        bogus_store_id = str(uuid.uuid4())
+        # Token lies: claims admin role and a different store.
+        token = make_supabase_token(
+            sub=user.auth_user_id,
+            extra_claims={
+                "role": "admin",
+                "user_role": "admin",
+                "store_id": bogus_store_id,
+                "app_metadata": {
+                    "role": "admin",
+                    "store_id": bogus_store_id,
+                },
+            },
+        )
+        resp = client.get(
+            "/auth/me", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        # Authority is the DB row, not the token claims.
+        assert body["role"] == UserRole.staff.value
+        assert body["store_id"] == str(store.id)
+        assert body["store_id"] != bogus_store_id

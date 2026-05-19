@@ -27,12 +27,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token
-from app.core.security import hash_password
 from app.core.security import verify_password
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
+from tests.helpers.auth import auth_headers_for as _auth
+from tests.helpers.auth import make_user as central_make_user
 
 
 # --------------------------------------------------------------------- #
@@ -63,6 +63,11 @@ def make_store(db_session: Session) -> Callable[..., Store]:
 
 @pytest.fixture
 def make_user(db_session: Session) -> Callable[..., User]:
+    # Thin adapter over tests.helpers.auth.make_user: keeps this
+    # suite's keyword-only signature, `"API {role}"` default name and
+    # `"irrelevant-pw-1234"` default password (test_login_still_works
+    # POSTs that exact string) so call sites are untouched, while
+    # routing user construction through the single F2.22.2 chokepoint.
     def _create(
         *,
         role: UserRole,
@@ -73,25 +78,18 @@ def make_user(db_session: Session) -> Callable[..., User]:
         phone: str | None = None,
         password: str = "irrelevant-pw-1234",
     ) -> User:
-        user = User(
-            full_name=full_name or f"API {role.value}",
-            email=email or f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
-            phone=phone,
-            password_hash=hash_password(password),
+        return central_make_user(
+            db_session,
             role=role,
             store_id=store_id,
             is_active=is_active,
+            full_name=full_name or f"API {role.value}",
+            email=email,
+            phone=phone,
+            password=password,
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
-        return user
 
     return _create
-
-
-def _auth(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(str(user.id))}"}
 
 
 USER_READ_KEYS = {

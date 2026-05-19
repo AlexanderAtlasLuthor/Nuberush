@@ -1,20 +1,18 @@
-import jwt
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.security import HTTPBearer
-from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from uuid import UUID
 
-from app.core.config import get_auth_settings
+from app.core.supabase_auth import SupabaseAuthError
+from app.core.supabase_auth import verify_supabase_jwt
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
 from app.db.session import get_db
-from app.schemas.auth import TokenPayload
 
 
 # auto_error=False so we control the response code/headers ourselves;
@@ -36,35 +34,36 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
+    """Resolve the authenticated user from a Supabase access token.
+
+    F2.22.2.D: the Bearer token is a Supabase-issued JWT, verified against
+    the project JWKS by `verify_supabase_jwt`. The token establishes
+    IDENTITY only — its `sub` is `auth.users.id`, matched against
+    `public.users.auth_user_id`. role / store_id / is_active and every
+    permission decision come from the `public.users` row, never from
+    token claims.
+    """
     if credentials is None:
         raise _unauthorized("Not authenticated")
     if credentials.scheme.lower() != "bearer":
         raise _unauthorized("Not authenticated")
 
-    settings = get_auth_settings()
     try:
-        raw_payload = jwt.decode(
-            credentials.credentials,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm],
-            issuer=settings.jwt_issuer,
-            audience=settings.jwt_audience,
-            options={"require": ["sub", "exp", "iat", "iss", "aud"]},
-        )
-    except jwt.ExpiredSignatureError as exc:
-        raise _unauthorized("Token expired") from exc
-    except jwt.InvalidTokenError as exc:
-        # Covers MissingRequiredClaimError, InvalidIssuerError,
-        # InvalidAudienceError, DecodeError, InvalidSignatureError, etc.
+        token_payload = verify_supabase_jwt(credentials.credentials)
+    except SupabaseAuthError as exc:
+        # Uniform 401 for every verification failure (bad signature,
+        # wrong audience/issuer, expired, malformed, non-UUID sub) so a
+        # caller cannot probe which check failed.
         raise _unauthorized("Invalid token") from exc
 
-    try:
-        token_payload = TokenPayload.model_validate(raw_payload)
-    except ValidationError as exc:
-        raise _unauthorized("Invalid token") from exc
-
-    user = db.scalar(select(User).where(User.id == token_payload.sub))
+    # Bridge: Supabase identity (sub) -> public.users via auth_user_id.
+    user = db.scalar(
+        select(User).where(User.auth_user_id == token_payload.sub)
+    )
     if user is None:
+        # Token verified, but no public.users row maps to this identity.
+        # Same 401/"Invalid token" as a bad token: an unmapped identity
+        # is not an authenticated NubeRush user.
         raise _unauthorized("Invalid token")
 
     if not user.is_active:

@@ -37,8 +37,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token
-from app.core.security import hash_password
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
@@ -53,6 +51,8 @@ from app.db.models import ProductVariant
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
+from tests.helpers.auth import auth_headers_for as _auth
+from tests.helpers.auth import make_user as central_make_user
 
 
 AUDIT_URL = "/stores/{store_id}/audit"
@@ -69,10 +69,6 @@ AUDIT_ITEM_KEYS = {
     "metadata",
     "created_at",
 }
-
-
-def _auth(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(str(user.id))}"}
 
 
 # --------------------------------------------------------------------- #
@@ -98,6 +94,7 @@ def make_store(db_session: Session) -> Callable[..., Store]:
     return _create
 
 
+# Thin adapter over tests.helpers.auth.make_user (F2.22.2.C2).
 @pytest.fixture
 def make_user(db_session: Session) -> Callable[..., User]:
     def _create(
@@ -106,18 +103,14 @@ def make_user(db_session: Session) -> Callable[..., User]:
         store_id: UUID | None = None,
         is_active: bool = True,
     ) -> User:
-        user = User(
-            full_name=f"API {role.value}",
-            email=f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
-            password_hash=hash_password("irrelevant-pw-1234"),
+        return central_make_user(
+            db_session,
             role=role,
             store_id=store_id,
+            full_name=f"API {role.value}",
             is_active=is_active,
+            password="irrelevant-pw-1234",
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
-        return user
 
     return _create
 

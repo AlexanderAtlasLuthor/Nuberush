@@ -41,7 +41,7 @@ from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password
+from tests.helpers.auth import make_password_hash
 from app.db.models import ComplianceStatus
 from app.db.models import Product
 from app.db.models import ProductComplianceAuditLog
@@ -87,7 +87,7 @@ def make_user(db_session: Session) -> Callable[..., User]:
         user = User(
             full_name=f"CmpSvc {role.value}",
             email=f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
-            password_hash=hash_password("supersecret123"),
+            password_hash=make_password_hash("supersecret123"),
             role=role,
             store_id=sid,
             is_active=is_active,

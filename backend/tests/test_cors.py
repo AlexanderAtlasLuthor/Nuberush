@@ -172,7 +172,7 @@ class TestCorsDoesNotBreakAuthRoutes:
     def test_login_still_returns_token_with_origin_header(
         self, client: TestClient, db_session
     ):
-        from app.core.security import hash_password
+        from tests.helpers.auth import make_password_hash
         from app.db.models import Store, User, UserRole
         import uuid
 
@@ -184,7 +184,7 @@ class TestCorsDoesNotBreakAuthRoutes:
         user = User(
             full_name="cors",
             email=f"cors-{uuid.uuid4().hex[:6]}@example.com",
-            password_hash=hash_password("supersecret123"),
+            password_hash=make_password_hash("supersecret123"),
             role=UserRole.staff,
             store_id=store.id,
             is_active=True,

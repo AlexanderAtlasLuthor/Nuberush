@@ -29,7 +29,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token
 from app.core.security import hash_password
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
@@ -42,6 +41,8 @@ from app.db.models import User
 from app.db.models import UserRole
 from app.schemas.products import ProductComplianceUpdate
 from app.services import products as prod_svc
+from tests.helpers.auth import auth_headers_for as _auth
+from tests.helpers.auth import make_user as central_make_user
 
 
 # --------------------------------------------------------------------- #
@@ -61,6 +62,7 @@ def make_store(db_session: Session) -> Callable[..., Store]:
     return _create
 
 
+# Thin adapter over tests.helpers.auth.make_user (F2.22.2.C2).
 @pytest.fixture
 def make_user(db_session: Session, make_store) -> Callable[..., User]:
     def _create(role: UserRole, store_id: uuid.UUID | None = None) -> User:
@@ -68,18 +70,14 @@ def make_user(db_session: Session, make_store) -> Callable[..., User]:
             sid = None
         else:
             sid = store_id if store_id is not None else make_store().id
-        user = User(
-            full_name=f"Inv-API {role.value}",
-            email=f"{role.value}-{uuid.uuid4().hex[:8]}@example.com",
-            password_hash=hash_password("supersecret123"),
+        return central_make_user(
+            db_session,
             role=role,
             store_id=sid,
+            full_name=f"Inv-API {role.value}",
             is_active=True,
+            password="supersecret123",
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
-        return user
 
     return _create
 
@@ -145,8 +143,6 @@ def make_item(
     return _create
 
 
-def _auth(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(str(user.id))}"}
 
 
 def _pin_created_at(
@@ -579,6 +575,10 @@ class TestApiTenancy:
             role=UserRole.manager,
             store_id=None,
             is_active=True,
+            # F2.22.2.D: the rogue user must be authenticatable so the
+            # router's tenancy check (the actual assertion) is what
+            # rejects it — not the auth layer for a missing mapping.
+            auth_user_id=uuid.uuid4(),
         )
         db_session.add(rogue)
         db_session.commit()

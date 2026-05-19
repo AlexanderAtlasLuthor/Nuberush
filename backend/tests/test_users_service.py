@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 
 from app.core.permissions import USER_ROLE_UPDATE_MATRIX
 from app.core.permissions import can_caller_assign_role
-from app.core.security import hash_password
+from tests.helpers.auth import make_password_hash
 from app.core.security import verify_password
 from app.db.models import Store
 from app.db.models import User
@@ -90,7 +90,7 @@ def make_user(db_session: Session) -> Callable[..., User]:
             full_name=full_name or f"User {role.value}",
             email=email or f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
             phone=phone,
-            password_hash=hash_password(password),
+            password_hash=make_password_hash(password),
             role=role,
             store_id=store_id,
             is_active=is_active,

@@ -28,8 +28,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token
-from app.core.security import hash_password
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
@@ -43,6 +41,8 @@ from app.db.models import ProductVariant
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
+from tests.helpers.auth import auth_headers_for as _auth
+from tests.helpers.auth import make_user as central_make_user
 
 
 ADMIN_DASHBOARD_URL = "/admin/dashboard"
@@ -72,10 +72,6 @@ _NON_ADMIN_ROLES = (
 )
 
 
-def _auth(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(str(user.id))}"}
-
-
 # --------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------- #
@@ -99,6 +95,7 @@ def make_store(db_session: Session) -> Callable[..., Store]:
     return _create
 
 
+# Thin adapter over tests.helpers.auth.make_user (F2.22.2.C2).
 @pytest.fixture
 def make_user(db_session: Session) -> Callable[..., User]:
     def _create(
@@ -108,18 +105,14 @@ def make_user(db_session: Session) -> Callable[..., User]:
         is_active: bool = True,
     ) -> User:
         sid = None if role == UserRole.admin else store_id
-        user = User(
-            full_name=f"DashAPI {role.value}",
-            email=f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
-            password_hash=hash_password("supersecret123"),
+        return central_make_user(
+            db_session,
             role=role,
             store_id=sid,
             is_active=is_active,
+            full_name=f"DashAPI {role.value}",
+            password="supersecret123",
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
-        return user
 
     return _create
 

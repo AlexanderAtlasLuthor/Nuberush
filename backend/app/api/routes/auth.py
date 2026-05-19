@@ -1,3 +1,6 @@
+import logging
+import uuid
+
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
@@ -20,9 +23,32 @@ from app.schemas.auth import CreateUserRequest
 from app.schemas.auth import LoginRequest
 from app.schemas.auth import TokenResponse
 from app.schemas.auth import UserRead
+from app.services import supabase_admin
+from app.services.supabase_admin import SupabaseAdminError
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _rollback_supabase_auth_user(auth_user_id: uuid.UUID) -> None:
+    """Best-effort delete of a Supabase auth user after a failed DB insert.
+
+    Prevents an `auth.users` row orphaned without a `public.users` mapping.
+    If the cleanup itself fails, we log a warning (no secrets) and let the
+    caller surface the original error — a stuck orphan is preferable to
+    masking the failure, and is recoverable by an operator.
+    """
+    try:
+        supabase_admin.delete_auth_user(auth_user_id)
+    except SupabaseAdminError:
+        logger.warning(
+            "Failed to roll back Supabase auth user %s after a public.users "
+            "insert error; manual cleanup of the orphaned auth.users row "
+            "may be required.",
+            auth_user_id,
+        )
 
 
 @router.post(
@@ -119,6 +145,37 @@ def create_user(
             detail="Email already registered.",
         )
 
+    # F2.22.2.E: identity lives in Supabase Auth, authorization in
+    # public.users. Create the auth.users record FIRST so the
+    # public.users row can carry its auth_user_id. user_metadata is
+    # informational only — role/store/is_active authority stays in
+    # public.users and is never read back from a Supabase claim.
+    metadata = {
+        "full_name": payload.full_name,
+        "nuberush_role": payload.role.value,
+        "nuberush_store_id": (
+            str(target_store_id) if target_store_id is not None else None
+        ),
+    }
+    try:
+        auth_user_id = supabase_admin.create_auth_user(
+            email=normalized_email,
+            password=payload.password,
+            user_metadata=metadata,
+        )
+    except SupabaseAdminError as exc:
+        # Identity provider failed → nothing was written here. Surface a
+        # controlled 502 without leaking provider internals or secrets.
+        logger.warning("Supabase auth user creation failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to create the user with the identity provider.",
+        ) from exc
+
+    # password_hash is still a NOT NULL column (it goes nullable in a
+    # later subphase). We keep writing a real hash to satisfy the schema;
+    # it is legacy/dead data — authentication no longer uses it (login is
+    # via Supabase JWT). The legacy POST /auth/login still reads it.
     new_user = User(
         full_name=payload.full_name,
         email=normalized_email,
@@ -127,8 +184,22 @@ def create_user(
         role=payload.role,
         store_id=target_store_id,
         is_active=True,
+        auth_user_id=auth_user_id,
     )
     db.add(new_user)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        # public.users insert failed after the auth.users row was created
+        # (e.g. a unique-constraint race on email or auth_user_id). Roll
+        # back the DB and the Supabase side so neither table is orphaned.
+        db.rollback()
+        _rollback_supabase_auth_user(auth_user_id)
+        logger.warning("public.users insert failed after auth create: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist the new user.",
+        ) from exc
+
     db.refresh(new_user)
     return new_user

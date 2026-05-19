@@ -28,8 +28,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token
-from app.core.security import hash_password
 from app.db.models import Order
 from app.db.models import OrderItem
 from app.db.models import OrderStatus
@@ -39,6 +37,8 @@ from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
 from app.services.earnings import COMMISSION_RATE
+from tests.helpers.auth import auth_headers_for as _auth
+from tests.helpers.auth import make_user as central_make_user
 from app.services.earnings import DELIVERY_FEE_USD
 from app.services.earnings import TIP_AMOUNT_USD
 
@@ -51,10 +51,6 @@ _NON_ADMIN_ROLES = (
     UserRole.staff,
     UserRole.driver,
 )
-
-
-def _auth(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(str(user.id))}"}
 
 
 def _store_url(store_id: uuid.UUID) -> str:
@@ -82,6 +78,7 @@ def make_store(db_session: Session) -> Callable[..., Store]:
     return _create
 
 
+# Thin adapter over tests.helpers.auth.make_user (F2.22.2.C2).
 @pytest.fixture
 def make_user(db_session: Session, make_store) -> Callable[..., User]:
     def _create(
@@ -93,18 +90,14 @@ def make_user(db_session: Session, make_store) -> Callable[..., User]:
             sid: uuid.UUID | None = None
         else:
             sid = (store if store is not None else make_store()).id
-        user = User(
-            full_name=f"Earn {role.value}",
-            email=f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
-            password_hash=hash_password("supersecret123"),
+        return central_make_user(
+            db_session,
             role=role,
             store_id=sid,
+            full_name=f"Earn {role.value}",
             is_active=True,
+            password="supersecret123",
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
-        return user
 
     return _create
 

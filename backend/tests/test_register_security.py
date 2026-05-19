@@ -3,13 +3,14 @@ from typing import Callable
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token
-from app.core.security import hash_password
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
+from tests.helpers.auth import auth_headers_for as _auth_headers
+from tests.helpers.auth import make_user as central_make_user
 
 
 # ---------------------------------------------------------------------------
@@ -31,31 +32,26 @@ def make_store(db_session: Session) -> Callable[..., Store]:
 
 @pytest.fixture
 def make_user(db_session: Session) -> Callable[..., User]:
+    # Thin adapter over tests.helpers.auth.make_user: keeps this
+    # suite's historical positional `role` signature and default
+    # password so call sites are untouched, while routing user
+    # construction through the single F2.22.2 chokepoint.
     def _create(
         role: UserRole,
         store_id: uuid.UUID | None = None,
         email: str | None = None,
         is_active: bool = True,
     ) -> User:
-        user = User(
-            full_name=f"Test {role.value}",
-            email=email or f"{role.value}-{uuid.uuid4().hex[:8]}@example.com",
-            password_hash=hash_password("irrelevant-pw-1234"),
+        return central_make_user(
+            db_session,
             role=role,
             store_id=store_id,
+            email=email,
             is_active=is_active,
+            password="irrelevant-pw-1234",
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
-        return user
 
     return _create
-
-
-def _auth_headers(user: User) -> dict[str, str]:
-    token = create_access_token(str(user.id))
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _create_user_payload(
@@ -505,3 +501,199 @@ class TestResponseShape:
             "/auth/users", json=payload, headers=_auth_headers(admin)
         )
         assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# F2.22.2.E — Supabase Admin API atomic creation
+# ---------------------------------------------------------------------------
+
+
+class TestSupabaseAdminAtomicCreation:
+    """POST /auth/users creates auth.users (Supabase) + public.users atomically.
+
+    The Supabase Admin wrapper is faked offline by the autouse
+    `supabase_admin_fake` fixture (tests/conftest.py).
+    """
+
+    def test_create_user_calls_supabase_admin(
+        self, client: TestClient, make_store, make_user, supabase_admin_fake
+    ):
+        store = make_store()
+        admin = make_user(UserRole.admin, store_id=None)
+        payload = _create_user_payload(
+            UserRole.staff, store_id=store.id, email="New-Person@Example.com"
+        )
+        resp = client.post(
+            "/auth/users", json=payload, headers=_auth_headers(admin)
+        )
+        assert resp.status_code == 201, resp.text
+        # Exactly one Supabase auth.users record was created, with the
+        # normalized (lowercased) email.
+        assert len(supabase_admin_fake.created) == 1
+        assert supabase_admin_fake.created[0]["email"] == "new-person@example.com"
+        assert supabase_admin_fake.deleted == []
+
+    def test_created_row_has_auth_user_id_from_supabase(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        supabase_admin_fake,
+    ):
+        store = make_store()
+        admin = make_user(UserRole.admin, store_id=None)
+        pinned_id = uuid.uuid4()
+        supabase_admin_fake.next_auth_user_id = pinned_id
+        payload = _create_user_payload(UserRole.staff, store_id=store.id)
+        resp = client.post(
+            "/auth/users", json=payload, headers=_auth_headers(admin)
+        )
+        assert resp.status_code == 201, resp.text
+        created = db_session.scalar(
+            select(User).where(User.email == payload["email"].lower())
+        )
+        assert created is not None
+        # public.users.auth_user_id == the UUID Supabase returned.
+        assert created.auth_user_id == pinned_id
+
+    def test_created_row_preserves_role_store_and_profile(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        supabase_admin_fake,
+    ):
+        store = make_store()
+        admin = make_user(UserRole.admin, store_id=None)
+        payload = _create_user_payload(UserRole.manager, store_id=store.id)
+        payload["full_name"] = "Persisted Manager"
+        resp = client.post(
+            "/auth/users", json=payload, headers=_auth_headers(admin)
+        )
+        assert resp.status_code == 201, resp.text
+        created = db_session.scalar(
+            select(User).where(User.email == payload["email"].lower())
+        )
+        assert created is not None
+        assert created.role == UserRole.manager
+        assert created.store_id == store.id
+        assert created.is_active is True
+        assert created.full_name == "Persisted Manager"
+
+    def test_supabase_metadata_is_informational_only(
+        self, client: TestClient, make_store, make_user, supabase_admin_fake
+    ):
+        # The metadata sent to Supabase carries role/store for human
+        # context, but it is NOT authority — public.users is. (The
+        # verifier in app.core.supabase_auth discards all claims but sub.)
+        store = make_store()
+        admin = make_user(UserRole.admin, store_id=None)
+        payload = _create_user_payload(UserRole.staff, store_id=store.id)
+        resp = client.post(
+            "/auth/users", json=payload, headers=_auth_headers(admin)
+        )
+        assert resp.status_code == 201, resp.text
+        metadata = supabase_admin_fake.created[0]["user_metadata"]
+        assert metadata["nuberush_role"] == "staff"
+        assert metadata["nuberush_store_id"] == str(store.id)
+        assert metadata["full_name"] == payload["full_name"]
+
+    def test_supabase_create_failure_inserts_no_public_user(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        supabase_admin_fake,
+    ):
+        store = make_store()
+        admin = make_user(UserRole.admin, store_id=None)
+        supabase_admin_fake.create_should_fail = True
+        payload = _create_user_payload(UserRole.staff, store_id=store.id)
+        resp = client.post(
+            "/auth/users", json=payload, headers=_auth_headers(admin)
+        )
+        assert resp.status_code == 502
+        # No public.users row, no orphan cleanup needed.
+        assert (
+            db_session.scalar(
+                select(User).where(User.email == payload["email"].lower())
+            )
+            is None
+        )
+        assert supabase_admin_fake.created == []
+        assert supabase_admin_fake.deleted == []
+
+    def test_db_failure_after_supabase_create_triggers_cleanup(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        supabase_admin_fake,
+    ):
+        # Pin the Supabase-returned id to an auth_user_id already in use,
+        # so the public.users insert hits the unique index and fails
+        # AFTER the auth.users record was created.
+        store = make_store()
+        admin = make_user(UserRole.admin, store_id=None)
+        collision_id = uuid.uuid4()
+        central_make_user(
+            db_session,
+            role=UserRole.staff,
+            store_id=store.id,
+            auth_user_id=collision_id,
+        )
+        supabase_admin_fake.next_auth_user_id = collision_id
+        payload = _create_user_payload(UserRole.staff, store_id=store.id)
+        resp = client.post(
+            "/auth/users", json=payload, headers=_auth_headers(admin)
+        )
+        assert resp.status_code == 500
+        # The orphaned Supabase auth user was deleted (rollback).
+        assert supabase_admin_fake.deleted == [collision_id]
+        # No public.users row for the failed create.
+        assert (
+            db_session.scalar(
+                select(User).where(User.email == payload["email"].lower())
+            )
+            is None
+        )
+
+    def test_cleanup_failure_is_controlled_and_leaks_no_secret(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_store,
+        make_user,
+        supabase_admin_fake,
+    ):
+        # DB insert fails after Supabase create AND the cleanup delete
+        # also fails: the endpoint must still return a controlled 500
+        # with a generic, secret-free message — not crash.
+        store = make_store()
+        admin = make_user(UserRole.admin, store_id=None)
+        collision_id = uuid.uuid4()
+        central_make_user(
+            db_session,
+            role=UserRole.staff,
+            store_id=store.id,
+            auth_user_id=collision_id,
+        )
+        supabase_admin_fake.next_auth_user_id = collision_id
+        supabase_admin_fake.delete_should_fail = True
+        payload = _create_user_payload(UserRole.staff, store_id=store.id)
+        resp = client.post(
+            "/auth/users", json=payload, headers=_auth_headers(admin)
+        )
+        # Still a controlled 500 — the cleanup failure is swallowed/logged.
+        assert resp.status_code == 500
+        # The cleanup delete was attempted (even though it failed).
+        assert supabase_admin_fake.deleted == [collision_id]
+        # Generic message: no service-role key, no provider internals.
+        detail = resp.json()["detail"]
+        assert detail == "Failed to persist the new user."
+        assert "key" not in detail.lower()
+        assert "supabase" not in detail.lower()

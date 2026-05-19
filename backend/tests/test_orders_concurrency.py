@@ -47,7 +47,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from app.core.security import hash_password
+from tests.helpers.auth import make_password_hash
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
@@ -140,7 +140,7 @@ def _build_world(
         admin = User(
             full_name="Ord Conc Admin",
             email=f"oc-{uuid.uuid4().hex[:8]}@example.com",
-            password_hash=hash_password("p"),
+            password_hash=make_password_hash("p"),
             role=UserRole.admin,
             store_id=None,
             is_active=True,

@@ -1,4 +1,5 @@
 import os
+import uuid
 from collections.abc import Generator
 
 import pytest
@@ -21,6 +22,15 @@ SETTINGS_ENV_VARS = (
     "ACCESS_TOKEN_EXPIRE_MINUTES",
     "BACKEND_CORS_ORIGINS",
     "DATABASE_URL",
+    # F2.22.2.D: strip Supabase auth vars so SupabaseAuthSettings falls
+    # back to deterministic defaults (audience "authenticated", no
+    # issuer) regardless of the host shell. The test suite verifies
+    # tokens via a monkeypatched JWKS client, not real Supabase config.
+    "SUPABASE_URL",
+    "SUPABASE_JWKS_URL",
+    "SUPABASE_JWT_AUDIENCE",
+    "SUPABASE_JWT_ISSUER",
+    "SUPABASE_SERVICE_ROLE_KEY",
 )
 
 
@@ -62,6 +72,107 @@ def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # and only sets exactly what it needs.
     for var in SETTINGS_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _supabase_jwt_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the Supabase JWT verifier at the test-only keypair.
+
+    F2.22.2.D: `app.api.deps.get_current_user` verifies Supabase access
+    tokens via `app.core.supabase_auth.verify_supabase_jwt`, which fetches
+    signing keys from a JWKS endpoint. Tokens minted by
+    `tests.helpers.auth` (`make_supabase_token` / `auth_headers_for`) are
+    signed with a throwaway RSA keypair generated in that module.
+
+    This autouse fixture swaps the verifier's JWKS client for a fake that
+    returns that keypair's public half. Verification stays fully real —
+    signature, audience, expiry and required-claim checks all run — but
+    offline: no network, no live Supabase project.
+    """
+    from types import SimpleNamespace
+
+    from app.core import supabase_auth
+    from app.core.config import get_supabase_auth_settings
+    from tests.helpers.auth import get_test_public_key
+
+    class _FakeJWKClient:
+        """Stands in for jwt.PyJWKClient: always yields the test key."""
+
+        def get_signing_key_from_jwt(self, token: str):  # noqa: ARG002
+            return SimpleNamespace(key=get_test_public_key())
+
+    # Fresh settings each test (deterministic defaults), and route the
+    # verifier through the fake client.
+    get_supabase_auth_settings.cache_clear()
+    supabase_auth.reset_jwk_client_cache()
+    monkeypatch.setattr(
+        supabase_auth, "_get_jwk_client", lambda: _FakeJWKClient()
+    )
+
+
+class _FakeSupabaseAdmin:
+    """In-memory stand-in for app.services.supabase_admin (F2.22.2.E).
+
+    Records calls and lets a test simulate failures, so POST /auth/users
+    can be exercised offline and deterministically — no real Supabase
+    project, no service-role key.
+    """
+
+    def __init__(self) -> None:
+        self.created: list[dict] = []  # email / password / user_metadata / id
+        self.deleted: list[uuid.UUID] = []  # auth_user_ids passed to delete
+        self.create_should_fail = False
+        self.delete_should_fail = False
+        self.next_auth_user_id: uuid.UUID | None = None  # pin the returned id
+
+    def create_auth_user(
+        self, email: str, password: str, user_metadata: dict | None = None
+    ) -> uuid.UUID:
+        from app.services.supabase_admin import SupabaseAdminError
+
+        if self.create_should_fail:
+            raise SupabaseAdminError("simulated Supabase create failure")
+        new_id = self.next_auth_user_id or uuid.uuid4()
+        self.created.append(
+            {
+                "email": email,
+                "password": password,
+                "user_metadata": user_metadata,
+                "id": new_id,
+            }
+        )
+        return new_id
+
+    def delete_auth_user(self, auth_user_id: uuid.UUID) -> None:
+        from app.services.supabase_admin import SupabaseAdminError
+
+        self.deleted.append(auth_user_id)
+        if self.delete_should_fail:
+            raise SupabaseAdminError("simulated Supabase delete failure")
+
+
+@pytest.fixture(autouse=True)
+def supabase_admin_fake(monkeypatch: pytest.MonkeyPatch) -> _FakeSupabaseAdmin:
+    """Swap the Supabase Admin API wrapper for an offline fake.
+
+    F2.22.2.E: POST /auth/users calls `app.services.supabase_admin` to
+    create (and, on rollback, delete) `auth.users` records. The suite must
+    never hit a real Supabase project, so this autouse fixture replaces
+    both functions with `_FakeSupabaseAdmin` methods. Tests that exercise
+    the endpoint request this fixture by name to inspect calls
+    (`fake.created` / `fake.deleted`) or to simulate failures
+    (`fake.create_should_fail` / `fake.delete_should_fail`).
+    """
+    from app.services import supabase_admin
+
+    fake = _FakeSupabaseAdmin()
+    monkeypatch.setattr(
+        supabase_admin, "create_auth_user", fake.create_auth_user
+    )
+    monkeypatch.setattr(
+        supabase_admin, "delete_auth_user", fake.delete_auth_user
+    )
+    return fake
 
 
 @pytest.fixture(scope="session")
