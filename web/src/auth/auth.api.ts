@@ -1,30 +1,50 @@
-// F2.3: thin wrappers over the FastAPI auth endpoints.
+// F2.22.2.G: auth API — Supabase Auth for credentials, FastAPI for the
+// app user.
 //
-// All HTTP goes through `apiRequest` from src/api so error normalisation,
-// header/body building and Bearer-token attachment stay centralised. No
-// fetch, no axios, no React, no UI imports here.
+// Split of responsibilities:
+//   - Supabase Auth owns identity + credentials. `login` calls
+//     `signInWithPassword`; `logout` calls `signOut`. The legacy
+//     `POST /auth/login` endpoint no longer exists.
+//   - FastAPI still owns the app user. `getMe` calls `GET /auth/me`
+//     through `apiRequest` (which attaches the Supabase access token as
+//     a Bearer header). role / store_id / is_active come from
+//     `public.users`, never from a Supabase token claim.
 //
-// Endpoint coverage matches what the backend actually exposes today:
-//   POST /auth/login   — returns { access_token, token_type }
-//   GET  /auth/me      — returns UserRead (Bearer required)
-//
-// There is intentionally NO logout(). Backend JWT is stateless: the
-// server has no session record to invalidate, so logout is purely
-// client-side (clearAccessToken() + drop user from React state). When
-// token revocation lands on the server (Redis denylist or DB flag), add
-// a logout() here that POSTs the revocation and only THEN clears local
-// state.
+// No `supabase.from()` / `supabase.rpc()`: this module touches Supabase
+// only for auth.
 
 import { apiRequest } from "@/api";
-import type { AuthUser, LoginCredentials, LoginResponse } from "./types";
+import { supabase } from "@/lib/supabase";
+import type { AuthUser, LoginCredentials } from "./types";
 
-export function login(credentials: LoginCredentials): Promise<LoginResponse> {
-  return apiRequest<LoginResponse>("/auth/login", {
-    method: "POST",
-    body: credentials,
+/**
+ * Sign in with email + password via Supabase Auth, then resolve the app
+ * user from FastAPI `GET /auth/me`.
+ *
+ * Throws an `Error` with a user-readable message when Supabase rejects
+ * the credentials; `getApiErrorMessage` surfaces it in the login UI.
+ */
+export async function login(
+  credentials: LoginCredentials,
+): Promise<AuthUser> {
+  const { error } = await supabase.auth.signInWithPassword({
+    email: credentials.email,
+    password: credentials.password,
   });
+  if (error) {
+    throw new Error(error.message);
+  }
+  // Identity established; the app user (role/store/is_active) is the
+  // FastAPI source of truth.
+  return getMe();
 }
 
+/** End the Supabase session. */
+export async function logout(): Promise<void> {
+  await supabase.auth.signOut();
+}
+
+/** Fetch the current app user from FastAPI. Bearer token attached by apiRequest. */
 export function getMe(signal?: AbortSignal): Promise<AuthUser> {
   return apiRequest<AuthUser>("/auth/me", { method: "GET", signal });
 }

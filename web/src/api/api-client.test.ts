@@ -1,20 +1,27 @@
-// F2.2: focused unit tests for the API client foundation.
+// F2.2 / F2.22.2.G: focused unit tests for the API client foundation.
 //
-// Scope is intentionally narrow — error model + token holder. These two
-// have no I/O and no React tree, so the tests are fast and deterministic.
-// Network behaviour of `apiRequest` (fetch wiring, JSON parsing branches,
-// error-shape normalisation) is NOT covered here: it requires either
-// mocking the global fetch or hitting a real server, both of which add
-// surface this scaffolding subphase shouldn't take on. Those tests will
-// land alongside the first feature hook in a later subphase.
+// Covers the error model and the Authorization-header behaviour of
+// `apiRequest`. Since F2.22.2.G the Bearer token comes from the Supabase
+// session (`@/lib/supabase`, mocked here), not a legacy in-memory holder.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ApiError, getApiErrorMessage, isApiError } from "./errors";
 import {
-  clearAccessToken,
-  getAccessToken,
-  setAccessToken,
-} from "./session-token";
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { ApiError, getApiErrorMessage, isApiError } from "./errors";
+
+const getSession = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/supabase", () => ({
+  supabase: { auth: { getSession } },
+}));
+
+import { apiRequest } from "./client";
 
 describe("ApiError", () => {
   it("preserves status, message, details and code", () => {
@@ -89,29 +96,43 @@ describe("getApiErrorMessage", () => {
   });
 });
 
-describe("session-token (memory holder)", () => {
-  // Reset between tests so order does not matter.
-  beforeEach(() => clearAccessToken());
-  afterEach(() => clearAccessToken());
+describe("apiRequest Authorization header", () => {
+  let fetchMock: Mock;
 
-  it("starts as null", () => {
-    expect(getAccessToken()).toBeNull();
+  function jsonResponse(): Response {
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
   });
 
-  it("set then get returns the token", () => {
-    setAccessToken("abc.def.ghi");
-    expect(getAccessToken()).toBe("abc.def.ghi");
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("setting null clears the token", () => {
-    setAccessToken("abc.def.ghi");
-    setAccessToken(null);
-    expect(getAccessToken()).toBeNull();
+  it("attaches the Supabase access token as a Bearer header", async () => {
+    getSession.mockResolvedValue({
+      data: { session: { access_token: "abc.def.ghi" } },
+    });
+
+    await apiRequest("/auth/me");
+
+    const headers = fetchMock.mock.calls[0][1].headers as Headers;
+    expect(headers.get("Authorization")).toBe("Bearer abc.def.ghi");
   });
 
-  it("clearAccessToken() empties the holder", () => {
-    setAccessToken("abc.def.ghi");
-    clearAccessToken();
-    expect(getAccessToken()).toBeNull();
+  it("sends no Authorization header when there is no session", async () => {
+    getSession.mockResolvedValue({ data: { session: null } });
+
+    await apiRequest("/auth/me");
+
+    const headers = fetchMock.mock.calls[0][1].headers as Headers;
+    expect(headers.get("Authorization")).toBeNull();
   });
 });

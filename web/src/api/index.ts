@@ -13,11 +13,7 @@ export {
   type ApiErrorInit,
 } from "./errors";
 
-export {
-  getAccessToken,
-  setAccessToken,
-  clearAccessToken,
-} from "./session-token";
+export { getAccessToken, clearAccessToken } from "./session-token";
 
 export {
   apiRequest,

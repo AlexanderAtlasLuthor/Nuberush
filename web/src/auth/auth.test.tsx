@@ -1,39 +1,93 @@
-// F2.3: focused unit tests for the auth foundation.
+// F2.22.2.G: auth foundation tests — Supabase session + FastAPI /auth/me.
 //
-// Scope is intentionally narrow:
+// What changed vs the F2.3 suite:
+//   - There is no legacy in-memory token holder and no POST /auth/login.
+//   - `@/lib/supabase` is mocked so getSession / signInWithPassword /
+//     signOut / onAuthStateChange are controllable and offline.
+//   - `@/api` is mocked so `authApi.getMe()` (the only /auth/me caller)
+//     resolves a fixed app user without real fetch.
+//
+// Coverage:
 //   - useAuth() outside <AuthProvider> throws
-//   - AuthProvider initial state when no token is present
-//   - logout() clears the in-memory token holder
+//   - AuthProvider treats "no Supabase session" as unauthenticated
+//   - AuthProvider bootstraps an existing session via /auth/me
+//   - login() calls supabase.auth.signInWithPassword then /auth/me
+//   - login() with bad credentials surfaces the error, stays logged out
+//   - logout() calls supabase.auth.signOut and clears the user
+//   - a SIGNED_OUT auth event clears the user
 //   - ProtectedRoute redirects unauthenticated traffic to /login
-//
-// What is deliberately NOT covered here:
-//   - login() success/failure paths against /auth/login. That requires
-//     either mocking the global fetch or pointing at a live backend;
-//     both add surface this scaffolding subphase shouldn't take on.
-//     Those tests will land alongside the first feature subphase that
-//     exercises a real session round-trip.
-//   - the AuthScreen page UI. Brittle DOM-shape tests on a visual
-//     prototype page don't earn their keep at this stage.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, renderHook, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { ReactNode } from "react";
 
-import {
-  clearAccessToken,
-  getAccessToken,
-  setAccessToken,
-} from "@/api";
+import type { AuthUser } from "./types";
+
+// --- Mocks ----------------------------------------------------------------
+
+const supabaseAuth = vi.hoisted(() => ({
+  getSession: vi.fn(),
+  signInWithPassword: vi.fn(),
+  signOut: vi.fn(),
+  onAuthStateChange: vi.fn(),
+}));
+
+vi.mock("@/lib/supabase", () => ({
+  supabase: { auth: supabaseAuth },
+}));
+
+const apiRequestMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/api", () => ({ apiRequest: apiRequestMock }));
+
 import { AuthProvider, ProtectedRoute, useAuth } from "./index";
 
-beforeEach(() => clearAccessToken());
-afterEach(() => clearAccessToken());
+// --- Fixtures -------------------------------------------------------------
+
+const TEST_USER: AuthUser = {
+  id: "11111111-1111-1111-1111-111111111111",
+  full_name: "Test Staff",
+  email: "staff@example.com",
+  role: "staff",
+  store_id: "22222222-2222-2222-2222-222222222222",
+  is_active: true,
+};
+
+const FAKE_SESSION = { access_token: "fake.access.token" };
+
+/** Captured `onAuthStateChange` callback so tests can emit auth events. */
+let authChangeCb:
+  | ((event: string, session: unknown) => void)
+  | null = null;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  authChangeCb = null;
+
+  supabaseAuth.onAuthStateChange.mockImplementation(
+    (cb: (event: string, session: unknown) => void) => {
+      authChangeCb = cb;
+      return { data: { subscription: { unsubscribe: vi.fn() } } };
+    },
+  );
+  // Default: no persisted session.
+  supabaseAuth.getSession.mockResolvedValue({ data: { session: null } });
+  supabaseAuth.signOut.mockResolvedValue({ error: null });
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+function wrapper({ children }: { children: ReactNode }) {
+  return <AuthProvider>{children}</AuthProvider>;
+}
+
+// --- useAuth --------------------------------------------------------------
 
 describe("useAuth", () => {
   it("throws when used outside <AuthProvider>", () => {
-    // React logs the thrown error during render; silence it so the
-    // test output stays clean. We restore the original at the end.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(() => renderHook(() => useAuth())).toThrow(
@@ -45,40 +99,151 @@ describe("useAuth", () => {
   });
 });
 
-describe("AuthProvider", () => {
-  function wrapper({ children }: { children: ReactNode }) {
-    return <AuthProvider>{children}</AuthProvider>;
-  }
+// --- AuthProvider bootstrap ----------------------------------------------
 
-  it("starts unauthenticated when no token is present", async () => {
+describe("AuthProvider bootstrap", () => {
+  it("starts unauthenticated when there is no Supabase session", async () => {
     const { result } = renderHook(() => useAuth(), { wrapper });
-    // Flush the bootstrap effect's microtasks. With no token the
-    // shortcut path runs: no /me call, isLoading becomes false.
     await act(async () => {});
+
+    expect(result.current.user).toBeNull();
+    expect(result.current.isAuthenticated).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    // No session → no /auth/me round-trip.
+    expect(apiRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps an existing Supabase session via /auth/me", async () => {
+    supabaseAuth.getSession.mockResolvedValue({
+      data: { session: FAKE_SESSION },
+    });
+    apiRequestMock.mockResolvedValue(TEST_USER);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {});
+
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      "/auth/me",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(result.current.user).toEqual(TEST_USER);
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("treats a session with a failing /auth/me as logged out", async () => {
+    supabaseAuth.getSession.mockResolvedValue({
+      data: { session: FAKE_SESSION },
+    });
+    apiRequestMock.mockRejectedValue(new Error("401"));
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {});
+
     expect(result.current.user).toBeNull();
     expect(result.current.isAuthenticated).toBe(false);
     expect(result.current.isLoading).toBe(false);
   });
+});
 
-  it("logout() clears the in-memory access-token holder", async () => {
+// --- login / logout ------------------------------------------------------
+
+describe("AuthProvider login", () => {
+  it("signs in via Supabase then loads the user from /auth/me", async () => {
+    supabaseAuth.signInWithPassword.mockResolvedValue({
+      data: {},
+      error: null,
+    });
+    apiRequestMock.mockResolvedValue(TEST_USER);
+
     const { result } = renderHook(() => useAuth(), { wrapper });
     await act(async () => {});
 
-    // Simulate a post-login state by writing directly to the holder.
-    // (The real login() flow would do this, plus call /me. Here we
-    // only need to verify logout() drops what's there.)
-    setAccessToken("fake.access.token");
-    expect(getAccessToken()).toBe("fake.access.token");
+    await act(async () => {
+      await result.current.login({
+        email: "staff@example.com",
+        password: "supersecret123",
+      });
+    });
 
-    act(() => {
+    expect(supabaseAuth.signInWithPassword).toHaveBeenCalledWith({
+      email: "staff@example.com",
+      password: "supersecret123",
+    });
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      "/auth/me",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(result.current.user).toEqual(TEST_USER);
+    expect(result.current.isAuthenticated).toBe(true);
+  });
+
+  it("surfaces an error and stays logged out on bad credentials", async () => {
+    supabaseAuth.signInWithPassword.mockResolvedValue({
+      data: {},
+      error: { message: "Invalid login credentials" },
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {});
+
+    await act(async () => {
+      await expect(
+        result.current.login({
+          email: "staff@example.com",
+          password: "wrong",
+        }),
+      ).rejects.toThrow(/Invalid login credentials/);
+    });
+
+    expect(result.current.user).toBeNull();
+    expect(result.current.isAuthenticated).toBe(false);
+    // /auth/me must not run when sign-in failed.
+    expect(apiRequestMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("AuthProvider logout", () => {
+  it("signs out via Supabase and clears the user", async () => {
+    supabaseAuth.getSession.mockResolvedValue({
+      data: { session: FAKE_SESSION },
+    });
+    apiRequestMock.mockResolvedValue(TEST_USER);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {});
+    expect(result.current.user).toEqual(TEST_USER);
+
+    await act(async () => {
       result.current.logout();
     });
 
-    expect(getAccessToken()).toBeNull();
+    expect(supabaseAuth.signOut).toHaveBeenCalled();
+    expect(result.current.user).toBeNull();
+    expect(result.current.isAuthenticated).toBe(false);
+  });
+
+  it("clears the user when a SIGNED_OUT event fires", async () => {
+    supabaseAuth.getSession.mockResolvedValue({
+      data: { session: FAKE_SESSION },
+    });
+    apiRequestMock.mockResolvedValue(TEST_USER);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {});
+    expect(result.current.user).toEqual(TEST_USER);
+
+    // Emit the event the Supabase client would fire on session loss.
+    await act(async () => {
+      authChangeCb?.("SIGNED_OUT", null);
+    });
+
     expect(result.current.user).toBeNull();
     expect(result.current.isAuthenticated).toBe(false);
   });
 });
+
+// --- ProtectedRoute ------------------------------------------------------
 
 describe("ProtectedRoute", () => {
   function Tree({ initial = "/protected" }: { initial?: string }) {
@@ -87,10 +252,7 @@ describe("ProtectedRoute", () => {
         <MemoryRouter initialEntries={[initial]}>
           <Routes>
             <Route element={<ProtectedRoute />}>
-              <Route
-                path="/protected"
-                element={<div>Secret area</div>}
-              />
+              <Route path="/protected" element={<div>Secret area</div>} />
             </Route>
             <Route path="/login" element={<div>Login here</div>} />
           </Routes>
@@ -101,8 +263,6 @@ describe("ProtectedRoute", () => {
 
   it("redirects unauthenticated users to /login", async () => {
     render(<Tree />);
-    // Bootstrap resolves with no token → not authenticated → Navigate
-    // to /login. findByText retries until that re-render lands.
     expect(await screen.findByText("Login here")).toBeInTheDocument();
     expect(screen.queryByText("Secret area")).toBeNull();
   });

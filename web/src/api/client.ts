@@ -13,8 +13,9 @@
 //
 // Behaviour:
 //   - Path is appended to API_BASE_URL. Leading "/" optional.
-//   - Authorization: Bearer <token> is auto-attached when
-//     getAccessToken() returns a non-null value.
+//   - Authorization: Bearer <token> is auto-attached when the Supabase
+//     session yields an access token (getAccessToken() resolves
+//     non-null); requests made with no session send no Bearer header.
 //   - Content-Type: application/json is auto-set when a non-FormData
 //     body is provided (FormData lets the browser pick its own
 //     multipart boundary).
@@ -45,13 +46,13 @@ function buildUrl(path: string): string {
   return `${API_BASE_URL}${prefix}${path}`;
 }
 
-function buildHeaders(
+async function buildHeaders(
   body: unknown,
   custom: HeadersInit | undefined,
-): Headers {
+): Promise<Headers> {
   const headers = new Headers(custom);
 
-  const token = getAccessToken();
+  const token = await getAccessToken();
   if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
@@ -151,7 +152,7 @@ export async function apiRequest<TResponse = unknown>(
   const { method = "GET", body, headers, signal } = options;
 
   const url = buildUrl(path);
-  const finalHeaders = buildHeaders(body, headers);
+  const finalHeaders = await buildHeaders(body, headers);
   const finalBody = serializeBody(body);
 
   let response: Response;

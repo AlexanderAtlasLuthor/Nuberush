@@ -6,24 +6,23 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ArrowLeft, Phone, Flame, Loader2 } from 'lucide-react';
 
-// F2.3: real auth wiring.
+// F2.3 / F2.22.2.G: real auth wiring.
 //
-// What changed vs the F2.0/F2.1 placeholder:
-//   - handleSubmit now calls AuthProvider.login() which POSTs to
-//     FastAPI /auth/login and validates the issued token via /auth/me.
-//   - The fake `setOnboardingStep` advancement is gone; success
-//     navigates to the route the user originally tried to reach (or
-//     /app as the fallback).
+// Behaviour:
+//   - handleSubmit calls AuthProvider.login(), which signs in via
+//     Supabase Auth (signInWithPassword) and then validates the session
+//     by resolving the app user from FastAPI /auth/me.
+//   - Success navigates to the route the user originally tried to reach
+//     (or /app as the fallback).
 //   - Errors are surfaced as user-readable text from getApiErrorMessage
-//     (which handles ApiError, vanilla Error, strings, and unknowns).
-//   - Social/phone buttons are visually preserved but inert: the
-//     backend exposes no OAuth/phone flow, and pretending otherwise
-//     would re-introduce the prototype's fake auth.
-//   - Sign-up mode shows the same message the backend returns from
-//     POST /auth/register (deprecated) — public registration is
-//     disabled by design; admins create users via POST /auth/users.
+//     (which handles ApiError, vanilla Error, strings, and unknowns) —
+//     invalid Supabase credentials and a failed /auth/me both land here.
+//   - Social/phone buttons are visually preserved but inert: no
+//     OAuth/phone flow is wired.
+//   - Sign-up mode is disabled — public registration is off by design;
+//     admins create users via POST /auth/users.
 //
-// Visual layout is preserved on purpose. F2.3 is wiring, not redesign.
+// Visual layout is preserved on purpose. This is wiring, not redesign.
 
 const AuthScreen = () => {
   const navigate = useNavigate();

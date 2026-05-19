@@ -15,13 +15,7 @@ export { StoreProvider, StoreContext } from "./StoreProvider";
 export { useStoreContext } from "./useStoreContext";
 export { StoreGate } from "./StoreGate";
 
-export type {
-  AuthUser,
-  AuthSession,
-  LoginCredentials,
-  LoginResponse,
-  UserRole,
-} from "./types";
+export type { AuthUser, LoginCredentials, UserRole } from "./types";
 
 export type {
   StoreContextState,

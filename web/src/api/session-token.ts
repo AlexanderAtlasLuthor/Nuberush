@@ -1,26 +1,31 @@
-// F2.2: minimal in-memory access-token holder.
+// F2.22.2.G: session-token adapter — now backed by the Supabase session.
 //
-// This is NOT auth. The api/client only reads from `getAccessToken()`
-// to attach an `Authorization: Bearer <token>` header when one is
-// present. Storage is intentionally in-memory (process-local) so a
-// reload always returns null — the prototype must NOT pretend to keep a
-// session around.
+// Before F2.22.2.G this module was an in-memory holder fed by a legacy
+// `POST /auth/login` token. That endpoint is gone. The access token now
+// lives in the Supabase session (persisted + auto-refreshed by the
+// Supabase client), and this module is a thin read/clear façade over it
+// so `src/api/client.ts` does not import the Supabase client directly.
 //
-// F2.3 will replace this with the real AuthProvider/session flow,
-// including secure storage decisions, refresh handling and logout
-// cleanup. Until then, treat any caller of `setAccessToken` as
-// experimental.
+// The token is NOT cached in module memory: every call reads the live
+// session so a refreshed token is always picked up.
 
-let accessToken: string | null = null;
+import { supabase } from "@/lib/supabase";
 
-export function getAccessToken(): string | null {
-  return accessToken;
+/**
+ * Current Supabase access token, or `null` when there is no session.
+ *
+ * Async because the token is read from the Supabase session. Callers
+ * (only `apiRequest`) await it before attaching the Bearer header.
+ */
+export async function getAccessToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
 }
 
-export function setAccessToken(token: string | null): void {
-  accessToken = token;
-}
-
-export function clearAccessToken(): void {
-  accessToken = null;
+/**
+ * End the Supabase session. Used by the logout flow; after this resolves
+ * `getAccessToken()` returns `null` and `apiRequest` sends no Bearer.
+ */
+export async function clearAccessToken(): Promise<void> {
+  await supabase.auth.signOut();
 }
