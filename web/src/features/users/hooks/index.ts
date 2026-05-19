@@ -17,4 +17,3 @@ export { useDeactivateUserMutation } from "./useDeactivateUserMutation";
 export { useReactivateUserMutation } from "./useReactivateUserMutation";
 export { useChangeUserRoleMutation } from "./useChangeUserRoleMutation";
 export { useAssignUserStoreMutation } from "./useAssignUserStoreMutation";
-export { useAdminSetPasswordMutation } from "./useAdminSetPasswordMutation";

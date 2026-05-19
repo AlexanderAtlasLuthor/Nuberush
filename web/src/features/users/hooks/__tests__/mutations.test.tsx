@@ -27,7 +27,6 @@ import { useDeactivateUserMutation } from "../useDeactivateUserMutation";
 import { useReactivateUserMutation } from "../useReactivateUserMutation";
 import { useChangeUserRoleMutation } from "../useChangeUserRoleMutation";
 import { useAssignUserStoreMutation } from "../useAssignUserStoreMutation";
-import { useAdminSetPasswordMutation } from "../useAdminSetPasswordMutation";
 import { usersQueryKeys } from "../queryKeys";
 import * as usersHooks from "../index";
 import * as usersApi from "../../api";
@@ -42,7 +41,6 @@ vi.mock("../../api", () => ({
   reactivateUser: vi.fn(),
   changeUserRole: vi.fn(),
   assignUserStore: vi.fn(),
-  adminSetUserPassword: vi.fn(),
 }));
 
 const STORE_ID = "33333333-3333-3333-3333-333333333333";
@@ -93,7 +91,6 @@ beforeEach(() => {
   vi.mocked(usersApi.reactivateUser).mockReset();
   vi.mocked(usersApi.changeUserRole).mockReset();
   vi.mocked(usersApi.assignUserStore).mockReset();
-  vi.mocked(usersApi.adminSetUserPassword).mockReset();
 });
 
 afterEach(() => {
@@ -360,41 +357,6 @@ describe("useAssignUserStoreMutation", () => {
 });
 
 // --------------------------------------------------------------------- //
-// useAdminSetPasswordMutation
-// --------------------------------------------------------------------- //
-
-describe("useAdminSetPasswordMutation", () => {
-  it("calls adminSetUserPassword and invalidates lists() + detail(userId)", async () => {
-    vi.mocked(usersApi.adminSetUserPassword).mockResolvedValue(SAMPLE_USER);
-    const client = makeQueryClient();
-    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
-
-    const { result } = renderHook(() => useAdminSetPasswordMutation(), {
-      wrapper: makeWrapper(client),
-    });
-
-    result.current.mutate({
-      userId: TARGET_ID,
-      body: { new_password: "fresh-secret-1234" },
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    expect(usersApi.adminSetUserPassword).toHaveBeenCalledWith({
-      userId: TARGET_ID,
-      body: { new_password: "fresh-secret-1234" },
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: usersQueryKeys.lists(),
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: usersQueryKeys.detail(TARGET_ID),
-    });
-    expect(invalidateSpy).toHaveBeenCalledTimes(2);
-  });
-});
-
-// --------------------------------------------------------------------- //
 // Cross-feature invalidation guard
 // --------------------------------------------------------------------- //
 
@@ -416,11 +378,6 @@ describe("cross-feature invalidation guard", () => {
       "useAssignUserStoreMutation",
       useAssignUserStoreMutation,
       "assignUserStore",
-    ],
-    [
-      "useAdminSetPasswordMutation",
-      useAdminSetPasswordMutation,
-      "adminSetUserPassword",
     ],
   ] as const)(
     "%s only invalidates keys under usersQueryKeys.all",
@@ -490,10 +447,9 @@ describe("usersQueryKeys", () => {
 // --------------------------------------------------------------------- //
 
 describe("users hooks public surface", () => {
-  it("exports the F2.15.4 surface", () => {
+  it("exports the users hooks surface", () => {
     expect(Object.keys(usersHooks).sort()).toEqual(
       [
-        "useAdminSetPasswordMutation",
         "useAssignUserStoreMutation",
         "useChangeUserRoleMutation",
         "useCreateUserMutation",

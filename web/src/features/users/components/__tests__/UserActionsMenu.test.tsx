@@ -127,16 +127,12 @@ describe("UserActionsMenu - rendering", () => {
       <UserActionsMenu
         user={makeUser()}
         onAssignStore={vi.fn()}
-        onSetPassword={vi.fn()}
         showAdminActions={false}
       />,
     );
     openMenu();
     expect(
       screen.queryByTestId("user-action-assign-store"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByTestId("user-action-set-password"),
     ).not.toBeInTheDocument();
   });
 
@@ -145,7 +141,6 @@ describe("UserActionsMenu - rendering", () => {
       <UserActionsMenu
         user={makeUser()}
         onAssignStore={vi.fn()}
-        onSetPassword={vi.fn()}
         showAdminActions
       />,
     );
@@ -153,9 +148,21 @@ describe("UserActionsMenu - rendering", () => {
     expect(
       screen.getByTestId("user-action-assign-store"),
     ).toBeInTheDocument();
+  });
+
+  it("never renders a Set password action (endpoint removed in F2.22.2.F)", () => {
+    render(
+      <UserActionsMenu
+        user={makeUser()}
+        onAssignStore={vi.fn()}
+        showAdminActions
+      />,
+    );
+    openMenu();
     expect(
-      screen.getByTestId("user-action-set-password"),
-    ).toBeInTheDocument();
+      screen.queryByTestId("user-action-set-password"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/set password/i)).not.toBeInTheDocument();
   });
 });
 
@@ -208,20 +215,6 @@ describe("UserActionsMenu - callbacks", () => {
     expect(onAssignStore).toHaveBeenCalledWith(user);
   });
 
-  it("clicking Set password forwards the user (admin actions visible)", () => {
-    const onSetPassword = vi.fn();
-    const user = makeUser();
-    render(
-      <UserActionsMenu
-        user={user}
-        onSetPassword={onSetPassword}
-        showAdminActions
-      />,
-    );
-    openMenu();
-    fireEvent.click(screen.getByTestId("user-action-set-password"));
-    expect(onSetPassword).toHaveBeenCalledWith(user);
-  });
 });
 
 describe("UserActionsMenu - disabled", () => {
@@ -247,16 +240,12 @@ describe("UserActionsMenu - permission boundary", () => {
       <UserActionsMenu
         user={makeUser({ role: "admin", store_id: null })}
         onAssignStore={vi.fn()}
-        onSetPassword={vi.fn()}
         showAdminActions
       />,
     );
     openMenu();
     expect(
       screen.getByTestId("user-action-assign-store"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByTestId("user-action-set-password"),
     ).toBeInTheDocument();
   });
 });

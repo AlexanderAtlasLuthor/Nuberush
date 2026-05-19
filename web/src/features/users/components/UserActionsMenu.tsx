@@ -10,10 +10,9 @@
 //      changes).
 //
 // `showAdminActions` is a UX hint, not authority. It hides the
-// admin-only items (assign store, set password) when the parent
-// knows the caller cannot use them — a non-admin who sees them and
-// clicks anyway still gets a 403 from the backend, which is the
-// correct surface.
+// admin-only items (assign store) when the parent knows the caller
+// cannot use them — a non-admin who sees them and clicks anyway
+// still gets a 403 from the backend, which is the correct surface.
 
 import { MoreHorizontal } from "lucide-react";
 
@@ -41,13 +40,12 @@ export interface UserActionsMenuProps {
   onDeactivateReactivate?: (user: UserRead) => void;
   onChangeRole?: (user: UserRead) => void;
   onAssignStore?: (user: UserRead) => void;
-  onSetPassword?: (user: UserRead) => void;
   /** Disables the trigger and prevents any menu items from firing. */
   disabled?: boolean;
   /**
-   * UX hint only. When false, the admin-only items (assign store,
-   * set password) are hidden from the menu. The backend remains
-   * authoritative for non-admin callers.
+   * UX hint only. When false, the admin-only items (assign store) are
+   * hidden from the menu. The backend remains authoritative for
+   * non-admin callers.
    */
   showAdminActions?: boolean;
 }
@@ -58,7 +56,6 @@ export function UserActionsMenu({
   onDeactivateReactivate,
   onChangeRole,
   onAssignStore,
-  onSetPassword,
   disabled = false,
   showAdminActions = false,
 }: UserActionsMenuProps) {
@@ -67,8 +64,6 @@ export function UserActionsMenu({
   const showRole = typeof onChangeRole === "function";
   const showAssignStore =
     showAdminActions && typeof onAssignStore === "function";
-  const showSetPassword =
-    showAdminActions && typeof onSetPassword === "function";
 
   return (
     <DropdownMenu>
@@ -115,26 +110,16 @@ export function UserActionsMenu({
             {user.is_active ? "Deactivate" : "Reactivate"}
           </DropdownMenuItem>
         ) : null}
-        {showAssignStore || showSetPassword ? (
+        {showAssignStore ? (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Admin actions</DropdownMenuLabel>
-            {showAssignStore ? (
-              <DropdownMenuItem
-                onSelect={() => onAssignStore?.(user)}
-                data-testid="user-action-assign-store"
-              >
-                Assign store
-              </DropdownMenuItem>
-            ) : null}
-            {showSetPassword ? (
-              <DropdownMenuItem
-                onSelect={() => onSetPassword?.(user)}
-                data-testid="user-action-set-password"
-              >
-                Set password
-              </DropdownMenuItem>
-            ) : null}
+            <DropdownMenuItem
+              onSelect={() => onAssignStore?.(user)}
+              data-testid="user-action-assign-store"
+            >
+              Assign store
+            </DropdownMenuItem>
           </>
         ) : null}
       </DropdownMenuContent>

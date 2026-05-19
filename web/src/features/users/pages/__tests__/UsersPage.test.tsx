@@ -25,7 +25,6 @@ import type {
 import UsersPage from "../UsersPage";
 import * as usersHooks from "../../hooks";
 import type {
-  AdminSetUserPasswordParams,
   AssignUserStoreParams,
   ChangeUserRoleParams,
   CreateUserParams,
@@ -62,7 +61,6 @@ vi.mock("../../hooks", () => ({
   useReactivateUserMutation: vi.fn(),
   useChangeUserRoleMutation: vi.fn(),
   useAssignUserStoreMutation: vi.fn(),
-  useAdminSetPasswordMutation: vi.fn(),
 }));
 
 // Mock dropdown-menu inline so the row's DropdownMenuItems are
@@ -167,9 +165,6 @@ function setupDefaultMutations() {
   vi.mocked(usersHooks.useAssignUserStoreMutation).mockReturnValue(
     makeMutation<AssignUserStoreParams>(),
   );
-  vi.mocked(usersHooks.useAdminSetPasswordMutation).mockReturnValue(
-    makeMutation<AdminSetUserPasswordParams>(),
-  );
 }
 
 beforeEach(() => {
@@ -239,9 +234,6 @@ describe("UsersPage — store scope", () => {
     expect(
       screen.queryByTestId("user-action-assign-store"),
     ).not.toBeInTheDocument();
-    expect(
-      screen.queryByTestId("user-action-set-password"),
-    ).not.toBeInTheDocument();
   });
 });
 
@@ -290,9 +282,13 @@ describe("UsersPage — admin scope", () => {
     expect(
       screen.getByTestId("user-action-assign-store"),
     ).toBeInTheDocument();
+  });
+
+  it("never renders a Set password action (endpoint removed in F2.22.2.F)", () => {
+    render(withRouter(<UsersPage />, "/app/admin/users"));
     expect(
-      screen.getByTestId("user-action-set-password"),
-    ).toBeInTheDocument();
+      screen.queryByTestId("user-action-set-password"),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -479,14 +475,6 @@ describe("UsersPage — action menu wiring", () => {
     fireEvent.click(screen.getByTestId("user-action-assign-store"));
     expect(
       screen.getByTestId("assign-user-store-modal"),
-    ).toBeInTheDocument();
-  });
-
-  it("admin route — clicking Set password opens AdminSetPasswordModal", () => {
-    render(withRouter(<UsersPage />, "/app/admin/users"));
-    fireEvent.click(screen.getByTestId("user-action-set-password"));
-    expect(
-      screen.getByTestId("admin-set-password-modal"),
     ).toBeInTheDocument();
   });
 });

@@ -31,7 +31,6 @@
 //   POST   /auth/users/{user_id}/reactivate
 //   PATCH  /auth/users/{user_id}/role
 //   PATCH  /auth/users/{user_id}/store
-//   POST   /auth/users/{user_id}/password    (admin-set; no email/SMTP)
 //
 // Endpoints still intentionally NOT implemented here because the
 // backend does not surface them:
@@ -43,7 +42,6 @@
 
 import { apiRequest } from "@/api";
 import type {
-  AdminSetPasswordRequest,
   CreateUserRequest,
   UserListFilters,
   UserListResponse,
@@ -271,36 +269,6 @@ export function assignUserStore(
   const path = `/auth/users/${encodeURIComponent(params.userId)}/store`;
   return apiRequest<UserRead>(path, {
     method: "PATCH",
-    body: params.body,
-    signal,
-  });
-}
-
-export interface AdminSetUserPasswordParams {
-  /** User UUID. */
-  userId: string;
-  /**
-   * `{ new_password }` only. The wire intentionally never carries a
-   * hash, never a token, never an email. The response is a plain
-   * `UserRead` and never includes `password_hash`.
-   */
-  body: AdminSetPasswordRequest;
-}
-
-/**
- * POST /auth/users/{user_id}/password
- *
- * Admin-only. Returns the target `UserRead`. F2.15 deliberately
- * ships no email reset / token / SMTP / invitation flow — the admin
- * communicates the new password out of band.
- */
-export function adminSetUserPassword(
-  params: AdminSetUserPasswordParams,
-  signal?: AbortSignal,
-): Promise<UserRead> {
-  const path = `/auth/users/${encodeURIComponent(params.userId)}/password`;
-  return apiRequest<UserRead>(path, {
-    method: "POST",
     body: params.body,
     signal,
   });

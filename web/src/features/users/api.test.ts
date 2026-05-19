@@ -9,7 +9,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { apiRequest } from "@/api";
 import {
-  adminSetUserPassword,
   assignUserStore,
   changeUserRole,
   createUser,
@@ -177,11 +176,10 @@ describe("createUser", () => {
 // --------------------------------------------------------------------- //
 
 describe("users api public surface", () => {
-  it("exports the F2.15.4 surface (create + list + read + 6 mutations)", () => {
+  it("exports the create + list + read + 5 mutations surface", () => {
     const exported = Object.keys(usersApi).sort();
     expect(exported).toEqual(
       [
-        "adminSetUserPassword",
         "assignUserStore",
         "changeUserRole",
         "createUser",
@@ -197,6 +195,8 @@ describe("users api public surface", () => {
   it("does not export functions for endpoints the backend has not implemented", () => {
     // The backend still does not surface these — adding them here
     // would either 404 at runtime or silently invent a contract.
+    // `adminSetUserPassword` is included: POST /auth/users/{id}/password
+    // was removed in F2.22.2.F (legacy local-password auth cleanup).
     const forbidden = [
       "deleteUser",
       "listRoles",
@@ -208,6 +208,7 @@ describe("users api public surface", () => {
       "inviteUser",
       "sendPasswordReset",
       "resetUserPassword",
+      "adminSetUserPassword",
     ];
     for (const name of forbidden) {
       expect(usersApi).not.toHaveProperty(name);
@@ -368,43 +369,5 @@ describe("assignUserStore", () => {
     const [, options] = vi.mocked(apiRequest).mock.calls[0];
     const sent = options?.body as { store_id: unknown };
     expect(sent.store_id).toBeNull();
-  });
-});
-
-describe("adminSetUserPassword", () => {
-  it("calls POST /auth/users/{id}/password with new_password only", async () => {
-    await adminSetUserPassword({
-      userId: USER_ID,
-      body: { new_password: "fresh-secret-1234" },
-    });
-    const [path, options] = vi.mocked(apiRequest).mock.calls[0];
-    expect(path).toBe(`/auth/users/${USER_ID}/password`);
-    expect(options?.method).toBe("POST");
-    expect(options?.body).toEqual({ new_password: "fresh-secret-1234" });
-    // Defense in depth: nothing about the wire mentions a hash.
-    const keys = Object.keys(options?.body as object);
-    expect(keys).toEqual(["new_password"]);
-    expect(keys).not.toContain("password_hash");
-  });
-
-  it("returns the UserRead (no password_hash on the type)", async () => {
-    const response: UserRead = {
-      id: USER_ID,
-      full_name: "Whoever",
-      email: "x@example.com",
-      role: "staff",
-      store_id: STORE_B,
-      is_active: true,
-    };
-    vi.mocked(apiRequest).mockResolvedValueOnce(response as never);
-    const result = await adminSetUserPassword({
-      userId: USER_ID,
-      body: { new_password: "fresh-secret-1234" },
-    });
-    expect(result).toEqual(response);
-    // UserRead does not declare password_hash, so the runtime
-    // response also does not carry it (the backend response_model is
-    // UserRead by contract). A guard test against the type:
-    expect(Object.keys(result)).not.toContain("password_hash");
   });
 });

@@ -6,7 +6,7 @@
 //                         against the caller's own store_id.
 //   /app/admin/users   →  global admin scope. Filters expose store_id and
 //                         the row actions menu surfaces admin-only items
-//                         (assign store, set password).
+//                         (assign store).
 //
 // One component, two scopes — the difference is decided by URL pathname
 // via `useLocation`. The backend remains the authoritative gate: a
@@ -35,7 +35,6 @@ import { EditUserModal } from "../components/EditUserModal";
 import { DeactivateUserDialog } from "../components/DeactivateUserDialog";
 import { ChangeUserRoleModal } from "../components/ChangeUserRoleModal";
 import { AssignUserStoreModal } from "../components/AssignUserStoreModal";
-import { AdminSetPasswordModal } from "../components/AdminSetPasswordModal";
 import { UserActionsMenu } from "../components/UserActionsMenu";
 import { UsersFilters } from "../components/UsersFilters";
 import { UsersTable } from "../components/UsersTable";
@@ -45,13 +44,7 @@ import type { UserListFilters, UserRead } from "../types";
 const DEFAULT_LIMIT = 25;
 const ADMIN_PATH_PREFIX = "/app/admin";
 
-type ActiveModal =
-  | "edit"
-  | "lifecycle"
-  | "role"
-  | "store"
-  | "password"
-  | null;
+type ActiveModal = "edit" | "lifecycle" | "role" | "store" | null;
 
 interface PageHeaderProps {
   title: string;
@@ -163,7 +156,6 @@ export default function UsersPage() {
             onDeactivateReactivate={(u) => openModal("lifecycle", u)}
             onChangeRole={(u) => openModal("role", u)}
             onAssignStore={(u) => openModal("store", u)}
-            onSetPassword={(u) => openModal("password", u)}
             showAdminActions={isAdminScope}
           />
         )}
@@ -208,14 +200,6 @@ export default function UsersPage() {
 
       {activeModal === "store" ? (
         <AssignUserStoreModal
-          user={selectedUser}
-          open={true}
-          onOpenChange={(open) => (open ? null : closeModal())}
-        />
-      ) : null}
-
-      {activeModal === "password" ? (
-        <AdminSetPasswordModal
           user={selectedUser}
           open={true}
           onOpenChange={(open) => (open ? null : closeModal())}

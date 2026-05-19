@@ -180,15 +180,3 @@ export interface UserRoleChangeRequest {
 export interface UserStoreAssignmentRequest {
   store_id: string | null;
 }
-
-/**
- * Body accepted by `POST /auth/users/{user_id}/password`.
- *
- * Backend bounds: 8..128 chars. The wire NEVER carries a hash —
- * `password_hash` is intentionally absent here so a future careless
- * caller cannot send one even by accident. The response is a plain
- * `UserRead`, also without the hash.
- */
-export interface AdminSetPasswordRequest {
-  new_password: string;
-}
