@@ -142,7 +142,6 @@ def make_user(db_session: Session) -> Callable[..., User]:
             store_id=sid,
             is_active=is_active,
             full_name=f"CmpAPI {role.value}",
-            password="supersecret123",
         )
 
     return _create

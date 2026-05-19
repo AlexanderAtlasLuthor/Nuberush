@@ -10,11 +10,6 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 DEVELOPMENT_ENV = "development"
-JWT_SECRET_MIN_LENGTH = 32
-JWT_SECRET_BLOCKLIST = frozenset(
-    {"change-me", "dev-secret", "secret", "password", "jwt-secret"}
-)
-JWT_SECRET_DEV_PREFIXES = ("dev-only-",)
 
 
 class CommonSettings(BaseSettings):
@@ -67,42 +62,6 @@ class DatabaseSettings(CommonSettings):
     database_url: str
 
 
-class AuthSettings(CommonSettings):
-    app_env: str = DEVELOPMENT_ENV
-    jwt_secret_key: str
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
-    jwt_issuer: str = "nuberush-api"
-    jwt_audience: str = "nuberush-client"
-
-    @model_validator(mode="after")
-    def _enforce_jwt_secret_policy(self) -> "AuthSettings":
-        secret = (self.jwt_secret_key or "").strip()
-        if not secret:
-            raise ValueError("JWT_SECRET_KEY must not be empty.")
-
-        is_development = self.app_env.strip().lower() == DEVELOPMENT_ENV
-        if is_development:
-            return self
-
-        if secret.lower() in JWT_SECRET_BLOCKLIST:
-            raise ValueError(
-                "JWT_SECRET_KEY uses a known insecure value. "
-                "Set a strong secret before running outside development."
-            )
-        if any(secret.lower().startswith(prefix) for prefix in JWT_SECRET_DEV_PREFIXES):
-            raise ValueError(
-                "JWT_SECRET_KEY contains a development-only marker. "
-                "Generate a production secret before running outside development."
-            )
-        if len(secret) < JWT_SECRET_MIN_LENGTH:
-            raise ValueError(
-                f"JWT_SECRET_KEY must be at least {JWT_SECRET_MIN_LENGTH} characters "
-                f"outside development."
-            )
-        return self
-
-
 class SupabaseAuthSettings(CommonSettings):
     """Supabase Auth verification config (F2.22.2.D).
 
@@ -143,11 +102,6 @@ def get_app_settings() -> AppSettings:
 @lru_cache
 def get_db_settings() -> DatabaseSettings:
     return DatabaseSettings()
-
-
-@lru_cache
-def get_auth_settings() -> AuthSettings:
-    return AuthSettings()
 
 
 @lru_cache

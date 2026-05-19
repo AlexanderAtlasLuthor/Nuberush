@@ -95,7 +95,6 @@ def make_user(
             store_id=sid,
             full_name=f"Stores-API {role.value}",
             is_active=True,
-            password="supersecret123",
         )
 
     return _create

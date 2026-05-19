@@ -14,7 +14,9 @@ Endpoints (all under prefix `/auth/users`):
   POST   /{user_id}/reactivate  set is_active=true
   PATCH  /{user_id}/role        change role
   PATCH  /{user_id}/store       assign or clear store
-  POST   /{user_id}/password    admin-driven password set
+
+Password changes are owned by Supabase Auth (F2.22.2.F); there is no
+local password endpoint here.
 
 Note on the `POST /auth/users` endpoint: that route lives in
 `app.api.routes.auth` (user creation) and is intentionally NOT moved
@@ -34,7 +36,6 @@ from app.db.models import User
 from app.db.models import UserRole
 from app.db.session import get_db
 from app.schemas.auth import UserRead
-from app.schemas.users import AdminSetPasswordRequest
 from app.schemas.users import UserListResponse
 from app.schemas.users import UserRoleChangeRequest
 from app.schemas.users import UserStoreAssignmentRequest
@@ -125,21 +126,5 @@ def assign_user_store_endpoint(
     db: Session = Depends(get_db),
 ) -> User:
     return svc.assign_user_store(
-        db, user_id, payload, actor=current_user
-    )
-
-
-@router.post("/{user_id}/password", response_model=UserRead)
-def admin_set_user_password_endpoint(
-    user_id: UUID,
-    payload: AdminSetPasswordRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> User:
-    # `UserRead` does not include password_hash, so the response
-    # cannot leak the hash even though the service returns the full
-    # User row. The admin sets the password out of band; F2.15 does
-    # not ship a self-service reset (no email / token / SMTP).
-    return svc.admin_set_user_password(
         db, user_id, payload, actor=current_user
     )

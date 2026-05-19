@@ -14,8 +14,6 @@ fixture from conftest. Covers:
     guard + admin/store invariants.
   - `assign_user_store` admin-only + admin/non-admin invariants +
     inactive store rejection.
-  - `admin_set_user_password` admin-only + bcrypt hashing + no side
-    effects.
 
 Style mirrors tests/test_stores_service.py and
 test_permissions_tenancy.py: real DB, helper fixtures for stores and
@@ -36,12 +34,9 @@ from sqlalchemy.orm import Session
 
 from app.core.permissions import USER_ROLE_UPDATE_MATRIX
 from app.core.permissions import can_caller_assign_role
-from tests.helpers.auth import make_password_hash
-from app.core.security import verify_password
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
-from app.schemas.users import AdminSetPasswordRequest
 from app.schemas.users import UserRoleChangeRequest
 from app.schemas.users import UserStoreAssignmentRequest
 from app.schemas.users import UserUpdateRequest
@@ -84,13 +79,11 @@ def make_user(db_session: Session) -> Callable[..., User]:
         full_name: str | None = None,
         email: str | None = None,
         phone: str | None = None,
-        password: str = "irrelevant-pw-1234",
     ) -> User:
         user = User(
             full_name=full_name or f"User {role.value}",
             email=email or f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
             phone=phone,
-            password_hash=make_password_hash(password),
             role=role,
             store_id=store_id,
             is_active=is_active,
@@ -632,7 +625,6 @@ class TestUpdateUser:
         original_role = target.role
         original_store_id = target.store_id
         original_is_active = target.is_active
-        original_password_hash = target.password_hash
 
         updated = svc.update_user(
             db_session,
@@ -647,7 +639,6 @@ class TestUpdateUser:
         assert updated.role == original_role
         assert updated.store_id == original_store_id
         assert updated.is_active == original_is_active
-        assert updated.password_hash == original_password_hash
 
 
 # --------------------------------------------------------------------- #
@@ -1286,93 +1277,6 @@ class TestAssignUserStore:
                 db_session,
                 uuid.uuid4(),
                 UserStoreAssignmentRequest(store_id=None),
-                actor=admin,
-            )
-        assert excinfo.value.status_code == 404
-
-
-# --------------------------------------------------------------------- #
-# admin_set_user_password
-# --------------------------------------------------------------------- #
-
-
-class TestAdminSetUserPassword:
-    def test_admin_changes_password_hash(
-        self, db_session: Session, make_store, make_user
-    ):
-        admin = make_user(role=UserRole.admin)
-        store = make_store(code="pw-a")
-        target = make_user(
-            role=UserRole.staff,
-            store_id=store.id,
-            password="old-secret-1234",
-        )
-        original_hash = target.password_hash
-        original_email = target.email
-        original_role = target.role
-        original_store_id = target.store_id
-
-        result = svc.admin_set_user_password(
-            db_session,
-            target.id,
-            AdminSetPasswordRequest(new_password="new-secret-1234"),
-            actor=admin,
-        )
-
-        assert result.password_hash != original_hash
-        assert verify_password("new-secret-1234", result.password_hash)
-        # Side-effect-free: nothing else moved.
-        assert result.email == original_email
-        assert result.role == original_role
-        assert result.store_id == original_store_id
-
-    def test_password_is_hashed_not_plaintext(
-        self, db_session: Session, make_store, make_user
-    ):
-        admin = make_user(role=UserRole.admin)
-        store = make_store(code="pw-h")
-        target = make_user(role=UserRole.staff, store_id=store.id)
-
-        result = svc.admin_set_user_password(
-            db_session,
-            target.id,
-            AdminSetPasswordRequest(new_password="plain-text-password"),
-            actor=admin,
-        )
-
-        assert result.password_hash != "plain-text-password"
-        assert result.password_hash.startswith("$2")
-
-    @pytest.mark.parametrize(
-        "caller_role",
-        [UserRole.owner, UserRole.manager, UserRole.staff, UserRole.driver],
-    )
-    def test_non_admin_forbidden(
-        self,
-        db_session: Session,
-        make_store,
-        make_user,
-        caller_role: UserRole,
-    ):
-        store = make_store(code=f"pw-na-{caller_role.value}")
-        actor = make_user(role=caller_role, store_id=store.id)
-        target = make_user(role=UserRole.staff, store_id=store.id)
-        with pytest.raises(HTTPException) as excinfo:
-            svc.admin_set_user_password(
-                db_session,
-                target.id,
-                AdminSetPasswordRequest(new_password="ignored-1234"),
-                actor=actor,
-            )
-        assert excinfo.value.status_code == 403
-
-    def test_unknown_user_404(self, db_session: Session, make_user):
-        admin = make_user(role=UserRole.admin)
-        with pytest.raises(HTTPException) as excinfo:
-            svc.admin_set_user_password(
-                db_session,
-                uuid.uuid4(),
-                AdminSetPasswordRequest(new_password="ignored-1234"),
                 actor=admin,
             )
         assert excinfo.value.status_code == 404

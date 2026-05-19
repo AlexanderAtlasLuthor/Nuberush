@@ -36,7 +36,6 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from tests.helpers.auth import make_password_hash
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
@@ -80,7 +79,6 @@ def fresh_two_items(tx_engine: Engine) -> Generator[dict, None, None]:
         admin = User(
             full_name="TX Admin",
             email=f"tx-{uuid.uuid4().hex[:8]}@example.com",
-            password_hash=make_password_hash("p"),
             role=UserRole.admin,
             store_id=None,
             is_active=True,

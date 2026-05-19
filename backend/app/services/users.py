@@ -2,8 +2,11 @@
 
 Owns the business logic for the operational user-management surface
 (list / read / update / deactivate / reactivate / change role / assign
-store / admin-set-password). Routers in F2.15.3 will be thin: parse,
-authorize, call, return.
+store). Routers in F2.15.3 are thin: parse, authorize, call, return.
+
+F2.22.2.F note: identity and credentials now live entirely in Supabase
+Auth. There is no local password column and no admin-set-password
+service here — password changes go through Supabase.
 
 Conventions (consistent with `app.services.stores` and
 `app.services.products`):
@@ -27,8 +30,8 @@ Conventions (consistent with `app.services.stores` and
 
 Out of scope here (handled elsewhere or deferred):
   - User creation lives in `POST /auth/users` and is unchanged.
-  - Email-based password reset, invitation flows, MFA, SSO — none of
-    those exist in F2.15.
+  - Password reset, invitation flows, MFA, SSO — owned by Supabase
+    Auth, not this module.
 """
 
 from __future__ import annotations
@@ -49,10 +52,8 @@ from app.core.permissions import assert_can_deactivate_user
 from app.core.permissions import assert_can_modify_user
 from app.core.permissions import assert_can_reactivate_user
 from app.core.permissions import assert_user_store_invariant
-from app.core.security import hash_password
 from app.db.models import User
 from app.db.models import UserRole
-from app.schemas.users import AdminSetPasswordRequest
 from app.schemas.users import UserRoleChangeRequest
 from app.schemas.users import UserStoreAssignmentRequest
 from app.schemas.users import UserUpdateRequest
@@ -413,36 +414,6 @@ def assign_user_store(
 
     _commit_or_translate(
         db, detail="Store assignment violates database constraints."
-    )
-    db.refresh(target)
-    return target
-
-
-# --------------------------------------------------------------------- #
-# Admin-driven password set
-# --------------------------------------------------------------------- #
-
-
-def admin_set_user_password(
-    db: Session,
-    user_id: UUID,
-    payload: AdminSetPasswordRequest,
-    *,
-    actor: User,
-) -> User:
-    """Replace a user's password_hash with a fresh bcrypt hash.
-
-    No email, no reset token, no SMTP, no invitation flow — the admin
-    sets the password out of band and communicates it to the user
-    through a separate channel. F2.15 deliberately does not ship a
-    self-service reset.
-    """
-    _assert_admin_caller(actor)
-    target = _get_user_or_404(db, user_id)
-
-    target.password_hash = hash_password(payload.new_password)
-    _commit_or_translate(
-        db, detail="Password change violates database constraints."
     )
     db.refresh(target)
     return target

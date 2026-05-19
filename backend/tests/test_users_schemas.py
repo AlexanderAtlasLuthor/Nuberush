@@ -5,7 +5,6 @@ No DB. Exercises:
     `extra="forbid"`, prohibited privileged fields).
   - UserRoleChangeRequest accepts every UserRole and rejects unknown.
   - UserStoreAssignmentRequest accepts UUID + null.
-  - AdminSetPasswordRequest length bounds.
   - UserListResponse envelope serialization + pagination bounds.
 
 Style mirrors tests/test_stores_schemas.py and test_inventory_schemas.py:
@@ -20,7 +19,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.db.models import UserRole
-from app.schemas.users import AdminSetPasswordRequest
 from app.schemas.users import UserListResponse
 from app.schemas.users import UserRoleChangeRequest
 from app.schemas.users import UserStoreAssignmentRequest
@@ -243,45 +241,6 @@ def test_user_store_assignment_rejects_extra_fields():
         UserStoreAssignmentRequest.model_validate(
             {"store_id": str(uuid4()), "role": "owner"}
         )
-
-
-# --------------------------------------------------------------------- #
-# AdminSetPasswordRequest
-# --------------------------------------------------------------------- #
-
-
-def test_admin_set_password_accepts_min_length_8():
-    payload = AdminSetPasswordRequest.model_validate({"new_password": "x" * 8})
-    assert payload.new_password == "x" * 8
-
-
-def test_admin_set_password_accepts_max_length_128():
-    payload = AdminSetPasswordRequest.model_validate(
-        {"new_password": "x" * 128}
-    )
-    assert payload.new_password == "x" * 128
-
-
-def test_admin_set_password_rejects_short_password():
-    with pytest.raises(ValidationError):
-        AdminSetPasswordRequest.model_validate({"new_password": "x" * 7})
-
-
-def test_admin_set_password_rejects_long_password():
-    with pytest.raises(ValidationError):
-        AdminSetPasswordRequest.model_validate({"new_password": "x" * 129})
-
-
-def test_admin_set_password_rejects_extra_fields():
-    with pytest.raises(ValidationError):
-        AdminSetPasswordRequest.model_validate(
-            {"new_password": "x" * 12, "old_password": "y" * 12}
-        )
-
-
-def test_admin_set_password_requires_new_password():
-    with pytest.raises(ValidationError):
-        AdminSetPasswordRequest.model_validate({})
 
 
 # --------------------------------------------------------------------- #

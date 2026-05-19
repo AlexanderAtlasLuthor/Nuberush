@@ -163,14 +163,14 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(150), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     # F2.22.2 identity bridge: links this row to a Supabase `auth.users`
-    # record (= the Supabase JWT `sub`). Nullable only during the F2.22.2
-    # migration window — existing rows have no Supabase identity yet, and
-    # the active login flow still uses `id`/`password_hash`. No cross-schema
-    # FK to `auth.users` is declared here: that schema is owned by Supabase
-    # and the relationship stays conceptual for this subphase.
+    # record (= the Supabase JWT `sub`). Since F2.22.2.F this is the ONLY
+    # authentication link — there is no local password column anymore.
+    # Nullable because pre-Supabase rows still need a backfill (see
+    # scripts/backfill_supabase_auth_users.py). No cross-schema FK to
+    # `auth.users` is declared here: that schema is owned by Supabase and
+    # the relationship stays conceptual.
     auth_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     phone: Mapped[str | None] = mapped_column(String(30))
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False)
     created_at: Mapped[datetime] = timestamp_created_at()

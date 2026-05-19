@@ -11,12 +11,12 @@ Verifies the additive guarantees of the
 - multiple rows may keep `auth_user_id` NULL simultaneously, since
   Postgres treats NULLs as distinct under a unique index.
 
-Scope note: this subphase only adds the column. The login/JWT flow
-is unchanged, so `password_hash` stays required and the central
-`make_user` helper still sets it.
+Scope note: this suite covers only the `auth_user_id` column. As of
+F2.22.2.F there is no local `password_hash` column — authentication is
+exclusively via Supabase JWT and `auth_user_id` is the sole bridge.
 
-F2.22.2.C: user construction is routed through `tests.helpers.auth`
-so F2.22.2.D can swap the identity mechanism in one place.
+User construction is routed through `tests.helpers.auth` so the
+identity mechanism stays defined in one place.
 """
 
 import uuid

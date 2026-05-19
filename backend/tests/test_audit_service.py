@@ -40,7 +40,6 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from tests.helpers.auth import make_password_hash
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
@@ -94,7 +93,6 @@ def make_user(db_session: Session) -> Callable[..., User]:
         user = User(
             full_name=f"User {role.value}",
             email=f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
-            password_hash=make_password_hash("irrelevant-pw-1234"),
             role=role,
             store_id=store_id,
             is_active=is_active,
@@ -428,7 +426,6 @@ class TestRBAC:
         rogue = User(
             full_name="Rogue",
             email=f"rogue-{uuid.uuid4().hex[:8]}@example.com",
-            password_hash=make_password_hash("x" * 12),
             role=UserRole.owner,
             store_id=None,
             is_active=True,

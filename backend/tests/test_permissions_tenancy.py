@@ -109,7 +109,6 @@ def make_user(db_session: Session) -> Callable[..., User]:
             store_id=store_id,
             is_active=is_active,
             full_name=f"Tenancy {role.value}",
-            password="irrelevant-pw-1234",
         )
 
     return _create
@@ -353,7 +352,6 @@ class TestResolveStoreScope:
         return User(
             full_name="x",
             email=f"{role.value}-{uuid.uuid4().hex[:6]}@example.com",
-            password_hash="x",
             role=role,
             store_id=store_id,
         )

@@ -29,7 +29,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
@@ -76,7 +75,6 @@ def make_user(db_session: Session, make_store) -> Callable[..., User]:
             store_id=sid,
             full_name=f"Inv-API {role.value}",
             is_active=True,
-            password="supersecret123",
         )
 
     return _create
@@ -571,7 +569,6 @@ class TestApiTenancy:
         rogue = User(
             full_name="rogue",
             email=f"rogue-{uuid.uuid4().hex[:6]}@example.com",
-            password_hash=hash_password("p"),
             role=UserRole.manager,
             store_id=None,
             is_active=True,

@@ -109,7 +109,6 @@ def make_user(db_session: Session) -> Callable[..., User]:
             store_id=store_id,
             full_name=f"API {role.value}",
             is_active=is_active,
-            password="irrelevant-pw-1234",
         )
 
     return _create

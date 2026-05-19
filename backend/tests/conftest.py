@@ -17,9 +17,6 @@ SETTINGS_ENV_VARS = (
     "APP_NAME",
     "APP_ENV",
     "APP_DEBUG",
-    "JWT_SECRET_KEY",
-    "JWT_ALGORITHM",
-    "ACCESS_TOKEN_EXPIRE_MINUTES",
     "BACKEND_CORS_ORIGINS",
     "DATABASE_URL",
     # F2.22.2.D: strip Supabase auth vars so SupabaseAuthSettings falls
@@ -245,18 +242,12 @@ def db_session(test_engine: Engine) -> Generator[Session, None, None]:
 def client(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> Generator[TestClient, None, None]:
-    """FastAPI TestClient with get_db overridden to the transactional session.
-
-    Sets a development JWT secret so AuthSettings instantiates cleanly without
-    relying on the host shell environment.
-    """
+    """FastAPI TestClient with get_db overridden to the transactional session."""
     monkeypatch.setenv("APP_ENV", "development")
-    monkeypatch.setenv("JWT_SECRET_KEY", "dev-only-test-secret")
     monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
 
-    from app.core.config import get_auth_settings, get_db_settings
+    from app.core.config import get_db_settings
 
-    get_auth_settings.cache_clear()
     get_db_settings.cache_clear()
 
     from app.db.session import get_db
@@ -271,7 +262,6 @@ def client(
             yield c
     finally:
         app.dependency_overrides.pop(get_db, None)
-        get_auth_settings.cache_clear()
         get_db_settings.cache_clear()
 
 

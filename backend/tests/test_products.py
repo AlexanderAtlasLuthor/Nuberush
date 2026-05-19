@@ -46,7 +46,6 @@ def make_user(db_session: Session, make_store) -> Callable[..., User]:
             store_id=store_id,
             full_name=f"Prod {role.value}",
             is_active=True,
-            password="supersecret123",
         )
 
     return _create

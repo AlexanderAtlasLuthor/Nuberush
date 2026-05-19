@@ -96,7 +96,6 @@ def make_user(db_session: Session, make_store) -> Callable[..., User]:
             store_id=sid,
             full_name=f"Earn {role.value}",
             is_active=True,
-            password="supersecret123",
         )
 
     return _create

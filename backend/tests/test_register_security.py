@@ -48,7 +48,6 @@ def make_user(db_session: Session) -> Callable[..., User]:
             store_id=store_id,
             email=email,
             is_active=is_active,
-            password="irrelevant-pw-1234",
         )
 
     return _create
@@ -374,7 +373,6 @@ class TestStoreIdResolverRules:
         actor = User(
             full_name="root",
             email="root@example.com",
-            password_hash="x",
             role=UserRole.admin,
             store_id=None,
         )
@@ -393,7 +391,6 @@ class TestStoreIdResolverRules:
         actor = User(
             full_name="root",
             email="root2@example.com",
-            password_hash="x",
             role=UserRole.admin,
             store_id=None,
         )
@@ -408,7 +405,6 @@ class TestStoreIdResolverRules:
         actor = User(
             full_name="root",
             email="root3@example.com",
-            password_hash="x",
             role=UserRole.admin,
             store_id=None,
         )

@@ -44,7 +44,6 @@ def make_user(db_session: Session) -> Callable[..., User]:
         role: UserRole,
         store_id: uuid.UUID | None = None,
         email: str | None = None,
-        password: str = "supersecret123",
     ) -> User:
         return central_make_user(
             db_session,
@@ -52,7 +51,6 @@ def make_user(db_session: Session) -> Callable[..., User]:
             store_id=store_id,
             email=email,
             full_name=f"S24 {role.value}",
-            password=password,
         )
 
     return _create
@@ -230,16 +228,3 @@ class TestPublicEndpointsStayPublic:
         assert resp.status_code == 403
         assert "disabled" in resp.json()["detail"].lower()
         assert "/auth/users" in resp.json()["detail"]
-
-    def test_login_is_reachable_without_auth(
-        self, client: TestClient, make_store, make_user
-    ):
-        store = make_store()
-        user = make_user(UserRole.staff, store_id=store.id)
-        # No Authorization header.
-        resp = client.post(
-            "/auth/login",
-            json={"email": user.email, "password": "supersecret123"},
-        )
-        assert resp.status_code == 200
-        assert "access_token" in resp.json()

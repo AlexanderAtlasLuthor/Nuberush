@@ -21,9 +21,10 @@ JWTs**, matching the production verifier (`app.core.supabase_auth`):
 The token still carries identity only. role / store_id / is_active come
 from `public.users`; nothing here puts authorization data in a claim.
 
-`make_password_hash` still wraps `hash_password` — `password_hash` is
-still a required column in F2.22.2.D (it goes nullable in a later
-subphase).
+F2.22.2.F — the legacy `password_hash` column and `make_password_hash`
+helper are gone. `public.users` carries no credentials; authentication
+is exclusively via Supabase JWT, so test users only need an
+`auth_user_id`.
 """
 
 from __future__ import annotations
@@ -35,15 +36,9 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password
 from app.db.models import User
 from app.db.models import UserRole
 
-
-# Stable default plaintext password for test users. Suites that POST to
-# /auth/login override it with a known credential; suites that never log
-# in can ignore it.
-DEFAULT_TEST_PASSWORD = "Password123!"
 
 # --------------------------------------------------------------------- #
 # Test-only Supabase JWT signing
@@ -117,16 +112,6 @@ def make_supabase_token(
     )
 
 
-def make_password_hash(password: str = DEFAULT_TEST_PASSWORD) -> str:
-    """Return a hash for a test user's ``password_hash`` column.
-
-    Wraps ``app.core.security.hash_password``. ``password_hash`` is still
-    a required column in F2.22.2.D; it becomes nullable in a later
-    subphase, at which point this is the single place that changes.
-    """
-    return hash_password(password)
-
-
 def auth_headers_for(user: User) -> dict[str, str]:
     """Return the ``Authorization`` header for a request as ``user``.
 
@@ -162,18 +147,17 @@ def make_user(
     email: str | None = None,
     full_name: str | None = None,
     phone: str | None = None,
-    password: str = DEFAULT_TEST_PASSWORD,
     is_active: bool = True,
     auth_user_id=_AUTO_AUTH_USER_ID,
     id: uuid.UUID | None = None,
 ) -> User:
     """Persist and return a ``User`` row for tests.
 
-    ``password`` is hashed into the still-required ``password_hash``
-    column via :func:`make_password_hash`.
+    F2.22.2.F — ``public.users`` no longer stores credentials, so no
+    password is needed to build a test user.
 
     ``auth_user_id`` defaults to a freshly generated UUID so the user is
-    reachable by the F2.22.2.D identity bridge and by
+    reachable by the Supabase identity bridge and by
     :func:`auth_headers_for`. Pass ``auth_user_id=None`` to create an
     unmapped row, or a specific UUID to pin the mapping.
 
@@ -189,7 +173,6 @@ def make_user(
         full_name=full_name or f"Test {role.value}",
         email=email or f"{role.value}-{uuid.uuid4().hex[:10]}@example.com",
         phone=phone,
-        password_hash=make_password_hash(password),
         role=role,
         store_id=store_id,
         is_active=is_active,
@@ -211,7 +194,6 @@ def make_supabase_mapped_user(
     email: str | None = None,
     is_active: bool = True,
     auth_user_id: uuid.UUID | None = None,
-    password: str = DEFAULT_TEST_PASSWORD,
 ) -> User:
     """Like :func:`make_user`, with an explicit guarantee of a mapping.
 
@@ -226,6 +208,5 @@ def make_supabase_mapped_user(
         store_id=store_id,
         email=email,
         is_active=is_active,
-        password=password,
         auth_user_id=auth_user_id or uuid.uuid4(),
     )

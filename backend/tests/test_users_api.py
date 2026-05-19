@@ -10,8 +10,8 @@ and are not duplicated here. This suite focuses on:
   - Privileged-field rejection at the schema layer (`extra="forbid"`)
     surfaces as 422.
   - End-to-end mutations are persisted (re-read after the call).
-  - Existing /auth/login, /auth/me, /auth/register-disabled, and the
-    POST /auth/users user-creation route from auth.py keep working.
+  - Existing /auth/me, /auth/register-disabled, and the POST
+    /auth/users user-creation route from auth.py keep working.
 
 Style mirrors test_stores_api.py.
 """
@@ -27,7 +27,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import verify_password
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
@@ -64,10 +63,9 @@ def make_store(db_session: Session) -> Callable[..., Store]:
 @pytest.fixture
 def make_user(db_session: Session) -> Callable[..., User]:
     # Thin adapter over tests.helpers.auth.make_user: keeps this
-    # suite's keyword-only signature, `"API {role}"` default name and
-    # `"irrelevant-pw-1234"` default password (test_login_still_works
-    # POSTs that exact string) so call sites are untouched, while
-    # routing user construction through the single F2.22.2 chokepoint.
+    # suite's keyword-only signature and `"API {role}"` default name so
+    # call sites are untouched, while routing user construction through
+    # the single F2.22.2 chokepoint.
     def _create(
         *,
         role: UserRole,
@@ -76,7 +74,6 @@ def make_user(db_session: Session) -> Callable[..., User]:
         full_name: str | None = None,
         email: str | None = None,
         phone: str | None = None,
-        password: str = "irrelevant-pw-1234",
     ) -> User:
         return central_make_user(
             db_session,
@@ -86,7 +83,6 @@ def make_user(db_session: Session) -> Callable[..., User]:
             full_name=full_name or f"API {role.value}",
             email=email,
             phone=phone,
-            password=password,
         )
 
     return _create
@@ -146,13 +142,6 @@ class TestAnonymousAccess:
         resp = client.patch(
             f"/auth/users/{uuid.uuid4()}/store",
             json={"store_id": None},
-        )
-        assert resp.status_code == 401
-
-    def test_password_set_requires_auth(self, client: TestClient):
-        resp = client.post(
-            f"/auth/users/{uuid.uuid4()}/password",
-            json={"new_password": "x" * 12},
         )
         assert resp.status_code == 401
 
@@ -1225,122 +1214,6 @@ class TestStoreAssignmentRoute:
 
 
 # --------------------------------------------------------------------- #
-# POST /auth/users/{user_id}/password
-# --------------------------------------------------------------------- #
-
-
-class TestAdminSetPasswordRoute:
-    def test_admin_changes_password(
-        self,
-        client: TestClient,
-        db_session: Session,
-        make_store,
-        make_user,
-    ):
-        admin = make_user(role=UserRole.admin)
-        store = make_store(code="api-pw-a")
-        target = make_user(
-            role=UserRole.staff,
-            store_id=store.id,
-            password="old-secret-1234",
-        )
-        original_hash = target.password_hash
-
-        resp = client.post(
-            f"/auth/users/{target.id}/password",
-            headers=_auth(admin),
-            json={"new_password": "fresh-secret-1234"},
-        )
-        assert resp.status_code == 200, resp.text
-
-        # Re-read from DB to check the hash was rotated and the new
-        # password verifies — the response cannot include the hash
-        # because UserRead does not declare it.
-        db_session.expire_all()
-        fresh = db_session.scalar(
-            select(User).where(User.id == target.id)
-        )
-        assert fresh is not None
-        assert fresh.password_hash != original_hash
-        assert verify_password("fresh-secret-1234", fresh.password_hash)
-
-    def test_response_does_not_expose_password_hash(
-        self, client: TestClient, make_store, make_user
-    ):
-        admin = make_user(role=UserRole.admin)
-        store = make_store(code="api-pw-ne")
-        target = make_user(role=UserRole.staff, store_id=store.id)
-        resp = client.post(
-            f"/auth/users/{target.id}/password",
-            headers=_auth(admin),
-            json={"new_password": "leak-check-1234"},
-        )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert "password_hash" not in body
-        assert "new_password" not in body
-        assert set(body.keys()) == USER_READ_KEYS
-
-    @pytest.mark.parametrize(
-        "caller_role",
-        [UserRole.owner, UserRole.manager, UserRole.staff, UserRole.driver],
-    )
-    def test_non_admin_caller_forbidden(
-        self,
-        client: TestClient,
-        make_store,
-        make_user,
-        caller_role: UserRole,
-    ):
-        store = make_store(code=f"api-pw-na-{caller_role.value}")
-        actor = make_user(role=caller_role, store_id=store.id)
-        target = make_user(role=UserRole.staff, store_id=store.id)
-        resp = client.post(
-            f"/auth/users/{target.id}/password",
-            headers=_auth(actor),
-            json={"new_password": "ignored-1234"},
-        )
-        assert resp.status_code == 403
-
-    def test_short_password_422(
-        self, client: TestClient, make_store, make_user
-    ):
-        admin = make_user(role=UserRole.admin)
-        store = make_store(code="api-pw-short")
-        target = make_user(role=UserRole.staff, store_id=store.id)
-        resp = client.post(
-            f"/auth/users/{target.id}/password",
-            headers=_auth(admin),
-            json={"new_password": "x" * 7},
-        )
-        assert resp.status_code == 422
-
-    def test_long_password_422(
-        self, client: TestClient, make_store, make_user
-    ):
-        admin = make_user(role=UserRole.admin)
-        store = make_store(code="api-pw-long")
-        target = make_user(role=UserRole.staff, store_id=store.id)
-        resp = client.post(
-            f"/auth/users/{target.id}/password",
-            headers=_auth(admin),
-            json={"new_password": "x" * 129},
-        )
-        assert resp.status_code == 422
-
-    def test_unknown_user_404(
-        self, client: TestClient, make_user
-    ):
-        admin = make_user(role=UserRole.admin)
-        resp = client.post(
-            f"/auth/users/{uuid.uuid4()}/password",
-            headers=_auth(admin),
-            json={"new_password": "fresh-secret-1234"},
-        )
-        assert resp.status_code == 404
-
-
-# --------------------------------------------------------------------- #
 # Existing /auth surface stays intact
 # --------------------------------------------------------------------- #
 
@@ -1371,23 +1244,6 @@ class TestExistingAuthRoutesUnchanged:
         body = resp.json()
         assert body["full_name"] == "Created Via Auth Router"
         assert body["role"] == "staff"
-
-    def test_login_still_works(
-        self, client: TestClient, make_store, make_user
-    ):
-        store = make_store(code="api-aex-l")
-        # make_user uses a known plaintext password by default
-        # ("irrelevant-pw-1234" — see the fixture above).
-        user = make_user(role=UserRole.staff, store_id=store.id)
-        resp = client.post(
-            "/auth/login",
-            json={
-                "email": user.email,
-                "password": "irrelevant-pw-1234",
-            },
-        )
-        assert resp.status_code == 200, resp.text
-        assert "access_token" in resp.json()
 
     def test_me_still_works(
         self, client: TestClient, make_store, make_user

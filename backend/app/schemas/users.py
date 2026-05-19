@@ -11,9 +11,9 @@ Design rules baked in:
   wire).
 
 - All mutation requests set `extra="forbid"`. Callers cannot smuggle
-  privileged fields (`id`, `email`, `password_hash`, `role`,
-  `store_id`, `is_active`, `created_at`, `updated_at`) through the
-  generic profile-update endpoint. Role and store-assignment changes
+  privileged fields (`id`, `email`, `role`, `store_id`, `is_active`,
+  `created_at`, `updated_at`) through the generic profile-update
+  endpoint. Role and store-assignment changes
   go through their own dedicated request schemas with their own
   authorization rules in the service layer (F2.15.2).
 
@@ -131,25 +131,3 @@ class UserStoreAssignmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     store_id: UUID | None = None
-
-
-# --------------------------------------------------------------------- #
-# Admin password set
-# --------------------------------------------------------------------- #
-
-
-class AdminSetPasswordRequest(BaseModel):
-    """Body for the admin-driven password reset.
-
-    F2.15.1 covers only the direct-set flow (admin sets a new password
-    for a user). Email-based reset, reset tokens, SMTP, invitations,
-    MFA and SSO are deliberately out of scope.
-
-    Length bounds mirror `CreateUserRequest.password` so the rules a
-    user is held to at registration also apply when an admin rotates
-    their password.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    new_password: str = Field(min_length=8, max_length=128)

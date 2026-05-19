@@ -169,37 +169,29 @@ class TestCorsPreflight:
 class TestCorsDoesNotBreakAuthRoutes:
     """Sanity: the middleware did not change /auth/* contracts."""
 
-    def test_login_still_returns_token_with_origin_header(
+    def test_me_still_returns_user_with_origin_header(
         self, client: TestClient, db_session
     ):
-        from tests.helpers.auth import make_password_hash
-        from app.db.models import Store, User, UserRole
         import uuid
+
+        from app.db.models import Store, UserRole
+        from tests.helpers.auth import auth_headers_for, make_user
 
         store = Store(name="C", code=f"cors-{uuid.uuid4().hex[:6]}")
         db_session.add(store)
         db_session.commit()
         db_session.refresh(store)
 
-        user = User(
-            full_name="cors",
-            email=f"cors-{uuid.uuid4().hex[:6]}@example.com",
-            password_hash=make_password_hash("supersecret123"),
-            role=UserRole.staff,
-            store_id=store.id,
-            is_active=True,
+        user = make_user(
+            db_session, role=UserRole.staff, store_id=store.id
         )
-        db_session.add(user)
-        db_session.commit()
-        db_session.refresh(user)
 
-        resp = client.post(
-            "/auth/login",
-            json={"email": user.email, "password": "supersecret123"},
-            headers={"Origin": ALLOWED_ORIGIN},
+        resp = client.get(
+            "/auth/me",
+            headers={**auth_headers_for(user), "Origin": ALLOWED_ORIGIN},
         )
         assert resp.status_code == 200
-        assert "access_token" in resp.json()
+        assert resp.json()["id"] == str(user.id)
         assert resp.headers.get("access-control-allow-origin") == ALLOWED_ORIGIN
 
     def test_register_still_403_with_origin_header(self, client: TestClient):
