@@ -13,10 +13,10 @@ Usage:
 
 What you get:
 
-  - 1 global admin (admin@nuberush.dev / password123)
+  - 1 global admin (admin@nuberush.dev)
   - 2 stores ("Demo Downtown" / "Demo Uptown"), both active
   - Per store: owner, manager, 2 staff, 1 driver — all
-    `<role>@<store-code>.nuberush.dev` with password123
+    `<role>@<store-code>.nuberush.dev`
   - 20 products across 4 categories with a mix of compliance statuses
     (allowed / restricted / banned) so the compliance widgets light up
   - 1–2 variants per product (40 variants total)
@@ -27,9 +27,19 @@ What you get:
     backdated 2h so the aging_order alert lights up
   - Per store: ~12 inventory log rows so recent_activity is non-empty
 
-Login (every account):
+Authentication (F2.22.2.G3):
 
-    password: password123
+Seeded users are `public.users` app records only — they carry role,
+store and is_active, but no credentials. NubeRush authenticates
+exclusively through Supabase Auth, and these rows ship with
+`auth_user_id = NULL`, so **they cannot sign in until a Supabase
+identity is provisioned and the mapping is backfilled**.
+
+To make a seeded account login-capable, create a Supabase auth user
+for the same email (Supabase dashboard or Admin API) and run
+`scripts/backfill_supabase_auth_users.py --apply --email <addr>
+--password <temp>` to populate `auth_user_id`. There is no local
+password column and no FastAPI-minted JWT to fall back on.
 """
 
 from __future__ import annotations
@@ -55,7 +65,6 @@ if str(_BACKEND_ROOT) not in sys.path:
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
@@ -72,7 +81,6 @@ from app.db.models import UserRole
 from app.db.session import get_session_factory
 
 
-PASSWORD = "password123"
 ADMIN_EMAIL = "admin@nuberush.dev"
 
 STORES = [
@@ -99,12 +107,15 @@ def _make_user(
     email: str,
     full_name: str,
     store: Store | None,
-    password_hash: str,
 ) -> User:
+    # F2.22.2.G3: app-record-only seed. `auth_user_id` is left NULL
+    # (the column default); an operator runs
+    # `scripts/backfill_supabase_auth_users.py` once Supabase identities
+    # exist for these emails. Without that backfill these users have no
+    # way to authenticate.
     user = User(
         full_name=full_name,
         email=email,
-        password_hash=password_hash,
         role=role,
         store_id=store.id if store is not None else None,
         is_active=True,
@@ -430,7 +441,6 @@ def seed(db: Session) -> None:
         return
 
     print("🌱 Seeding demo data…")
-    pw_hash = hash_password(PASSWORD)
 
     admin = _make_user(
         db,
@@ -438,7 +448,6 @@ def seed(db: Session) -> None:
         email=ADMIN_EMAIL,
         full_name="NubeRush Admin",
         store=None,
-        password_hash=pw_hash,
     )
 
     products = _seed_products(db)
@@ -457,7 +466,6 @@ def seed(db: Session) -> None:
             email=f"owner@{store.code}.nuberush.dev",
             full_name=f"{store.name} Owner",
             store=store,
-            password_hash=pw_hash,
         )
         _make_user(
             db,
@@ -465,7 +473,6 @@ def seed(db: Session) -> None:
             email=f"manager@{store.code}.nuberush.dev",
             full_name=f"{store.name} Manager",
             store=store,
-            password_hash=pw_hash,
         )
         _make_user(
             db,
@@ -473,7 +480,6 @@ def seed(db: Session) -> None:
             email=f"staff1@{store.code}.nuberush.dev",
             full_name=f"{store.name} Staff One",
             store=store,
-            password_hash=pw_hash,
         )
         _make_user(
             db,
@@ -481,7 +487,6 @@ def seed(db: Session) -> None:
             email=f"staff2@{store.code}.nuberush.dev",
             full_name=f"{store.name} Staff Two",
             store=store,
-            password_hash=pw_hash,
         )
         _make_user(
             db,
@@ -489,7 +494,6 @@ def seed(db: Session) -> None:
             email=f"driver@{store.code}.nuberush.dev",
             full_name=f"{store.name} Driver",
             store=store,
-            password_hash=pw_hash,
         )
         items = _seed_inventory(db, store, variants)
         _seed_inventory_logs(db, store, items, owner)
@@ -498,7 +502,7 @@ def seed(db: Session) -> None:
     db.commit()
     print("✅ Seed complete.")
     print()
-    print("Accounts (password = password123):")
+    print("Accounts (app records only — no Supabase identity yet):")
     print(f"  • admin: {ADMIN_EMAIL}")
     for store_def in STORES:
         code = store_def["code"]
@@ -507,6 +511,15 @@ def seed(db: Session) -> None:
             f"manager@{code}.nuberush.dev / "
             f"staff1@{code}.nuberush.dev / driver@{code}.nuberush.dev"
         )
+    print()
+    print(
+        "Next step: provision Supabase Auth users for these emails, "
+        "then run\n"
+        "    python -m scripts.backfill_supabase_auth_users \\\n"
+        "        --apply --email <addr> --password <temp>\n"
+        "to populate auth_user_id. Until then these accounts cannot "
+        "sign in."
+    )
 
 
 def main() -> int:
