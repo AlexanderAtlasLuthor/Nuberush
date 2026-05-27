@@ -25,6 +25,12 @@ export {
 export { useUpdateComplianceMutation } from "./useUpdateComplianceMutation";
 export { useApproveProductMutation } from "./useApproveProductMutation";
 export { useRejectProductMutation } from "./useRejectProductMutation";
+export {
+  useProductImageUpload,
+  ALLOWED_IMAGE_CONTENT_TYPES,
+  MAX_IMAGE_SIZE_BYTES,
+  PRODUCT_IMAGES_BUCKET,
+} from "./useProductImageUpload";
 
 export {
   productsKeys,

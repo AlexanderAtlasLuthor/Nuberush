@@ -96,6 +96,15 @@ vi.mock(
   }),
 );
 
+// F2.22.4.G — admin-local ProductImagePanel is stubbed at the page
+// level so this test focuses on page composition; the panel has its
+// own dedicated tests under ../../components/__tests__.
+vi.mock("../../components/ProductImagePanel", () => ({
+  ProductImagePanel: ({ product }: { product: Product }) => (
+    <div data-testid="product-image-panel">image:{product.id}</div>
+  ),
+}));
+
 const PRODUCT_ID = "55555555-5555-5555-5555-555555555555";
 
 function asQueryResult(

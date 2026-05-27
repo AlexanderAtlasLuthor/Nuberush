@@ -1,0 +1,54 @@
+-- =============================================================================
+-- F2.22.4.E — product_images RLS deny-all (defense-in-depth)
+-- =============================================================================
+--
+-- Extends the F2.22.3.D RLS deny-all baseline to the new
+-- public.product_images metadata table created by Alembic revision
+-- d2f9e8a7c1b6 (F2.22.4.D). This file ONLY toggles RLS flags on the
+-- already-created table; the schema itself stays in Alembic.
+--
+-- ----- Architecture (locked, see docs/f2.22-contract-lock.md §§7, 8.1) ------
+--
+-- Mirrors every other public.* application table: RLS is enabled,
+-- FORCED so the table owner is also subject to policies, and NO
+-- positive policies are created. With RLS on and no permissive
+-- policy, the anon and authenticated roles get zero rows on SELECT
+-- and every write raises — exactly the F2.22 hybrid boundary.
+--
+-- FastAPI continues to connect with the dedicated nuberush_app role
+-- (LOGIN + BYPASSRLS, provisioned per docs/f2.22.3-rls-bypass-role.md)
+-- so the metadata reads and writes that land in F2.22.4.F are
+-- unaffected. RLS is defense-in-depth, never the primary gate.
+--
+-- ----- Scope of this migration ---------------------------------------------
+--
+-- IN scope (this file does this):
+--   * ALTER TABLE public.product_images ENABLE ROW LEVEL SECURITY.
+--   * ALTER TABLE public.product_images FORCE  ROW LEVEL SECURITY.
+--
+-- OUT of scope (deferred to a later subphase or banned outright):
+--   * No CREATE POLICY of any kind. authenticated and anon write
+--     policies are banned by the F2.22 contract §7 and will never be
+--     added here. Any authenticated SELECT policy on product_images
+--     is deferred indefinitely — F2.22.4 ships image metadata only
+--     through FastAPI's ProductRead response, not direct table reads.
+--   * No CREATE TABLE / ALTER TABLE on the public.product_images
+--     columns (Alembic d2f9e8a7c1b6 owns the schema).
+--   * No CREATE PUBLICATION (Realtime — F2.22.5; image metadata is
+--     never realtime in F2.22).
+--   * No storage.* bucket or storage.objects policy changes (those
+--     landed in F2.22.4.C; this file is purely about the public.*
+--     metadata table).
+--   * No RPC functions, no Edge Functions, no triggers, no business
+--     logic SQL.
+--   * No cluster-level operations: no CREATE ROLE, no GRANT/REVOKE,
+--     no passwords, no credentials, no host URLs.
+--
+-- ----- Rollback notes (informational; forward-only migration tree) ----------
+--
+--   ALTER TABLE public.product_images DISABLE ROW LEVEL SECURITY;
+--
+-- =============================================================================
+
+ALTER TABLE public.product_images ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.product_images FORCE  ROW LEVEL SECURITY;

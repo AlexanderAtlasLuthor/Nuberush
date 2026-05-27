@@ -1,0 +1,95 @@
+-- =============================================================================
+-- F2.22.4.C — Supabase Storage buckets (provisioning only)
+-- =============================================================================
+--
+-- This migration provisions the four Supabase Storage buckets locked by
+-- F2.22.4.B (see docs/f2.22-contract-lock.md §8 and §8.1). Only
+-- product-images is wired end-to-end in F2.22.4; the other three buckets
+-- are provisioned skeletons that later subphases may consume.
+--
+-- ----- Architecture (locked, see docs/f2.22-contract-lock.md §§8, 8.1) ------
+--
+-- Supabase Storage is infrastructure. FastAPI remains the business
+-- authority and is the only component allowed to mint write access to
+-- these buckets, via short-lived signed upload URLs issued with the
+-- server-side service-role credentials.
+--
+--   - product-images          : public bucket; storefront reads via the
+--                                public Supabase CDN URL; all writes
+--                                require a FastAPI-issued signed upload.
+--   - store-assets            : private; provisioned only in F2.22.4.
+--   - compliance-attachments  : private; provisioned only in F2.22.4.
+--   - exports                 : private; provisioned only in F2.22.4.
+--
+-- The frontend bundle holds the anon key only. The service-role key is
+-- server-only (FastAPI). No client ever writes to these buckets with the
+-- authenticated role; signed uploads are the only allowed write path.
+--
+-- ----- Design intent: no policies on storage.objects ------------------------
+--
+-- Supabase enables ROW LEVEL SECURITY on storage.objects by default, so
+-- the absence of any permissive policy is deny-by-default for the anon
+-- and authenticated roles. This mirrors the F2.22.3.D deny-all baseline
+-- on public.* tables.
+--
+-- For PUBLIC READ on product-images: the bucket's public = true flag is
+-- sufficient on this project's Supabase model. The /storage/v1/object/
+-- public/{bucket}/{path} endpoint serves objects publicly when the
+-- bucket is public, without any storage.objects SELECT policy. No
+-- additional SELECT policy is created here.
+--
+-- For WRITE on every bucket: no INSERT / UPDATE / DELETE policy is
+-- created for the authenticated role on storage.objects (nor for anon).
+-- Direct authenticated writes therefore remain denied. Writes succeed
+-- only via FastAPI-issued signed upload URLs, which use the server-side
+-- service-role credentials to authorize the upload.
+--
+-- ----- Scope of this migration ---------------------------------------------
+--
+-- IN scope (this file does this):
+--   * Idempotent INSERT INTO storage.buckets for the four buckets above.
+--
+-- OUT of scope (deferred to a later subphase or banned outright):
+--   * No CREATE POLICY on storage.objects or storage.buckets (writes
+--     stay denied; public read is handled by the public bucket flag).
+--   * No CREATE TABLE / ALTER TABLE on any public.* application table.
+--     public.product_images lands in a later F2.22.4 Alembic migration,
+--     not here (see docs/f2.22-contract-lock.md §8.1).
+--   * No realtime publication changes (F2.22.5).
+--   * No RPC functions, no Edge Functions, no triggers, no business
+--     logic in SQL.
+--   * No cluster-level operations: no CREATE ROLE, no GRANT/REVOKE, no
+--     passwords, no credentials, no host URLs.
+--
+-- ----- Idempotency ----------------------------------------------------------
+--
+-- INSERT ... ON CONFLICT (id) DO NOTHING preserves any pre-existing
+-- bucket configuration. Re-applying this file on an environment that
+-- already has the four buckets is a no-op. To change an existing
+-- bucket's configuration, write a new forward-only migration rather
+-- than editing this one (same model Alembic uses).
+--
+-- ----- Rollback notes (informational; not auto-applied) ---------------------
+--
+-- The migration tree is forward-only. To revert on a non-production
+-- environment, as a privileged Postgres session:
+--
+--   DELETE FROM storage.buckets
+--    WHERE id IN ('product-images',
+--                 'store-assets',
+--                 'compliance-attachments',
+--                 'exports');
+--
+-- Note: storage.buckets has ON DELETE behavior for storage.objects that
+-- depends on the Supabase platform version; on most projects bucket
+-- removal requires emptying objects first via the Storage API.
+--
+-- =============================================================================
+
+INSERT INTO storage.buckets (id, name, public)
+VALUES
+  ('product-images',         'product-images',         true),
+  ('store-assets',           'store-assets',           false),
+  ('compliance-attachments', 'compliance-attachments', false),
+  ('exports',                'exports',                false)
+ON CONFLICT (id) DO NOTHING;

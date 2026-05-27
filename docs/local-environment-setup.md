@@ -337,6 +337,135 @@ Once the F2.22.3.D baseline is applied to an environment, FastAPI's
 
 ---
 
+## F2.22.4 Supabase Storage
+
+F2.22.4 adds product image upload through Supabase Storage while
+keeping FastAPI the authority for permissions and metadata. No new
+frontend env var is required for Storage — the frontend reuses the
+F2.22.2 auth env vars.
+
+### Required env vars (already in `backend/.env.example`)
+
+Backend (server-only):
+
+- `SUPABASE_URL` — project base URL. Already required by F2.22.2 for
+  JWT verification; F2.22.4 reuses it to address the Storage REST API
+  and to derive the public CDN URL for `product-images`.
+- `SUPABASE_SERVICE_ROLE_KEY` — service-role key server-only. Already
+  required by F2.22.2.E for the Auth Admin API; F2.22.4 reuses it to
+  mint signed upload URLs against Supabase Storage. **Never expose to
+  the frontend, never log, never return in a response body.**
+  Confusing this with the `nuberush_app` DB bypass role has come up
+  before — the two are unrelated; see the callout in
+  [`f2.22.3-rls-bypass-role.md`](f2.22.3-rls-bypass-role.md) §1.1.
+
+Frontend (browser-safe, build-time, already in `web/.env.example`):
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+The anon key is the **only** Supabase credential the frontend ever
+holds. `SUPABASE_SERVICE_ROLE_KEY` must not appear in `web/.env` or
+in any `VITE_*` var — Vite would inline it into the public bundle.
+
+### Buckets (provisioned by `supabase/migrations/`)
+
+| Bucket | Posture | F2.22.4 use |
+| --- | --- | --- |
+| `product-images` | public-read | wired end-to-end; storefront renders `primary_image.public_url` via the public CDN; writes only through FastAPI-issued signed upload URLs |
+| `store-assets` | private | provisioned only; no UI/end-to-end integration |
+| `compliance-attachments` | private | provisioned only; no UI/end-to-end integration |
+| `exports` | private | provisioned only; no UI/end-to-end integration |
+
+No `storage.objects` `INSERT` / `UPDATE` / `DELETE` policy is granted
+to the `authenticated` or `anon` roles for any of these buckets —
+no direct authenticated storage writes are allowed, by contract
+(`docs/f2.22-contract-lock.md` §§7, 8.1). Signed upload URLs minted
+server-side with `SUPABASE_SERVICE_ROLE_KEY` are the only write path.
+
+### Metadata table (`public.product_images`)
+
+Created by Alembic revision `d2f9e8a7c1b6_add_product_images.py`.
+Holds the FastAPI-owned image metadata (id, product_id, object_key,
+uploaded_by_user_id, timestamps). Unique constraint on `product_id`
+enforces one primary image per product. RLS is `ENABLE` + `FORCE`
+with **zero positive policies** for `authenticated` or `anon`
+(`supabase/migrations/20260527142744_product_images_rls.sql`); FastAPI
+reaches the table through the existing `nuberush_app` BYPASSRLS role
+established in F2.22.3.
+
+### Operational upload flow
+
+1. Admin selects an image in the admin product detail page.
+2. The frontend hook (`useProductImageUpload`) validates the file type
+   (JPEG / PNG / WebP) and size (≤ 5 MB) client-side. Backend remains
+   authoritative.
+3. The frontend calls `POST /products/{id}/image-upload-url`. FastAPI
+   asserts `require_admin`, that the product exists, and that the
+   declared content type / size / filename are safe.
+4. FastAPI generates a server-side object key
+   (`products/{product_id}/<uuid>.<ext>`) and asks Supabase Storage to
+   sign an upload URL using `SUPABASE_SERVICE_ROLE_KEY`. The
+   service-role key never leaves the backend.
+5. The frontend uploads the binary with
+   `supabase.storage.from("product-images").uploadToSignedUrl(...)`.
+   This is the **only** `supabase-js` storage method touched by the
+   admin upload flow.
+6. The frontend calls `POST /products/{id}/images` with the bucket and
+   object key. FastAPI re-validates the bucket and the
+   `products/{product_id}/` prefix.
+7. FastAPI upserts a row in `public.product_images` (unique on
+   `product_id` — repeated confirms replace the existing row).
+8. The frontend invalidates the product detail / list query keys; the
+   detail page refetches and renders `primary_image.public_url` from
+   the FastAPI response. The frontend never derives the public URL
+   from `object_key` itself.
+
+### Boundary checklist (running totals)
+
+- No `supabase.from(...)` against `public.products` or
+  `public.product_images` anywhere in `web/src/features/`.
+- No frontend reference to `SUPABASE_SERVICE_ROLE_KEY` or the
+  `service_role` token; only the F2.22.2 anon key is bundled.
+- No `storage.objects` `INSERT` / `UPDATE` / `DELETE` policy exists
+  for any of the four buckets — `supabase/tests/storage_buckets.sql`
+  Part B asserts this on Supabase-enabled environments and SKIPs
+  with a `NOTICE` on bare local Postgres.
+
+### Rollback / emergency disable
+
+If product image upload misbehaves, prefer the **smallest reversible
+control first**:
+
+1. **Disable the admin entry point** — hide `ProductImagePanel` from
+   `AdminProductDetailPage`, or pull the user out of the `admin`
+   role. Existing rows remain readable; new uploads stop.
+2. **Disable the backend endpoints** — comment out
+   `POST /products/{id}/image-upload-url` and
+   `POST /products/{id}/images` in `backend/app/api/routes/products.py`.
+   No new signed URLs are minted and no metadata can be written.
+3. **Do NOT** rotate by adding `authenticated` storage write policies
+   or by giving the frontend the service-role key. The contract
+   bans both outright; any "quick fix" of that shape must update
+   `docs/f2.22-contract-lock.md` first.
+
+Full rollback, in reverse order of the subphase plan:
+
+| Step | Action | Reverses |
+| --- | --- | --- |
+| 1 | Remove `ProductImagePanel` + `useProductImageUpload` + `features/products/storage.ts` from the frontend | F2.22.4.G |
+| 2 | Remove `POST /products/{id}/image-upload-url`, `POST /products/{id}/images`, `app/services/storage.py`, image schemas | F2.22.4.F |
+| 3 | `alembic downgrade -1` past `d2f9e8a7c1b6_add_product_images.py` (drops `public.product_images`) | F2.22.4.D |
+| 4 | Drop the storage migrations or `DELETE FROM storage.buckets WHERE id IN ('product-images', 'store-assets', 'compliance-attachments', 'exports')` after emptying objects | F2.22.4.C and F2.22.4.E |
+
+`product-images` being public-read is only safe because writes are
+controlled by FastAPI-issued signed URLs and metadata writes are
+FastAPI-only. Loosening either of those properties — public writes,
+or letting the frontend write `public.product_images` directly —
+breaks the contract and must not be done as a hotfix.
+
+---
+
 ## Common errors and fixes
 
 | Error | Root cause | Fix |

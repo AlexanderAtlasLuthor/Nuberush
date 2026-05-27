@@ -2,8 +2,9 @@
 -- F2.22.3.F — RLS deny-all baseline tests
 -- =============================================================================
 --
--- Validates the F2.22.3.D deny-all baseline:
---   A. RLS is ENABLED and FORCED on each of the 10 public.* application tables.
+-- Validates the F2.22.3.D deny-all baseline, extended in F2.22.4.E to
+-- the product_images metadata table:
+--   A. RLS is ENABLED and FORCED on each of the 11 public.* application tables.
 --   B. No policies exist on those tables yet (deny-all by absence).
 --   C. authenticated and anon roles cannot SELECT/INSERT/UPDATE/DELETE.
 --
@@ -26,7 +27,10 @@ DECLARE
     'users', 'stores', 'products', 'product_variants',
     'inventory_items', 'inventory_logs',
     'orders', 'order_items',
-    'order_audit_logs', 'product_compliance_audit_logs'
+    'order_audit_logs', 'product_compliance_audit_logs',
+    -- F2.22.4.E: product image metadata is a public.* table and must
+    -- carry the same deny-all baseline as every other business table.
+    'product_images'
   ];
   t text;
   r record;
@@ -48,12 +52,12 @@ BEGIN
       RAISE EXCEPTION 'TEST FAIL [A]: public.% missing relforcerowsecurity=true (FORCE not applied?)', t;
     END IF;
   END LOOP;
-  RAISE NOTICE 'PASS [A]: RLS ENABLED+FORCED on all 10 required tables';
+  RAISE NOTICE 'PASS [A]: RLS ENABLED+FORCED on all 11 required tables';
 END
 $A$;
 
 -- ---------------------------------------------------------------------------
--- Part B — Zero policies on the 10 tables (deny-all by absence of policy).
+-- Part B — Zero policies on the 11 tables (deny-all by absence of policy).
 -- ---------------------------------------------------------------------------
 
 DO $B$
@@ -68,7 +72,8 @@ BEGIN
        'users', 'stores', 'products', 'product_variants',
        'inventory_items', 'inventory_logs',
        'orders', 'order_items',
-       'order_audit_logs', 'product_compliance_audit_logs'
+       'order_audit_logs', 'product_compliance_audit_logs',
+       'product_images'
      );
   IF policy_count <> 0 THEN
     FOR hit IN
@@ -79,15 +84,16 @@ BEGIN
            'users', 'stores', 'products', 'product_variants',
            'inventory_items', 'inventory_logs',
            'orders', 'order_items',
-           'order_audit_logs', 'product_compliance_audit_logs'
+           'order_audit_logs', 'product_compliance_audit_logs',
+           'product_images'
          )
     LOOP
       RAISE NOTICE 'unexpected policy: %.%.% (%)',
         hit.schemaname, hit.tablename, hit.policyname, hit.cmd;
     END LOOP;
-    RAISE EXCEPTION 'TEST FAIL [B]: expected 0 policies on the 10 tables, found %', policy_count;
+    RAISE EXCEPTION 'TEST FAIL [B]: expected 0 policies on the 11 tables, found %', policy_count;
   END IF;
-  RAISE NOTICE 'PASS [B]: 0 policies on the 10 required tables (deny-all by absence)';
+  RAISE NOTICE 'PASS [B]: 0 policies on the 11 required tables (deny-all by absence)';
 END
 $B$;
 
@@ -137,7 +143,10 @@ DECLARE
     'users', 'stores', 'products', 'product_variants',
     'inventory_items', 'inventory_logs',
     'orders', 'order_items',
-    'order_audit_logs', 'product_compliance_audit_logs'
+    'order_audit_logs', 'product_compliance_audit_logs',
+    -- F2.22.4.E: product image metadata is a public.* table and must
+    -- carry the same deny-all baseline as every other business table.
+    'product_images'
   ];
   t text;
   visible_count integer;
@@ -149,7 +158,7 @@ BEGIN
         visible_count, t;
     END IF;
   END LOOP;
-  RAISE NOTICE 'PASS [C.1/authenticated/SELECT]: 0 rows visible on all 10 tables despite seeded row';
+  RAISE NOTICE 'PASS [C.1/authenticated/SELECT]: 0 rows visible on all 11 tables despite seeded row';
 END
 $C_auth_sel$;
 
@@ -205,7 +214,10 @@ DECLARE
     'users', 'stores', 'products', 'product_variants',
     'inventory_items', 'inventory_logs',
     'orders', 'order_items',
-    'order_audit_logs', 'product_compliance_audit_logs'
+    'order_audit_logs', 'product_compliance_audit_logs',
+    -- F2.22.4.E: product image metadata is a public.* table and must
+    -- carry the same deny-all baseline as every other business table.
+    'product_images'
   ];
   t text;
   visible_count integer;
@@ -217,7 +229,7 @@ BEGIN
         visible_count, t;
     END IF;
   END LOOP;
-  RAISE NOTICE 'PASS [C.4/anon/SELECT]: 0 rows visible on all 10 tables';
+  RAISE NOTICE 'PASS [C.4/anon/SELECT]: 0 rows visible on all 11 tables';
 END
 $C_anon_sel$;
 

@@ -20,6 +20,10 @@ from app.db.session import get_db
 from app.schemas.products import ProductComplianceAuditLogRead
 from app.schemas.products import ProductComplianceUpdate
 from app.schemas.products import ProductCreate
+from app.schemas.products import ProductImageConfirmRequest
+from app.schemas.products import ProductImageRead
+from app.schemas.products import ProductImageUploadUrlRequest
+from app.schemas.products import ProductImageUploadUrlResponse
 from app.schemas.products import ProductRead
 from app.schemas.products import ProductReject
 from app.schemas.products import ProductUpdate
@@ -27,6 +31,8 @@ from app.schemas.products import VariantCreate
 from app.schemas.products import VariantRead
 from app.schemas.products import VariantUpdate
 from app.services import products as svc
+from app.services import storage as storage_svc
+from app.services.storage import SupabaseStorageError
 
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -245,6 +251,66 @@ def set_product_compliance(
     db: Session = Depends(get_db),
 ) -> Product:
     return svc.set_product_compliance(
+        db, product_id, payload, actor=current_user
+    )
+
+
+# --------------------------------------------------------------------- #
+# Product images — admin only (F2.22.4.F)
+# --------------------------------------------------------------------- #
+
+
+@router.post(
+    "/{product_id}/image-upload-url",
+    response_model=ProductImageUploadUrlResponse,
+)
+def create_product_image_upload_url(
+    product_id: UUID,
+    payload: ProductImageUploadUrlRequest,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> ProductImageUploadUrlResponse:
+    """Issue a short-lived signed upload URL for a product image.
+
+    Admin-only. The bucket is the locked `product-images` bucket; the
+    object key is generated server-side under `products/{product_id}/`
+    so the client cannot influence it. The signed URL itself is
+    minted by Supabase Storage using the server-side service-role
+    credentials — the frontend never sees that key.
+    """
+    try:
+        return storage_svc.create_product_image_upload_url(
+            db, product_id, payload
+        )
+    except SupabaseStorageError as exc:
+        # Coarse 502 — the underlying Supabase failure stays in the
+        # exception chain (server logs), not the response body. No
+        # service-role key, URL, or request body is echoed.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Upstream storage service unavailable.",
+        ) from exc
+
+
+@router.post(
+    "/{product_id}/images",
+    response_model=ProductImageRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def confirm_product_image(
+    product_id: UUID,
+    payload: ProductImageConfirmRequest,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Confirm a completed upload and upsert the metadata row.
+
+    Admin-only. The unique(product_id) constraint enforces one primary
+    image per product, so re-confirming replaces the existing row in
+    place rather than inserting a duplicate. The uploader on the
+    metadata row is always the current admin.
+    """
+    return storage_svc.confirm_product_image(
         db, product_id, payload, actor=current_user
     )
 

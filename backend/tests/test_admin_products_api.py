@@ -60,6 +60,7 @@ _PRODUCT_ITEM_KEYS = {
     "rejection_reason",
     "created_at",
     "updated_at",
+    "primary_image",
 }
 
 _NON_ADMIN_ROLES = (

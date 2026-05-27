@@ -155,6 +155,7 @@ class TestProductReadAccess:
             "rejection_reason",
             "created_at",
             "updated_at",
+            "primary_image",
         }
 
     def test_get_unknown_product_returns_404(

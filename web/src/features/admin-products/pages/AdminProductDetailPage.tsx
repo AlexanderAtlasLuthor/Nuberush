@@ -50,6 +50,7 @@ import { ProductVariantsTable } from "@/features/products/components/ProductVari
 import { useProductQuery } from "@/features/products/hooks";
 
 import { AdminProductApprovalPanel } from "../components/AdminProductApprovalPanel";
+import { ProductImagePanel } from "../components/ProductImagePanel";
 
 const EM_DASH = "—";
 
@@ -153,6 +154,7 @@ export default function AdminProductDetailPage() {
       <PageHeader productId={productId} />
       <ProductDetailHeader product={product} />
       <AdminProductApprovalPanel product={product} />
+      <ProductImagePanel product={product} />
       <ProductActionsBar product={product} />
       <ProductCompliancePanel product={product} />
       <ProductVariantsTable productId={product.id} />

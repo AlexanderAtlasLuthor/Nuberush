@@ -267,6 +267,14 @@ class Product(Base):
     compliance_audits: Mapped[list[ProductComplianceAuditLog]] = relationship(
         back_populates="product", cascade="all, delete-orphan"
     )
+    # F2.22.4.D: one primary image per product, enforced at the DB
+    # layer by uq_product_images_product_id. uselist=False makes this
+    # a scalar relationship; absence resolves to None.
+    primary_image: Mapped[ProductImage | None] = relationship(
+        back_populates="product",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 
 class ProductVariant(Base):
@@ -309,6 +317,57 @@ class ProductVariant(Base):
     inventory_items: Mapped[list[InventoryItem]] = relationship(back_populates="variant")
     inventory_logs: Mapped[list[InventoryLog]] = relationship(back_populates="variant")
     order_items: Mapped[list[OrderItem]] = relationship(back_populates="variant")
+
+
+class ProductImage(Base):
+    """Metadata row for a product image stored in Supabase Storage.
+
+    The binary lives in the `product-images` bucket; this row holds the
+    business metadata FastAPI owns (which product, who uploaded, when).
+    `unique(product_id)` enforces "one primary image per product" from
+    the F2.22.4 scope lock (docs/f2.22-contract-lock.md §8.1).
+    """
+
+    __tablename__ = "product_images"
+    __table_args__ = (
+        UniqueConstraint(
+            "product_id", name="uq_product_images_product_id"
+        ),
+        Index(
+            "ix_product_images_uploaded_by_user_id",
+            "uploaded_by_user_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "products.id",
+            name="fk_product_images_product_id_products",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    uploaded_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_product_images_uploaded_by_user_id_users",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+    product: Mapped[Product] = relationship(back_populates="primary_image")
+    uploaded_by_user: Mapped[User] = relationship()
 
 
 class InventoryItem(Base):

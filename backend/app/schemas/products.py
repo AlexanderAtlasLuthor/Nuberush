@@ -26,11 +26,20 @@ from uuid import UUID
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import computed_field
 from pydantic import field_validator
 from pydantic import model_validator
 
+from app.core.config import get_supabase_auth_settings
 from app.db.models import ComplianceStatus
 from app.db.models import ProductApprovalStatus
+
+
+# F2.22.4.D: bucket name is contractually fixed for product images.
+# See docs/f2.22-contract-lock.md §8.1. Hardcoded rather than read from
+# config because F2.22.4 has exactly one product image bucket; a future
+# subphase can lift this to config if a second image surface is added.
+_PRODUCT_IMAGES_BUCKET = "product-images"
 
 
 # --------------------------------------------------------------------- #
@@ -165,6 +174,79 @@ class ProductComplianceUpdate(BaseModel):
         return self
 
 
+class ProductImageRead(BaseModel):
+    """Response shape for the single primary image on a product.
+
+    F2.22.4 supports one primary image per product (DB enforced by
+    `uq_product_images_product_id`), so this schema is scalar — no
+    gallery semantics. `public_url` is the storefront-ready
+    `/storage/v1/object/public/...` URL derived from `object_key`; it
+    is None when the backend has no Supabase URL configured (test
+    suite default) and falls back to None rather than producing a
+    relative URL.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    product_id: UUID
+    object_key: str
+    uploaded_by_user_id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def public_url(self) -> str | None:
+        base = get_supabase_auth_settings().supabase_url.strip().rstrip("/")
+        if not base:
+            return None
+        return (
+            f"{base}/storage/v1/object/public/"
+            f"{_PRODUCT_IMAGES_BUCKET}/{self.object_key}"
+        )
+
+
+class ProductImageUploadUrlRequest(BaseModel):
+    """Payload accepted by POST /products/{id}/image-upload-url.
+
+    Only metadata about the file the admin intends to upload — the
+    object key is generated server-side by the storage service so the
+    client cannot influence it. Detailed business validation (allowed
+    content types, max size, safe filename) lives in
+    ``app.services.storage``.
+    """
+
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=1, max_length=100)
+    size_bytes: int = Field(gt=0)
+
+
+class ProductImageUploadUrlResponse(BaseModel):
+    """Response shape for POST /products/{id}/image-upload-url.
+
+    Carries no secrets — the service-role key never leaves the backend.
+    """
+
+    bucket: str
+    object_key: str
+    signed_upload_url: str
+    expires_in_seconds: int
+
+
+class ProductImageConfirmRequest(BaseModel):
+    """Payload accepted by POST /products/{id}/images.
+
+    Confirms a frontend upload by echoing the bucket and object_key the
+    backend issued. Bucket / key are revalidated server-side against
+    the locked F2.22.4 bucket and the product prefix before the
+    metadata row is upserted.
+    """
+
+    bucket: str = Field(min_length=1, max_length=128)
+    object_key: str = Field(min_length=1, max_length=512)
+
+
 class ProductRead(BaseModel):
     """Response shape for any endpoint returning a product.
 
@@ -196,6 +278,7 @@ class ProductRead(BaseModel):
     rejection_reason: str | None
     created_at: datetime
     updated_at: datetime
+    primary_image: ProductImageRead | None = None
 
 
 class ProductReject(BaseModel):

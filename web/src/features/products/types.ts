@@ -117,6 +117,76 @@ export interface Product {
   rejection_reason: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * Primary product image metadata. `null` when none has been uploaded;
+   * `undefined` only when the field is omitted by older callers/test
+   * fixtures. The backend (F2.22.4) always emits the field as either
+   * `null` or a populated object. F2.22.4 supports exactly one image
+   * per product (`unique(product_id)` on `public.product_images`).
+   * Mirrors backend `ProductRead.primary_image`.
+   */
+  primary_image?: ProductImage | null;
+}
+
+// --------------------------------------------------------------------- //
+// Product image (F2.22.4)
+// --------------------------------------------------------------------- //
+
+/**
+ * Response shape for the primary image on a product.
+ *
+ * Mirrors backend `ProductImageRead`. `public_url` is computed
+ * server-side from the locked `product-images` bucket and the stored
+ * `object_key`; it is `null` when the backend has no `SUPABASE_URL`
+ * configured. The frontend renders `public_url` verbatim and never
+ * derives its own URL from `object_key`.
+ */
+export interface ProductImage {
+  id: string;
+  product_id: string;
+  object_key: string;
+  public_url: string | null;
+  uploaded_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Body for `POST /products/{id}/image-upload-url`.
+ *
+ * The object key itself is generated server-side; this payload only
+ * declares what the admin is about to upload so the backend can
+ * validate type/size before minting a signed URL. Mirrors backend
+ * `ProductImageUploadUrlRequest`.
+ */
+export interface ProductImageUploadUrlRequest {
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+}
+
+/**
+ * Response shape for `POST /products/{id}/image-upload-url`.
+ *
+ * Carries no secrets — the service-role key never leaves the backend.
+ * Mirrors backend `ProductImageUploadUrlResponse`.
+ */
+export interface ProductImageUploadUrlResponse {
+  bucket: string;
+  object_key: string;
+  signed_upload_url: string;
+  expires_in_seconds: number;
+}
+
+/**
+ * Body for `POST /products/{id}/images`. Echoes the bucket and key
+ * the backend issued so it can revalidate before upserting the
+ * `public.product_images` metadata row. Mirrors backend
+ * `ProductImageConfirmRequest`.
+ */
+export interface ProductImageConfirmRequest {
+  bucket: string;
+  object_key: string;
 }
 
 /**
