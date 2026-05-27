@@ -240,6 +240,103 @@ See `backend/.env.example` for the exact URL shapes.
 
 ---
 
+## F2.22.3 migration application order
+
+Starting in F2.22.3, the project has **two** migration trees that must
+apply in a fixed order on every environment (local, CI, staging,
+production). The order is:
+
+0. **One-off privileged bootstrap** — provision the `nuberush_app`
+   bypass role on each target environment **before** any RLS-enabling
+   migration lands. `CREATE ROLE ... BYPASSRLS` is a cluster-level
+   operation and is intentionally not in the migration tree. Run the
+   template in [`f2.22.3-rls-bypass-role.md`](f2.22.3-rls-bypass-role.md)
+   §3 as `postgres` (Supabase Dashboard SQL Editor, `psql` against
+   the project, or a local `psql -U postgres`). One-off per
+   environment.
+1. **Alembic** (`python -m alembic upgrade head` from `backend/`) —
+   the schema authority for every `public.*` application table,
+   column, index, constraint and enum.
+2. **Supabase SQL migrations** — files under `supabase/migrations/`
+   applied in filename order. As of F2.22.3.H, these are
+   `20260526142048_rls_baseline.sql` (enable + force RLS, no policies)
+   and `20260526144321_rls_helpers.sql` (three `SECURITY DEFINER`
+   helper functions). F2.22.4 will add Storage objects and F2.22.5
+   will add the Realtime publication and its narrow `SELECT`
+   policies.
+3. **Supabase SQL tests** — `supabase/tests/rls_baseline.sql` then
+   `supabase/tests/rls_helpers.sql`, each invoked as
+   `psql … -v ON_ERROR_STOP=1 -f <file>`. They assert deny-all
+   baseline, helper-function correctness, and the absence of any
+   `authenticated`-role write policy.
+4. **FastAPI bypass regression** — `pytest tests/test_rls_bypass.py -q`
+   from `backend/`. Environment-aware: see "Bypass regression"
+   below for skip / pass / fail semantics. This step is the
+   earliest signal that `DATABASE_URL` is misconfigured (pointing at
+   a non-bypass role); catching it here keeps the broader pytest
+   suite from going red for the same root cause.
+5. **Backend pytest** — the existing 1760-test suite, run with both
+   migration trees applied and the bypass regression already green.
+   Must stay green.
+6. **Frontend smoke** — only when frontend files were touched in the
+   subphase. Out of scope for F2.22.3.
+
+### Bypass regression (F2.22.3.G)
+
+`backend/tests/test_rls_bypass.py` is environment-aware:
+
+- On a fresh local checkout (Alembic only, Supabase migrations not
+  applied), the detection and helper-existence checks SKIP cleanly,
+  while the **active regression**
+  (`test_fastapi_request_succeeds_under_actively_enforced_rls`)
+  always runs: it force-enables RLS on `public.users` inside the
+  test's own transaction, then exercises GET `/auth/me`. The test's
+  transaction is rolled back at teardown, so no state leaks.
+- After the Supabase migrations are applied, the detection check
+  actively verifies that the FastAPI runtime role bypasses RLS, and
+  the helper-existence check confirms all three helpers are
+  installed.
+- If RLS is active in this database but `DATABASE_URL` points at a
+  role that lacks `BYPASSRLS` (and is not a superuser), both
+  bypass-related tests FAIL with explicit messages — that is the
+  broken-deploy condition this layer catches before the rest of the
+  pytest suite goes red.
+
+Run it with:
+
+```bash
+cd backend
+python -m pytest tests/test_rls_bypass.py -q
+```
+
+Alembic remains the schema authority. Supabase migrations must not
+create or alter `public.*` application tables. See
+[`../supabase/README.md`](../supabase/README.md) for the ownership
+split and the implementation status table.
+
+### DATABASE_URL discipline in RLS-active environments
+
+Once the F2.22.3.D baseline is applied to an environment, FastAPI's
+`DATABASE_URL` **must** use the `nuberush_app` role (or any role with
+`BYPASSRLS`). Recap of the rules from
+[`f2.22.3-rls-bypass-role.md`](f2.22.3-rls-bypass-role.md) §4:
+
+- Driver: `postgresql+psycopg://` (psycopg 3) — required for the
+  prepared-statement and `SELECT ... FOR UPDATE` semantics the
+  inventory/orders concurrency tests rely on.
+- Pooler: Supavisor **session** pooler. The Supavisor **transaction**
+  pooler is forbidden — see the F2.22.1 cutover section above.
+- TLS: `?sslmode=require` outside local development.
+- **`SUPABASE_SERVICE_ROLE_KEY` is NOT the DB bypass role.** That env
+  var is an HTTP API key for the Supabase Admin API, consumed only by
+  `backend/app/services/supabase_admin.py` to create `auth.users`
+  rows. It never appears in `DATABASE_URL` and has no Postgres role
+  attached. Confusing the two has come up enough that it deserves a
+  callout here as well as in
+  [`f2.22.3-rls-bypass-role.md`](f2.22.3-rls-bypass-role.md) §1.1.
+
+---
+
 ## Common errors and fixes
 
 | Error | Root cause | Fix |
