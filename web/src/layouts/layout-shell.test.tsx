@@ -3,10 +3,25 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactNode } from "react";
 
+// F2.22.5.E: stub the Realtime invalidation bridge as a sentinel div
+// so:
+//   - the bridge does not call useQueryClient() (these tests do not
+//     mount a QueryClientProvider; the production bridge expects one);
+//   - we can assert mount/no-mount per layout (`getByTestId` /
+//     `queryByTestId` against `realtime-bridge`).
+// The bridge's real behavior is unit-tested in
+// `web/src/features/realtime/__tests__/RealtimeInvalidationBridge.test.tsx`.
+vi.mock("@/features/realtime", () => ({
+  RealtimeInvalidationBridge: () => (
+    <div data-testid="realtime-bridge" hidden />
+  ),
+}));
+
 import { AdminLayout } from "./AdminLayout";
 import { AppShell } from "./AppShell";
 import { DashboardLayout } from "./DashboardLayout";
 import { StoreLayout } from "./StoreLayout";
+import { PublicLayout } from "./PublicLayout";
 import { ADMIN_NAV_ITEMS, NAV_ITEMS, STORE_NAV_ITEMS } from "./navigation";
 import { AppTopbar } from "./components/AppTopbar";
 import { FeaturePlaceholder } from "./components/FeaturePlaceholder";
@@ -296,6 +311,59 @@ describe("AdminLayout", () => {
     expect(screen.queryByText(/cart/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/marketplace/i)).not.toBeInTheDocument();
     expect(screen.getByText("admin-placeholder-slot")).toBeInTheDocument();
+  });
+});
+
+// F2.22.5.E: realtime invalidation bridge mounts inside the
+// authenticated AppShell (via AdminLayout / StoreLayout) and is
+// absent from PublicLayout. The bridge itself is stubbed at the
+// top of this file as a sentinel `data-testid="realtime-bridge"`
+// div; its real (hook-firing) behavior is covered by the unit
+// test under `web/src/features/realtime/__tests__/`.
+describe("RealtimeInvalidationBridge mounting", () => {
+  it("mounts inside AdminLayout (authenticated admin shell)", () => {
+    render(
+      <MemoryRouter initialEntries={["/app/admin"]}>
+        <AdminLayout>
+          <div>admin content</div>
+        </AdminLayout>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId("realtime-bridge")).toBeInTheDocument();
+  });
+
+  it("mounts inside StoreLayout (authenticated store shell)", () => {
+    render(
+      <MemoryRouter initialEntries={["/app/store"]}>
+        <StoreLayout>
+          <div>store content</div>
+        </StoreLayout>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId("realtime-bridge")).toBeInTheDocument();
+  });
+
+  it("is NOT mounted inside PublicLayout (no auth, no AppShell)", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <PublicLayout>
+          <div>public marketing content</div>
+        </PublicLayout>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByTestId("realtime-bridge")).not.toBeInTheDocument();
+  });
+
+  it("mounts exactly once even when nested children re-render", () => {
+    render(
+      <MemoryRouter initialEntries={["/app/admin"]}>
+        <AdminLayout>
+          <div>page A</div>
+          <div>page B</div>
+        </AdminLayout>
+      </MemoryRouter>,
+    );
+    expect(screen.getAllByTestId("realtime-bridge")).toHaveLength(1);
   });
 });
 

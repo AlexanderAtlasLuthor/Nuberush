@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { AppSidebar } from "./components/AppSidebar";
 import { AppTopbar } from "./components/AppTopbar";
 import type { NavItemConfig } from "./navigation";
+import { RealtimeInvalidationBridge } from "@/features/realtime";
 
 export type WorkspaceId = "admin" | "store";
 
@@ -38,6 +39,14 @@ export function AppShell({
 
   return (
     <div className="min-h-screen flex bg-background text-foreground">
+      {/* F2.22.5.E: zero-render bridge that opens the orders +
+          inventory_items Realtime channels and invalidates the
+          matching TanStack Query keys on (debounced) events.
+          Active only inside authenticated workspaces — AppShell
+          is composed by AdminLayout / StoreLayout (both under
+          ProtectedRoute) and is NOT used by PublicLayout or the
+          AuthScreen. See docs/f2.22-contract-lock.md §9.1. */}
+      <RealtimeInvalidationBridge />
       <AppSidebar
         surfaceLabel={surfaceLabel}
         scopeLabel={scopeLabel}

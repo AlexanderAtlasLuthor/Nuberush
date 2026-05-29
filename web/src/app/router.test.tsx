@@ -53,6 +53,16 @@ vi.mock("@/pages/AuthScreen", () => ({
   default: () => <div>Login page</div>,
 }));
 
+// F2.22.5.E: stub the Realtime invalidation bridge so the router
+// test renders AppShell without needing a QueryClientProvider in
+// scope. The bridge's real (hook-firing) behavior is covered by
+// `web/src/features/realtime/__tests__/`; routing tests only need
+// to confirm the redirect/route-split surface, which is unaffected
+// by whether the bridge is real or stubbed.
+vi.mock("@/features/realtime", () => ({
+  RealtimeInvalidationBridge: () => null,
+}));
+
 vi.mock("@/features/dashboard/pages/DashboardHomePage", () => ({
   default: () => <div>Store dashboard page</div>,
 }));
