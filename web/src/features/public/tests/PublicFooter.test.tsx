@@ -58,11 +58,11 @@ describe("PublicFooter", () => {
   it("exposes the business contact email", () => {
     renderFooter();
     const email = screen.getByRole("link", {
-      name: /team@fuenmayorindustries\.com/i,
+      name: /info@nuberush\.com/i,
     });
     expect(email).toHaveAttribute(
       "href",
-      "mailto:team@fuenmayorindustries.com",
+      "mailto:info@nuberush.com",
     );
   });
 

@@ -26,11 +26,11 @@ describe.each([
   it("exposes the business email as a mailto link", () => {
     renderPage(node);
     const email = screen.getByRole("link", {
-      name: /team@fuenmayorindustries\.com/i,
+      name: /info@nuberush\.com/i,
     });
     expect(email).toHaveAttribute(
       "href",
-      "mailto:team@fuenmayorindustries.com",
+      "mailto:info@nuberush.com",
     );
   });
 

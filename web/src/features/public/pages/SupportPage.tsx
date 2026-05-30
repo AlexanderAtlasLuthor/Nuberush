@@ -25,7 +25,7 @@ const TOPICS: ReadonlyArray<SupportTopic> = [
     body: "Reach out to your usual NubeRush operations contact, or email the team. Store users keep using their existing sign-in.",
     cta: {
       label: "Email the team",
-      mailto: "mailto:team@fuenmayorindustries.com",
+      mailto: "mailto:info@nuberush.com",
     },
   },
   {
@@ -117,10 +117,10 @@ export function SupportPage() {
       >
         <p className="text-base">
           <a
-            href="mailto:team@fuenmayorindustries.com"
+            href="mailto:info@nuberush.com"
             className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
           >
-            team@fuenmayorindustries.com
+            info@nuberush.com
           </a>
         </p>
         <p className="mt-3 text-sm text-muted-foreground leading-relaxed">

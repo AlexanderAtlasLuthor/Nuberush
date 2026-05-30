@@ -63,13 +63,13 @@ describe("LegalHubPage (F2.21.5)", () => {
   it("exposes the business contact email as a mailto link", () => {
     renderPage(<LegalHubPage />);
     const matches = screen.getAllByRole("link", {
-      name: /team@fuenmayorindustries\.com/i,
+      name: /info@nuberush\.com/i,
     });
     expect(matches.length).toBeGreaterThan(0);
     expect(
       matches.some(
         (el) =>
-          el.getAttribute("href") === "mailto:team@fuenmayorindustries.com",
+          el.getAttribute("href") === "mailto:info@nuberush.com",
       ),
     ).toBe(true);
   });
@@ -135,13 +135,13 @@ describe.each(LEGAL_DOCUMENTS)("$name (F2.21.5)", ({ node, title }) => {
   it("renders the business contact email as a mailto link", () => {
     renderPage(node);
     const matches = screen.getAllByRole("link", {
-      name: /team@fuenmayorindustries\.com/i,
+      name: /info@nuberush\.com/i,
     });
     expect(matches.length).toBeGreaterThan(0);
     expect(
       matches.some(
         (el) =>
-          el.getAttribute("href") === "mailto:team@fuenmayorindustries.com",
+          el.getAttribute("href") === "mailto:info@nuberush.com",
       ),
     ).toBe(true);
   });

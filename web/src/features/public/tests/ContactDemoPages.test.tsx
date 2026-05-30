@@ -16,9 +16,9 @@ function expectInternalLinkTo(label: RegExp, href: string) {
   expect(matches.some((el) => el.getAttribute("href") === href)).toBe(true);
 }
 
-function expectMailtoLink(href = "mailto:team@fuenmayorindustries.com") {
+function expectMailtoLink(href = "mailto:info@nuberush.com") {
   const matches = screen.getAllByRole("link", {
-    name: /team@fuenmayorindustries\.com/i,
+    name: /info@nuberush\.com/i,
   });
   expect(matches.length).toBeGreaterThan(0);
   expect(matches.some((el) => el.getAttribute("href") === href)).toBe(true);
@@ -39,7 +39,7 @@ describe("ContactPage (F2.21.4)", () => {
   it("renders the locked business email and mailto link", () => {
     renderPage(<ContactPage />);
     expect(
-      screen.getAllByText(/team@fuenmayorindustries\.com/i).length,
+      screen.getAllByText(/info@nuberush\.com/i).length,
     ).toBeGreaterThan(0);
     expectMailtoLink();
   });
@@ -87,7 +87,7 @@ describe("ContactPage (F2.21.4)", () => {
     const emailUs = screen.getByRole("link", { name: /^email us$/i });
     expect(emailUs).toHaveAttribute(
       "href",
-      "mailto:team@fuenmayorindustries.com",
+      "mailto:info@nuberush.com",
     );
   });
 });
@@ -109,7 +109,7 @@ describe("RequestDemoPage (F2.21.4)", () => {
     // The address appears in the access-model list AND in the CTA box
     // anchor, so use getAllByText with a positive count assertion.
     expect(
-      screen.getAllByText(/team@fuenmayorindustries\.com/i).length,
+      screen.getAllByText(/info@nuberush\.com/i).length,
     ).toBeGreaterThan(0);
     expectMailtoLink();
   });
@@ -162,7 +162,7 @@ describe("RequestDemoPage (F2.21.4)", () => {
     });
     expect(emailTeam).toHaveAttribute(
       "href",
-      "mailto:team@fuenmayorindustries.com",
+      "mailto:info@nuberush.com",
     );
   });
 

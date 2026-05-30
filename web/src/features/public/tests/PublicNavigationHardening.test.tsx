@@ -188,11 +188,11 @@ describe("PublicFooter hardening (F2.21.6)", () => {
   it("exposes the business email as a mailto link", () => {
     renderInRouter(<PublicFooter />);
     const email = screen.getByRole("link", {
-      name: /team@fuenmayorindustries\.com/i,
+      name: /info@nuberush\.com/i,
     });
     expect(email).toHaveAttribute(
       "href",
-      "mailto:team@fuenmayorindustries.com",
+      "mailto:info@nuberush.com",
     );
   });
 
@@ -303,14 +303,14 @@ describe.each(CROSS_LINK_PAGES)(
       it("exposes the business email as a mailto link", () => {
         renderInRouter(node);
         const matches = screen.getAllByRole("link", {
-          name: /team@fuenmayorindustries\.com/i,
+          name: /info@nuberush\.com/i,
         });
         expect(matches.length).toBeGreaterThan(0);
         expect(
           matches.some(
             (el) =>
               el.getAttribute("href") ===
-              "mailto:team@fuenmayorindustries.com",
+              "mailto:info@nuberush.com",
           ),
         ).toBe(true);
       });
@@ -354,13 +354,13 @@ describe("LegalHubPage cross-links (F2.21.6)", () => {
   it("exposes the business email as a mailto link", () => {
     renderInRouter(<LegalHubPage />);
     const matches = screen.getAllByRole("link", {
-      name: /team@fuenmayorindustries\.com/i,
+      name: /info@nuberush\.com/i,
     });
     expect(matches.length).toBeGreaterThan(0);
     expect(
       matches.some(
         (el) =>
-          el.getAttribute("href") === "mailto:team@fuenmayorindustries.com",
+          el.getAttribute("href") === "mailto:info@nuberush.com",
       ),
     ).toBe(true);
   });
@@ -392,13 +392,13 @@ describe.each(LEGAL_DOCS)("$name cross-links (F2.21.6)", ({ node }) => {
   it("exposes the business email as a mailto link", () => {
     renderInRouter(node);
     const matches = screen.getAllByRole("link", {
-      name: /team@fuenmayorindustries\.com/i,
+      name: /info@nuberush\.com/i,
     });
     expect(matches.length).toBeGreaterThan(0);
     expect(
       matches.some(
         (el) =>
-          el.getAttribute("href") === "mailto:team@fuenmayorindustries.com",
+          el.getAttribute("href") === "mailto:info@nuberush.com",
       ),
     ).toBe(true);
   });

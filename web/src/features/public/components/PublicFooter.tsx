@@ -97,10 +97,10 @@ export function PublicFooter() {
             </p>
             <p className="mt-2 text-sm">
               <a
-                href="mailto:team@fuenmayorindustries.com"
+                href="mailto:info@nuberush.com"
                 className="text-foreground hover:text-primary transition-colors break-words"
               >
-                team@fuenmayorindustries.com
+                info@nuberush.com
               </a>
             </p>
           </div>

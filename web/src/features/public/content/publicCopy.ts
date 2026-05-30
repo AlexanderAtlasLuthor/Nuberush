@@ -296,7 +296,7 @@ export const REGULATED_COMMERCE_COPY = {
 export const CTA_BAND_COPY = {
   title: "Talk to the NubeRush team.",
   description:
-    "Request a demo for your store, or send a general inquiry. The team responds from team@fuenmayorindustries.com.",
+    "Request a demo for your store, or send a general inquiry. The team responds from info@nuberush.com.",
   primary: { label: "Request demo", to: "/request-demo" },
   secondary: { label: "Contact us", to: "/contact" },
 } as const;
@@ -480,7 +480,7 @@ export const HOW_IT_WORKS_DETAILED_STEPS: ReadonlyArray<HowItWorksStep> = [
   {
     step: "1",
     title: "Request a demo",
-    body: "Reach the NubeRush team at team@fuenmayorindustries.com or via the Request demo page. Share your store, location, and what you'd like to discuss.",
+    body: "Reach the NubeRush team at info@nuberush.com or via the Request demo page. Share your store, location, and what you'd like to discuss.",
   },
   {
     step: "2",
@@ -540,7 +540,7 @@ export const HOW_IT_WORKS_PRINCIPLES: ReadonlyArray<string> = [
 export const HOW_IT_WORKS_CTA_BAND = {
   title: "Start the conversation.",
   description:
-    "Request a demo to begin. The team responds from team@fuenmayorindustries.com.",
+    "Request a demo to begin. The team responds from info@nuberush.com.",
   primary: { label: "Request demo", to: "/request-demo" },
   secondary: { label: "For stores", to: "/for-stores" },
 } as const;
@@ -668,7 +668,7 @@ export const FEATURES_PAGE_CTA_BAND = {
 // so page components don't scatter raw strings.
 // ───────────────────────────────────────────────────────────────────
 
-export const BUSINESS_EMAIL = "team@fuenmayorindustries.com";
+export const BUSINESS_EMAIL = "info@nuberush.com";
 export const BUSINESS_EMAIL_MAILTO = `mailto:${BUSINESS_EMAIL}`;
 
 // /contact ──────────────────────────────────────────────────────────
@@ -785,7 +785,7 @@ export const REQUEST_DEMO_CHECKLIST: ReadonlyArray<string> = [
 
 export const REQUEST_DEMO_ACCESS_MODEL: ReadonlyArray<string> = [
   "Self-serve signup is not available yet.",
-  "Demo requests begin by contacting the NubeRush team at team@fuenmayorindustries.com.",
+  "Demo requests begin by contacting the NubeRush team at info@nuberush.com.",
   "Store access is handled by the NubeRush team after fit and operating needs are discussed.",
 ];
 
