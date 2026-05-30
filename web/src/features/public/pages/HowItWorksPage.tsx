@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { PublicPageHeader } from "../components/PublicPageHeader";
 import { PublicSection } from "../components/PublicSection";
 import { PublicCtaBand } from "../components/PublicCtaBand";
+import { useMobileCopy } from "../components/useMobileCopy";
 import {
   HOW_IT_WORKS_COPY,
   HOW_IT_WORKS_CTA_BAND,
@@ -11,6 +12,17 @@ import {
   HOW_IT_WORKS_PRINCIPLES_SECTION,
 } from "../content/publicCopy";
 
+const MOBILE_DETAILED_STEP_TITLES: Record<string, string> = {
+  "Request a demo": "Request demo",
+  "Confirm store fit and operating needs": "Confirm fit",
+  "Set up store workspace": "Store setup",
+  "Organize product catalog": "Product catalog",
+  "Connect inventory visibility": "Inventory",
+  "Track order operations": "Orders",
+  "Monitor compliance visibility": "Compliance",
+  "Use admin oversight and audit history": "Admin + audit",
+};
+
 // F2.21.3 — real /how-it-works page. Eight-step flow + onboarding
 // principles. Replaces the F2.21.1 shell. The intro and principles
 // explicitly say self-serve signup is not available yet and that
@@ -18,12 +30,16 @@ import {
 // obligations.
 
 export function HowItWorksPage() {
+  const isMobileCopy = useMobileCopy();
+
   return (
     <>
       <PublicPageHeader
         eyebrow={HOW_IT_WORKS_COPY.eyebrow}
         title={HOW_IT_WORKS_COPY.headline}
+        mobileTitle="From demo to launch."
         description={HOW_IT_WORKS_COPY.subhead}
+        mobileDescription="Request a demo. The team works through fit, setup, and onboarding."
         actions={
           <>
             <Link
@@ -45,7 +61,9 @@ export function HowItWorksPage() {
       <PublicSection
         eyebrow={HOW_IT_WORKS_PAGE_SECTION.eyebrow}
         title={HOW_IT_WORKS_PAGE_SECTION.title}
+        mobileTitle="The onboarding flow."
         description={HOW_IT_WORKS_PAGE_SECTION.description}
+        mobileDescription="Eight practical steps, from first conversation to daily use."
       >
         <ol className="grid gap-4 md:grid-cols-2">
           {HOW_IT_WORKS_DETAILED_STEPS.map((step) => (
@@ -58,9 +76,11 @@ export function HowItWorksPage() {
               </span>
               <div>
                 <p className="text-sm font-semibold text-foreground">
-                  {step.title}
+                  {isMobileCopy
+                    ? MOBILE_DETAILED_STEP_TITLES[step.title] ?? step.title
+                    : step.title}
                 </p>
-                <p className="mt-1 text-sm leading-relaxed text-foreground/62">
+                <p className="mt-1 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                   {step.body}
                 </p>
               </div>
@@ -72,6 +92,7 @@ export function HowItWorksPage() {
       <PublicSection
         eyebrow={HOW_IT_WORKS_PRINCIPLES_SECTION.eyebrow}
         title={HOW_IT_WORKS_PRINCIPLES_SECTION.title}
+        mobileTitle="How we work with stores."
         tone="muted"
       >
         <ul className="grid gap-3 md:grid-cols-2">

@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useMobileCopy } from "./useMobileCopy";
 
 interface PublicSectionProps {
   eyebrow?: string;
   title?: string;
+  mobileTitle?: string;
   description?: string;
+  mobileDescription?: string;
   children?: ReactNode;
   className?: string;
   /**
@@ -19,12 +22,18 @@ interface PublicSectionProps {
 export function PublicSection({
   eyebrow,
   title,
+  mobileTitle,
   description,
+  mobileDescription,
   children,
   className,
   tone = "default",
   ariaLabel,
 }: PublicSectionProps) {
+  const isMobileCopy = useMobileCopy();
+  const displayTitle = isMobileCopy && mobileTitle ? mobileTitle : title;
+  const displayDescription =
+    isMobileCopy && mobileDescription ? mobileDescription : description;
   const toneClass =
     tone === "muted"
       ? "bg-foreground/[0.025] backdrop-blur-sm"
@@ -36,27 +45,31 @@ export function PublicSection({
       className={cn("w-full py-14 md:py-20", toneClass, className)}
     >
       <div className="container">
-        {(eyebrow || title || description) && (
+        {(eyebrow || displayTitle || displayDescription) && (
           <div className="max-w-3xl">
             {eyebrow && (
               <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                 {eyebrow}
               </p>
             )}
-            {title && (
+            {displayTitle && (
               <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground md:text-4xl">
-                {title}
+                {displayTitle}
               </h2>
             )}
-            {description && (
+            {displayDescription && (
               <p className="mt-3 text-base leading-relaxed text-foreground/64">
-                {description}
+                {displayDescription}
               </p>
             )}
           </div>
         )}
         {children && (
-          <div className={cn(eyebrow || title || description ? "mt-10" : undefined)}>
+          <div
+            className={cn(
+              eyebrow || displayTitle || displayDescription ? "mt-10" : undefined,
+            )}
+          >
             {children}
           </div>
         )}

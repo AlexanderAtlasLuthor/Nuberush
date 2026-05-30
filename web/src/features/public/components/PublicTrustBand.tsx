@@ -1,10 +1,20 @@
 import type { TrustPoint } from "../content/publicCopy";
+import { useMobileCopy } from "./useMobileCopy";
 
 interface PublicTrustBandProps {
   points: ReadonlyArray<TrustPoint>;
 }
 
+const MOBILE_TRUST_TITLES: Record<string, string> = {
+  "Operational visibility": "Visibility",
+  "Compliance-aware workflows": "Compliance",
+  "Audit-backed activity": "Audit",
+  "Platform oversight": "Oversight",
+};
+
 export function PublicTrustBand({ points }: PublicTrustBandProps) {
+  const isMobileCopy = useMobileCopy();
+
   return (
     <section
       aria-label="Trust and positioning"
@@ -21,9 +31,11 @@ export function PublicTrustBand({ points }: PublicTrustBandProps) {
                 </span>
                 <div>
                   <p className="text-sm font-semibold text-foreground">
-                    {point.title}
+                    {isMobileCopy
+                      ? MOBILE_TRUST_TITLES[point.title] ?? point.title
+                      : point.title}
                   </p>
-                  <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                  <p className="mt-1 hidden text-sm leading-relaxed text-muted-foreground sm:block">
                     {point.body}
                   </p>
                 </div>

@@ -6,6 +6,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { useMobileCopy } from "./useMobileCopy";
 
 interface CtaLink {
   label: string;
@@ -15,7 +16,9 @@ interface CtaLink {
 interface PublicHeroProps {
   eyebrow?: string;
   headline: string;
+  mobileHeadline?: string;
   subhead?: string;
+  mobileSubhead?: string;
   primary: CtaLink;
   secondary?: CtaLink;
 }
@@ -23,10 +26,16 @@ interface PublicHeroProps {
 export function PublicHero({
   eyebrow,
   headline,
+  mobileHeadline,
   subhead,
+  mobileSubhead,
   primary,
   secondary,
 }: PublicHeroProps) {
+  const isMobileCopy = useMobileCopy();
+  const displayHeadline = isMobileCopy && mobileHeadline ? mobileHeadline : headline;
+  const displaySubhead = isMobileCopy && mobileSubhead ? mobileSubhead : subhead;
+
   return (
     <section
       aria-label="Hero"
@@ -67,11 +76,11 @@ export function PublicHero({
             </p>
           )}
           <h1 className="mt-5 text-4xl font-semibold leading-tight tracking-tight text-foreground md:text-6xl lg:text-7xl">
-            {headline}
+            {displayHeadline}
           </h1>
-          {subhead && (
+          {displaySubhead && (
             <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-foreground/68 md:text-lg">
-              {subhead}
+              {displaySubhead}
             </p>
           )}
           <div className="mt-8 flex flex-wrap justify-center gap-3">

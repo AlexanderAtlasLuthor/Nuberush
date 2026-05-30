@@ -1,11 +1,32 @@
 import { Link } from "react-router-dom";
 import { PublicPageHeader } from "../components/PublicPageHeader";
 import { PublicCtaBand } from "../components/PublicCtaBand";
+import { useMobileCopy } from "../components/useMobileCopy";
 import {
   FEATURES_PAGE_COPY,
   FEATURES_PAGE_CTA_BAND,
   FEATURES_PAGE_GROUPS,
 } from "../content/publicCopy";
+
+const MOBILE_GROUP_TITLES: Record<string, string> = {
+  "Store operations": "Store ops",
+  "Product & inventory": "Products",
+  Orders: "Orders",
+  "Compliance visibility": "Compliance",
+  "Admin oversight": "Admin",
+  "Audit & visibility": "Audit",
+};
+
+const MOBILE_CAPABILITY_TITLES: Record<string, string> = {
+  "Store workspace": "Workspace",
+  "Product oversight": "Products",
+  "Inventory visibility": "Inventory",
+  "Order operations": "Orders",
+  "Compliance visibility": "Compliance",
+  "Audit trail": "Audit",
+  "Admin console": "Admin",
+  "Operations alerts": "Alerts",
+};
 
 // F2.21.3 — real /features page. Six capability groups containing the
 // eight contract-locked capabilities (Store workspace, Product
@@ -15,12 +36,16 @@ import {
 // stats / testimonials / logos.
 
 export function FeaturesPage() {
+  const isMobileCopy = useMobileCopy();
+
   return (
     <>
       <PublicPageHeader
         eyebrow={FEATURES_PAGE_COPY.eyebrow}
         title={FEATURES_PAGE_COPY.headline}
+        mobileTitle="Operational visibility."
         description={FEATURES_PAGE_COPY.subhead}
+        mobileDescription="Capabilities grouped by products, inventory, orders, compliance, admin, and audit."
         actions={
           <>
             <Link
@@ -51,12 +76,14 @@ export function FeaturesPage() {
                 <header className="flex items-start gap-4 md:items-center">
                   <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
                     <Icon className="h-5 w-5" aria-hidden="true" />
-                  </span>
+                    </span>
                   <div>
                     <h2 className="text-xl md:text-2xl font-semibold tracking-tight text-foreground">
-                      {group.title}
+                      {isMobileCopy
+                        ? MOBILE_GROUP_TITLES[group.title] ?? group.title
+                        : group.title}
                     </h2>
-                    <p className="mt-1 text-sm leading-relaxed text-foreground/62">
+                    <p className="mt-1 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                       {group.description}
                     </p>
                   </div>
@@ -69,9 +96,11 @@ export function FeaturesPage() {
                       className="rounded-lg border border-foreground/10 bg-background/26 p-5 backdrop-blur-xl transition-colors hover:border-primary/30"
                     >
                       <p className="text-sm font-semibold text-foreground">
-                        {cap.title}
+                        {isMobileCopy
+                          ? MOBILE_CAPABILITY_TITLES[cap.title] ?? cap.title
+                          : cap.title}
                       </p>
-                      <p className="mt-2 text-sm leading-relaxed text-foreground/62">
+                      <p className="mt-2 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                         {cap.body}
                       </p>
                     </li>

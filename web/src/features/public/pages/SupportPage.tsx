@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { PublicPageHeader } from "../components/PublicPageHeader";
 import { PublicSection } from "../components/PublicSection";
+import { useMobileCopy } from "../components/useMobileCopy";
 
 // F2.21.6 hardening: SupportPage is intentionally lightweight — a
 // formal help center belongs to a later phase — but it must not be a
@@ -63,18 +64,30 @@ const MORE_LINKS: ReadonlyArray<{ label: string; to: string; body: string }> = [
   },
 ];
 
+const MOBILE_TOPIC_TITLES: Record<string, string> = {
+  "I run a store on NubeRush and need help": "Store help",
+  "I want to evaluate NubeRush for my store": "Evaluate NubeRush",
+  "I have a partnership or operational question": "Partnerships",
+};
+
 export function SupportPage() {
+  const isMobileCopy = useMobileCopy();
+
   return (
     <>
       <PublicPageHeader
         eyebrow="Support"
         title="Support and contact."
+        mobileTitle="Support."
         description="A starting point for stores, operators, and partners. NubeRush does not run a public ticketing system; support flows through email and operator contact channels."
+        mobileDescription="Start here for store, demo, or partner questions."
       />
 
       <PublicSection
         title="Common starting points"
+        mobileTitle="Starting points."
         description="Find the closest match to your situation, then reach out to the team."
+        mobileDescription="Pick the closest path."
       >
         <ul className="grid gap-4 md:grid-cols-3">
           {TOPICS.map((topic) => (
@@ -83,9 +96,11 @@ export function SupportPage() {
               className="premium-glass-soft rounded-lg p-5"
             >
               <p className="text-sm font-semibold text-foreground">
-                {topic.title}
+                {isMobileCopy
+                  ? MOBILE_TOPIC_TITLES[topic.title] ?? topic.title
+                  : topic.title}
               </p>
-              <p className="mt-2 text-sm leading-relaxed text-foreground/62">
+              <p className="mt-2 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                 {topic.body}
               </p>
               <p className="mt-3 text-sm">
@@ -112,7 +127,9 @@ export function SupportPage() {
 
       <PublicSection
         title="Email"
+        mobileTitle="Email."
         description="The most reliable way to reach the team. Response time varies by request and is not guaranteed."
+        mobileDescription="The main support channel today."
         tone="muted"
       >
         <div className="premium-glass-soft rounded-lg p-5">
@@ -124,7 +141,7 @@ export function SupportPage() {
               info@nuberush.com
             </a>
           </p>
-          <p className="mt-3 text-sm leading-relaxed text-foreground/62">
+          <p className="mt-3 hidden text-sm leading-relaxed text-foreground/62 sm:block">
             A formal help center and FAQ are planned for a later phase. Until
             then, email is the supported channel.
           </p>
@@ -134,7 +151,9 @@ export function SupportPage() {
       <PublicSection
         eyebrow="More resources"
         title="Other places to look."
+        mobileTitle="More resources."
         description="If support isn't quite what you need, these pages cover the rest of the platform's public surface."
+        mobileDescription="Other public pages that may help."
       >
         <ul className="grid gap-4 sm:grid-cols-2">
           {MORE_LINKS.map((link) => (
@@ -146,7 +165,7 @@ export function SupportPage() {
                 <p className="text-sm font-semibold text-foreground">
                   {link.label}
                 </p>
-                <p className="mt-2 text-sm leading-relaxed text-foreground/62">
+                <p className="mt-2 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                   {link.body}
                 </p>
               </Link>

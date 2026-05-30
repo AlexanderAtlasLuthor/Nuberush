@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { PublicPageHeader } from "../components/PublicPageHeader";
 import { PublicSection } from "../components/PublicSection";
 import { PublicCtaBand } from "../components/PublicCtaBand";
+import { useMobileCopy } from "../components/useMobileCopy";
 import {
   FOR_STORES_COPY,
   FOR_STORES_CTA_BAND,
@@ -9,18 +10,32 @@ import {
   FOR_STORES_SECTION_HEADING,
 } from "../content/publicCopy";
 
+const MOBILE_STORE_SECTION_TITLES: Record<string, string> = {
+  "Why stores use NubeRush": "Why NubeRush",
+  "Product operations": "Products",
+  "Inventory visibility": "Inventory",
+  "Order oversight": "Orders",
+  "Compliance-aware workflows": "Compliance",
+  "Admin/platform support": "Admin support",
+  "Audit / traceability": "Audit",
+};
+
 // F2.21.3 — real /for-stores merchant education page. Replaces the
 // F2.21.1 shell. Copy lives in publicCopy.ts so this page stays
 // declarative. No fake stats, testimonials, partner logos, or
 // guaranteed-compliance claims.
 
 export function ForStoresPage() {
+  const isMobileCopy = useMobileCopy();
+
   return (
     <>
       <PublicPageHeader
         eyebrow={FOR_STORES_COPY.eyebrow}
         title={FOR_STORES_COPY.headline}
+        mobileTitle="For clearer store ops."
         description={FOR_STORES_COPY.subhead}
+        mobileDescription="Products, inventory, orders, compliance, and audit in one workspace."
         actions={
           <>
             <Link
@@ -42,7 +57,9 @@ export function ForStoresPage() {
       <PublicSection
         eyebrow={FOR_STORES_SECTION_HEADING.eyebrow}
         title={FOR_STORES_SECTION_HEADING.title}
+        mobileTitle="What stores get."
         description={FOR_STORES_SECTION_HEADING.description}
+        mobileDescription="The operating areas NubeRush supports today."
       >
         <ul className="grid gap-5 md:grid-cols-2">
           {FOR_STORES_SECTIONS.map((section) => {
@@ -57,13 +74,16 @@ export function ForStoresPage() {
                     <Icon className="h-4 w-4" aria-hidden="true" />
                   </span>
                   <p className="text-base font-semibold text-foreground">
-                    {section.title}
+                    {isMobileCopy
+                      ? MOBILE_STORE_SECTION_TITLES[section.title] ??
+                        section.title
+                      : section.title}
                   </p>
                 </div>
-                <p className="mt-3 text-sm leading-relaxed text-foreground/62">
+                <p className="mt-3 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                   {section.body}
                 </p>
-                <ul className="mt-4 space-y-2 text-sm leading-relaxed text-foreground/78">
+                <ul className="mt-4 hidden space-y-2 text-sm leading-relaxed text-foreground/78 sm:block">
                   {section.bullets.map((bullet) => (
                     <li key={bullet} className="flex gap-2">
                       <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/80" />

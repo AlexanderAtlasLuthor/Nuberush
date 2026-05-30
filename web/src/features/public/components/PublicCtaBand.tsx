@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
+import { useMobileCopy } from "./useMobileCopy";
 
 interface CtaLink {
   label: string;
@@ -8,28 +9,37 @@ interface CtaLink {
 
 interface PublicCtaBandProps {
   title: string;
+  mobileTitle?: string;
   description?: string;
+  mobileDescription?: string;
   primary: CtaLink;
   secondary?: CtaLink;
 }
 
 export function PublicCtaBand({
   title,
+  mobileTitle,
   description,
+  mobileDescription,
   primary,
   secondary,
 }: PublicCtaBandProps) {
+  const isMobileCopy = useMobileCopy();
+  const displayTitle = isMobileCopy && mobileTitle ? mobileTitle : title;
+  const displayDescription =
+    isMobileCopy && mobileDescription ? mobileDescription : description;
+
   return (
     <section aria-label="Call to action" className="w-full py-12 md:py-16">
       <div className="container">
         <div className="premium-ring mx-auto max-w-4xl rounded-[2rem] p-px text-center">
           <div className="premium-glass rounded-[2rem] px-5 py-9 md:px-10 md:py-11">
             <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-4xl">
-              {title}
+              {displayTitle}
             </h2>
-            {description && (
+            {displayDescription && (
               <p className="mx-auto mt-3 max-w-2xl text-base leading-relaxed text-foreground/64">
-                {description}
+                {displayDescription}
               </p>
             )}
             <div className="mt-6 flex flex-wrap justify-center gap-3">

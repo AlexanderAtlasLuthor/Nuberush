@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { PublicPageHeader } from "../components/PublicPageHeader";
 import { PublicSection } from "../components/PublicSection";
+import { useMobileCopy } from "../components/useMobileCopy";
 import {
   BUSINESS_EMAIL,
   BUSINESS_EMAIL_MAILTO,
@@ -11,6 +12,13 @@ import {
   CONTACT_SECTIONS,
 } from "../content/publicCopy";
 
+const MOBILE_CONTACT_SECTION_TITLES: Record<string, string> = {
+  "General contact": "General",
+  "Merchant demo inquiries": "Demo inquiries",
+  "Support direction": "Support",
+  "Business/partnership inquiries": "Partnerships",
+};
+
 // F2.21.4 — real /contact page. Honest email-only contact surface.
 // No form, no fake submit, no fake success state, no API. The page
 // has exactly one mailto anchor that carries the email address as
@@ -19,12 +27,16 @@ import {
 // the address, so getByRole queries stay stable.
 
 export function ContactPage() {
+  const isMobileCopy = useMobileCopy();
+
   return (
     <>
       <PublicPageHeader
         eyebrow={CONTACT_PAGE_COPY.eyebrow}
         title={CONTACT_PAGE_COPY.headline}
+        mobileTitle="Contact NubeRush."
         description={CONTACT_PAGE_COPY.subhead}
+        mobileDescription="Email the team for demos, support direction, partnerships, or general inquiries."
         actions={
           <>
             <a
@@ -46,7 +58,9 @@ export function ContactPage() {
       <PublicSection
         eyebrow="How to reach us"
         title="Ways to contact the NubeRush team."
+        mobileTitle="Ways to reach us."
         description="Every conversation begins with a real message you send. We don't run a public form, ticketing queue, or always-on helpdesk."
+        mobileDescription="Choose the closest path and email the team."
       >
         <ul className="grid gap-4 md:grid-cols-2">
           {CONTACT_SECTIONS.map((section) => (
@@ -55,9 +69,12 @@ export function ContactPage() {
               className="premium-glass-soft rounded-lg p-5"
             >
               <p className="text-sm font-semibold text-foreground">
-                {section.title}
+                {isMobileCopy
+                  ? MOBILE_CONTACT_SECTION_TITLES[section.title] ??
+                    section.title
+                  : section.title}
               </p>
-              <p className="mt-2 text-sm leading-relaxed text-foreground/62">
+              <p className="mt-2 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                 {section.body}
               </p>
               {section.title === "Merchant demo inquiries" && (
@@ -78,7 +95,9 @@ export function ContactPage() {
       <PublicSection
         eyebrow={CONTACT_CHECKLIST_SECTION.eyebrow}
         title={CONTACT_CHECKLIST_SECTION.title}
+        mobileTitle="What to include."
         description={CONTACT_CHECKLIST_SECTION.description}
+        mobileDescription="A few details help route your message."
         tone="muted"
       >
         <ul className="grid gap-2 text-sm leading-relaxed text-foreground/78 md:grid-cols-2">
@@ -94,7 +113,9 @@ export function ContactPage() {
       <PublicSection
         eyebrow={CONTACT_CTA_SECTION.eyebrow}
         title={CONTACT_CTA_SECTION.title}
+        mobileTitle="Email the team."
         description={CONTACT_CTA_SECTION.description}
+        mobileDescription="Replies come from the same address."
       >
         <div className="premium-glass rounded-lg p-6">
           <p className="text-sm font-semibold text-foreground">Email</p>
@@ -106,7 +127,7 @@ export function ContactPage() {
               {BUSINESS_EMAIL}
             </a>
           </p>
-          <p className="mt-4 text-sm leading-relaxed text-foreground/62">
+          <p className="mt-4 hidden text-sm leading-relaxed text-foreground/62 sm:block">
             The team responds from this address. Response time varies by
             request.
           </p>

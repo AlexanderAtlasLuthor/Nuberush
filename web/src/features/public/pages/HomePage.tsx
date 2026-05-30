@@ -6,6 +6,7 @@ import { PublicHero } from "../components/PublicHero";
 import { PublicTrustBand } from "../components/PublicTrustBand";
 import { PublicFeatureGrid } from "../components/PublicFeatureGrid";
 import { PublicFaq } from "../components/PublicFaq";
+import { useMobileCopy } from "../components/useMobileCopy";
 import {
   CTA_BAND_COPY,
   FAQ_ITEMS,
@@ -25,6 +26,32 @@ import {
   TRUST_POINTS,
 } from "../content/publicCopy";
 
+const MOBILE_PROBLEM_TITLES: Record<string, string> = {
+  "Product data scattered across tools": "Scattered products",
+  "Inventory and orders disconnected": "Disconnected ops",
+  "Compliance visibility is hard to monitor": "Compliance gaps",
+  "Manual operations slow teams down": "Manual work",
+  "Platform operators need centralized oversight": "Central oversight",
+};
+
+const MOBILE_SOLUTION_TITLES: Record<string, string> = {
+  "Store workspace": "Store",
+  "Admin console": "Admin",
+  "Connected operations": "Connected ops",
+};
+
+const MOBILE_STEP_TITLES: Record<string, string> = {
+  "Request a demo": "Request demo",
+  "Set up store operations": "Store setup",
+  "Organize products and inventory": "Products + inventory",
+  "Monitor orders and compliance visibility": "Orders + compliance",
+  "Use platform oversight and audit history": "Oversight + audit",
+};
+
+const MOBILE_OPERATION_TITLES: Record<string, string> = {
+  "Admin oversight": "Admin",
+};
+
 // F2.21.2 homepage. Ten sections in the order locked by F2.21 contract
 // §6: Hero / Trust band / Problem / Solution / Feature grid /
 // How-it-works preview / Built for regulated local commerce /
@@ -36,12 +63,16 @@ import {
 // references to features the platform does not ship.
 
 export function HomePage() {
+  const isMobileCopy = useMobileCopy();
+
   return (
     <>
       <PublicHero
         eyebrow={HERO_COPY.eyebrow}
         headline={HERO_COPY.headline}
+        mobileHeadline="Run regulated retail clearly."
         subhead={HERO_COPY.subhead}
+        mobileSubhead="Products, inventory, orders, compliance, and audit in one workspace."
         primary={HERO_COPY.primaryCta}
         secondary={HERO_COPY.secondaryCta}
       />
@@ -51,7 +82,9 @@ export function HomePage() {
       <PublicSection
         eyebrow={PROBLEM_SECTION.eyebrow}
         title={PROBLEM_SECTION.title}
+        mobileTitle="What gets messy."
         description={PROBLEM_SECTION.description}
+        mobileDescription="Scattered tools make daily operations harder."
       >
         <ul className="grid gap-4 md:grid-cols-2">
           {PROBLEMS.map((problem) => (
@@ -60,9 +93,11 @@ export function HomePage() {
               className="premium-glass-soft rounded-lg p-5"
             >
               <p className="text-sm font-semibold text-foreground">
-                {problem.title}
+                {isMobileCopy
+                  ? MOBILE_PROBLEM_TITLES[problem.title] ?? problem.title
+                  : problem.title}
               </p>
-              <p className="mt-2 text-sm leading-relaxed text-foreground/62">
+              <p className="mt-2 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                 {problem.body}
               </p>
             </li>
@@ -73,7 +108,9 @@ export function HomePage() {
       <PublicSection
         eyebrow={SOLUTION_SECTION.eyebrow}
         title={SOLUTION_SECTION.title}
+        mobileTitle="One workspace."
         description={SOLUTION_SECTION.description}
+        mobileDescription="Store operations, admin oversight, and audit stay connected."
         tone="muted"
       >
         <ul className="grid gap-4 md:grid-cols-3">
@@ -88,9 +125,11 @@ export function HomePage() {
                   <Icon className="h-4 w-4" aria-hidden="true" />
                 </span>
                 <p className="mt-4 text-sm font-semibold text-foreground">
-                  {pillar.title}
+                  {isMobileCopy
+                    ? MOBILE_SOLUTION_TITLES[pillar.title] ?? pillar.title
+                    : pillar.title}
                 </p>
-                <p className="mt-1 text-sm leading-relaxed text-foreground/62">
+                <p className="mt-1 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                   {pillar.body}
                 </p>
               </li>
@@ -102,7 +141,9 @@ export function HomePage() {
       <PublicSection
         eyebrow={FEATURES_SECTION.eyebrow}
         title={FEATURES_SECTION.title}
+        mobileTitle="What ships today."
         description={FEATURES_SECTION.description}
+        mobileDescription="Product, inventory, order, compliance, admin, and audit screens."
       >
         <PublicFeatureGrid features={FEATURES} />
       </PublicSection>
@@ -110,7 +151,9 @@ export function HomePage() {
       <PublicSection
         eyebrow={HOW_IT_WORKS_SECTION.eyebrow}
         title={HOW_IT_WORKS_SECTION.title}
+        mobileTitle="How onboarding works."
         description={HOW_IT_WORKS_SECTION.description}
+        mobileDescription="Start with a demo. The team handles setup with you."
         tone="muted"
       >
         <ol className="space-y-4">
@@ -124,9 +167,11 @@ export function HomePage() {
               </span>
               <div>
                 <p className="text-sm font-semibold text-foreground">
-                  {step.title}
+                  {isMobileCopy
+                    ? MOBILE_STEP_TITLES[step.title] ?? step.title
+                    : step.title}
                 </p>
-                <p className="mt-1 text-sm leading-relaxed text-foreground/62">
+                <p className="mt-1 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                   {step.body}
                 </p>
               </div>
@@ -147,7 +192,9 @@ export function HomePage() {
       <PublicSection
         eyebrow="Regulated local commerce"
         title={REGULATED_COMMERCE_COPY.title}
+        mobileTitle="Built for regulated retail."
         description={REGULATED_COMMERCE_COPY.body}
+        mobileDescription="Compliance visibility lives beside daily operations."
       >
         <ul className="space-y-3">
           {REGULATED_COMMERCE_COPY.highlights.map((highlight) => (
@@ -164,7 +211,9 @@ export function HomePage() {
       <PublicSection
         eyebrow={OPERATIONS_PREVIEW_SECTION.eyebrow}
         title={OPERATIONS_PREVIEW_SECTION.title}
+        mobileTitle="Operations preview."
         description={OPERATIONS_PREVIEW_SECTION.description}
+        mobileDescription="The core areas NubeRush organizes today."
         tone="muted"
       >
         <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -180,10 +229,12 @@ export function HomePage() {
                     <Icon className="h-4 w-4" aria-hidden="true" />
                   </span>
                   <p className="text-sm font-semibold text-foreground">
-                    {area.title}
+                    {isMobileCopy
+                      ? MOBILE_OPERATION_TITLES[area.title] ?? area.title
+                      : area.title}
                   </p>
                 </div>
-                <p className="mt-3 text-sm leading-relaxed text-foreground/62">
+                <p className="mt-3 hidden text-sm leading-relaxed text-foreground/62 sm:block">
                   {area.body}
                 </p>
               </li>
@@ -194,7 +245,9 @@ export function HomePage() {
 
       <PublicCtaBand
         title={CTA_BAND_COPY.title}
+        mobileTitle="Talk to the team."
         description={CTA_BAND_COPY.description}
+        mobileDescription="Request a demo or send a message."
         primary={CTA_BAND_COPY.primary}
         secondary={CTA_BAND_COPY.secondary}
       />
@@ -202,6 +255,7 @@ export function HomePage() {
       <PublicSection
         eyebrow={FAQ_SECTION.eyebrow}
         title={FAQ_SECTION.title}
+        mobileTitle="Questions."
         description={FAQ_SECTION.description}
       >
         <PublicFaq items={FAQ_ITEMS} />
