@@ -42,7 +42,7 @@ export function PublicHero({
       className="relative w-full overflow-hidden border-b border-foreground/10"
     >
       <div className="absolute inset-x-0 top-0 -z-10 h-full bg-[radial-gradient(circle_at_50%_8%,hsl(var(--primary)/0.22),transparent_34rem)]" />
-      <div className="container relative grid min-h-[calc(100svh-5.75rem)] content-center pb-14 pt-28 text-center md:pb-20 md:pt-24">
+      <div className="container relative grid content-center pb-14 pt-20 text-center md:min-h-[calc(100svh-5.75rem)] md:pb-20 md:pt-24">
         <div className="pointer-events-none absolute left-1/2 top-10 -z-10 hidden w-[min(920px,82vw)] -translate-x-1/2 md:block">
           <div className="premium-glass-soft h-80 rotate-[-2deg] rounded-[2rem] p-4 opacity-70">
             <div className="grid h-full grid-cols-[1fr_1.3fr] gap-4">
@@ -68,37 +68,47 @@ export function PublicHero({
           </div>
         </div>
 
-        <div className="mx-auto max-w-4xl">
-          {eyebrow && (
-            <p className="mx-auto inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
-              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-              {eyebrow}
-            </p>
-          )}
-          <h1 className="mt-5 text-4xl font-semibold leading-tight tracking-tight text-foreground md:text-6xl lg:text-7xl">
-            {displayHeadline}
-          </h1>
-          {displaySubhead && (
-            <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-foreground/68 md:text-lg">
-              {displaySubhead}
-            </p>
-          )}
-          <div className="mt-8 flex flex-wrap justify-center gap-3">
-            <Link
-              to={primary.to}
-              className="premium-action inline-flex h-11 items-center justify-center gap-2 rounded-full px-6 text-sm font-semibold text-primary-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-            >
-              {primary.label}
-              <ArrowRight className="h-4 w-4" aria-hidden="true" />
-            </Link>
-            {secondary && (
-              <Link
-                to={secondary.to}
-                className="inline-flex h-11 items-center justify-center rounded-full border border-foreground/12 bg-foreground/8 px-6 text-sm font-medium text-foreground backdrop-blur-xl transition-colors hover:bg-foreground/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-              >
-                {secondary.label}
-              </Link>
+        {/* Mobile only: wrap the hero copy in the same glass "pill" the other
+            public page headers use. On md+ it renders bare (no card). */}
+        <div
+          className={
+            isMobileCopy
+              ? "premium-ring mx-auto max-w-4xl rounded-[2rem] p-px"
+              : "mx-auto max-w-4xl"
+          }
+        >
+          <div className={isMobileCopy ? "premium-glass rounded-[2rem] px-5 py-8" : ""}>
+            {eyebrow && (
+              <p className="mx-auto inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                {eyebrow}
+              </p>
             )}
+            <h1 className="mt-5 text-4xl font-semibold leading-tight tracking-tight text-foreground md:text-5xl lg:text-6xl">
+              {displayHeadline}
+            </h1>
+            {displaySubhead && (
+              <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-foreground/68 md:text-lg">
+                {displaySubhead}
+              </p>
+            )}
+            <div className="mt-8 flex flex-wrap justify-center gap-3">
+              <Link
+                to={primary.to}
+                className="premium-action inline-flex h-11 items-center justify-center gap-2 rounded-full px-6 text-sm font-semibold text-primary-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                {primary.label}
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </Link>
+              {secondary && (
+                <Link
+                  to={secondary.to}
+                  className="inline-flex h-11 items-center justify-center rounded-full border border-foreground/12 bg-foreground/8 px-6 text-sm font-medium text-foreground backdrop-blur-xl transition-colors hover:bg-foreground/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                >
+                  {secondary.label}
+                </Link>
+              )}
+            </div>
           </div>
         </div>
 
