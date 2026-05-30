@@ -31,7 +31,17 @@ export function resolveApiBaseUrl(
 
   if (trimmed === "") {
     if (isProduction) {
-      throw new Error("VITE_API_BASE_URL is required for production builds.");
+      // F2.23.F1 originally threw here. That crashed the entire app at
+      // module load (blank screen) whenever VITE_API_BASE_URL was unset —
+      // including the public marketing/legal pages that never call the
+      // API. Until FastAPI has a hosted HTTPS origin to point at, warn
+      // loudly but keep the app rendering. Re-tighten to a hard error once
+      // the backend origin exists and is always set in production.
+      console.warn(
+        "VITE_API_BASE_URL is not set in this production build; falling " +
+          "back to the local dev origin. Business API calls will fail " +
+          "until it is configured.",
+      );
     }
     return FALLBACK_BASE_URL;
   }
