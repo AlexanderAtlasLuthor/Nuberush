@@ -35,7 +35,7 @@ export function PublicTrustBand({ points }: PublicTrustBandProps) {
                       ? MOBILE_TRUST_TITLES[point.title] ?? point.title
                       : point.title}
                   </p>
-                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground sm:block">
+                  <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-muted-foreground sm:line-clamp-none">
                     {point.body}
                   </p>
                 </div>

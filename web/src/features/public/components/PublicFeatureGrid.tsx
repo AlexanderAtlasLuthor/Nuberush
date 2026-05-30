@@ -36,7 +36,7 @@ export function PublicFeatureGrid({ features }: PublicFeatureGridProps) {
                 ? MOBILE_FEATURE_TITLES[feature.title] ?? feature.title
                 : feature.title}
             </p>
-            <p className="mt-1 text-sm leading-relaxed text-foreground/62 sm:block">
+            <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-foreground/62 sm:line-clamp-none">
               {feature.body}
             </p>
           </li>

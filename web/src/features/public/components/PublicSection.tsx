@@ -46,7 +46,7 @@ export function PublicSection({
     >
       <div className="container">
         {(eyebrow || displayTitle || displayDescription) && (
-          <div className="max-w-3xl">
+          <div className="mx-auto max-w-3xl text-center md:mx-0 md:text-left">
             {eyebrow && (
               <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                 {eyebrow}

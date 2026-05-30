@@ -100,7 +100,7 @@ export function SupportPage() {
                   ? MOBILE_TOPIC_TITLES[topic.title] ?? topic.title
                   : topic.title}
               </p>
-              <p className="mt-2 text-sm leading-relaxed text-foreground/62 sm:block">
+              <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-foreground/62 sm:line-clamp-none">
                 {topic.body}
               </p>
               <p className="mt-3 text-sm">
@@ -141,7 +141,7 @@ export function SupportPage() {
               info@nuberush.com
             </a>
           </p>
-          <p className="mt-3 text-sm leading-relaxed text-foreground/62 sm:block">
+          <p className="mt-3 line-clamp-2 text-sm leading-relaxed text-foreground/62 sm:line-clamp-none">
             A formal help center and FAQ are planned for a later phase. Until
             then, email is the supported channel.
           </p>
@@ -165,7 +165,7 @@ export function SupportPage() {
                 <p className="text-sm font-semibold text-foreground">
                   {link.label}
                 </p>
-                <p className="mt-2 text-sm leading-relaxed text-foreground/62 sm:block">
+                <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-foreground/62 sm:line-clamp-none">
                   {link.body}
                 </p>
               </Link>

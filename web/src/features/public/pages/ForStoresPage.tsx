@@ -80,7 +80,7 @@ export function ForStoresPage() {
                       : section.title}
                   </p>
                 </div>
-                <p className="mt-3 text-sm leading-relaxed text-foreground/62 sm:block">
+                <p className="mt-3 line-clamp-2 text-sm leading-relaxed text-foreground/62 sm:line-clamp-none">
                   {section.body}
                 </p>
                 <ul className="mt-4 space-y-2 text-sm leading-relaxed text-foreground/78 sm:block">
