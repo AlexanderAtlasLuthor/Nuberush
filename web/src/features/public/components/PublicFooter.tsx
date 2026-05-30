@@ -93,7 +93,7 @@ export function PublicFooter() {
               Contact
             </h2>
             <p className="mt-4 text-sm text-muted-foreground">
-              Operated by Fuenmayor Industries.
+              Operated by NubeRush.
             </p>
             <p className="mt-2 text-sm">
               <a
