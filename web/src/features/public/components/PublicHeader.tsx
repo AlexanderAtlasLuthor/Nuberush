@@ -3,6 +3,7 @@ import { useState } from "react";
 import { ArrowRight, Flame, LogIn, Menu, X } from "lucide-react";
 
 const NAV_LINKS: ReadonlyArray<{ label: string; to: string }> = [
+  { label: "Home", to: "/" },
   { label: "For stores", to: "/for-stores" },
   { label: "How it works", to: "/how-it-works" },
   { label: "Features", to: "/features" },
@@ -17,8 +18,8 @@ export function PublicHeader() {
   const isActive = (to: string) => pathname === to;
   const desktopLinkClass = (to: string) =>
     isActive(to)
-      ? "rounded-full bg-primary/14 px-3 py-2 text-foreground ring-1 ring-primary/25 transition-colors"
-      : "rounded-full px-3 py-2 transition-colors hover:bg-foreground/10 hover:text-foreground";
+      ? "inline-flex items-center gap-2 rounded-full bg-primary/14 px-3 py-2 font-medium text-foreground ring-1 ring-primary/30 transition-colors"
+      : "inline-flex items-center gap-2 rounded-full px-3 py-2 transition-colors hover:bg-foreground/10 hover:text-foreground";
   const mobileLinkClass = (to: string) =>
     isActive(to)
       ? "flex items-center justify-between rounded-lg border border-primary/35 bg-primary/14 px-3 py-2.5 font-medium text-foreground shadow-[inset_0_1px_0_hsl(var(--primary-foreground)/0.12)]"
@@ -50,6 +51,9 @@ export function PublicHeader() {
               className={desktopLinkClass(item.to)}
             >
               {item.label}
+              {isActive(item.to) && (
+                <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_12px_hsl(var(--primary)/0.85)]" />
+              )}
             </Link>
           ))}
         </nav>
@@ -94,7 +98,7 @@ export function PublicHeader() {
         id="public-mobile-navigation"
         aria-label="Public site navigation (mobile)"
         className={`md:hidden container overflow-hidden px-0 transition-all duration-300 ${
-          isMenuOpen ? "max-h-96 pt-2 opacity-100" : "max-h-0 opacity-0"
+          isMenuOpen ? "max-h-[32rem] pt-2 opacity-100" : "max-h-0 opacity-0"
         }`}
       >
         <ul className="public-mobile-menu-panel grid gap-1.5 rounded-2xl p-2 text-sm text-muted-foreground">

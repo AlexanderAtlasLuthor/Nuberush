@@ -106,6 +106,15 @@
       linear-gradient(150deg, transparent 0 62%, hsl(var(--primary) / 0.08) 62% 62.08%, transparent 62.08% 100%);
   }
 
+  .auth-ambient {
+    background:
+      radial-gradient(circle at 18% 8%, hsl(var(--primary) / 0.25), transparent 24rem),
+      radial-gradient(circle at 88% 20%, hsl(191 74% 52% / 0.18), transparent 28rem),
+      radial-gradient(circle at 52% 92%, hsl(var(--primary) / 0.16), transparent 26rem),
+      radial-gradient(circle at 50% 110%, hsl(263 66% 50% / 0.18), transparent 30rem),
+      hsl(var(--background));
+  }
+
   .premium-glass {
     border: 1px solid hsl(var(--foreground) / 0.1);
     background:

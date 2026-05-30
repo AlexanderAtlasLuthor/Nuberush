@@ -91,7 +91,7 @@ const AuthScreen = () => {
   const isBusy = submitting || authLoading;
 
   return (
-    <div className="public-ambient fixed inset-0 z-50 flex flex-col safe-top">
+    <div className="public-ambient auth-ambient z-50 flex min-h-dvh flex-col overflow-x-hidden overflow-y-auto safe-top">
       {/* Back button — navigates to `/` (the public landing page).
           We don't use `navigate(-1)` because /login is often the
           first entry on the history stack (deep link, fresh tab,
@@ -100,13 +100,13 @@ const AuthScreen = () => {
       <button
         type="button"
         onClick={() => navigate('/')}
-        className="absolute left-5 top-8 z-10 flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/10 text-white shadow-lg backdrop-blur-xl transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="absolute left-5 top-6 z-10 flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/10 text-white shadow-lg backdrop-blur-xl transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:top-8"
         aria-label="Back to landing page"
       >
         <ArrowLeft className="h-5 w-5" />
       </button>
 
-      <div className="flex flex-1 items-center justify-center px-5 py-20">
+      <div className="flex flex-1 items-start justify-center px-5 pb-12 pt-32 md:items-center md:py-20">
         <div className="premium-ring w-full max-w-md rounded-[2rem] p-px">
           <div className="premium-glass rounded-[2rem] px-5 py-8 md:px-7">
             {/* Logo */}
