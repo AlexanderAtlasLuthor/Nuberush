@@ -45,6 +45,7 @@ function emptySummary(): AdminDashboardSummary {
       recent: [],
     },
     compliance: { blocked_count: 0 },
+    products: { pending_approvals_count: 0 },
     recent_audit: [],
   };
 }
@@ -122,6 +123,7 @@ describe("getAdminDashboard", () => {
         recent: [],
       },
       compliance: { blocked_count: 2 },
+      products: { pending_approvals_count: 7 },
       recent_audit: [],
     };
     vi.mocked(apiRequest).mockResolvedValueOnce(response as never);

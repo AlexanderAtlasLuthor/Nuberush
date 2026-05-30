@@ -58,6 +58,7 @@ function emptySummary(): AdminDashboardSummary {
       recent: [],
     },
     compliance: { blocked_count: 0 },
+    products: { pending_approvals_count: 0 },
     recent_audit: [],
   };
 }
@@ -95,6 +96,7 @@ describe("useAdminDashboardQuery — happy path", () => {
         recent: [],
       },
       compliance: { blocked_count: 0 },
+      products: { pending_approvals_count: 0 },
       recent_audit: [],
     };
     vi.mocked(adminDashboardApi.getAdminDashboard).mockResolvedValue(

@@ -16,6 +16,7 @@
 // "what the create response carries" and "what the list query needs
 // to refetch."
 
+import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -383,8 +384,8 @@ describe("cross-feature invalidation guard", () => {
     "%s only invalidates keys under usersQueryKeys.all",
     async (_label, useHook, apiFnName) => {
       vi.mocked(
-        usersApi[apiFnName as keyof typeof usersApi] as never,
-      ).mockResolvedValue?.(SAMPLE_USER as never);
+        usersApi[apiFnName as keyof typeof usersApi] as unknown as Mock,
+      ).mockResolvedValue(SAMPLE_USER as never);
       const client = makeQueryClient();
       const invalidateSpy = vi.spyOn(client, "invalidateQueries");
 

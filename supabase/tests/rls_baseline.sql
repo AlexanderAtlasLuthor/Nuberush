@@ -3,9 +3,17 @@
 -- =============================================================================
 --
 -- Validates the F2.22.3.D deny-all baseline, extended in F2.22.4.E to
--- the product_images metadata table:
+-- the product_images metadata table and reconciled in F2.22.8.B with the
+-- two F2.22.5.C realtime SELECT policies:
 --   A. RLS is ENABLED and FORCED on each of the 11 public.* application tables.
---   B. No policies exist on those tables yet (deny-all by absence).
+--   B. Policy posture across the 11 tables:
+--        B.1 the 9 pure deny-all tables carry ZERO policies (deny-all by
+--            absence);
+--        B.2 public.orders and public.inventory_items carry ONLY their
+--            locked F2.22.5.C SELECT-only TO-authenticated realtime policy
+--            (exactly one each, by name);
+--        B.3 no write (INSERT/UPDATE/DELETE/ALL) policy and no anon/public
+--            policy exists on any of the 11 tables.
 --   C. authenticated and anon roles cannot SELECT/INSERT/UPDATE/DELETE.
 --
 -- Execution context (see ../README.md and supabase/tests/README.md):
@@ -57,43 +65,133 @@ END
 $A$;
 
 -- ---------------------------------------------------------------------------
--- Part B — Zero policies on the 11 tables (deny-all by absence of policy).
+-- Part B — Policy posture across the 11 baseline tables.
+--
+-- F2.22.3.D established deny-all by ABSENCE of any policy. F2.22.5.C then
+-- intentionally added exactly two narrow realtime policies — one SELECT-only
+-- TO authenticated policy on each of public.orders and public.inventory_items
+-- (see ../migrations/20260529115507_realtime_orders_inventory.sql). Part B
+-- therefore splits the check rather than asserting a blanket zero:
+--
+--   B.1  Pure deny-all tables (9) must still have ZERO policies.
+--   B.2  Realtime-exposed tables (orders, inventory_items) may carry ONLY
+--        their locked SELECT-only TO-authenticated policy — exactly one each,
+--        by the expected name.
+--   B.3  Across ALL 11 tables: no write policy (INSERT/UPDATE/DELETE/ALL)
+--        and no anon/public policy may exist.
+--
+-- The realtime policies' predicate behavior (cross-tenant isolation) is
+-- covered separately by realtime_orders_inventory.sql.
 -- ---------------------------------------------------------------------------
 
 DO $B$
 DECLARE
-  policy_count integer;
-  hit record;
+  -- The 9 tables that must remain deny-all by absence of any policy.
+  deny_all_tables CONSTANT text[] := ARRAY[
+    'users', 'stores', 'products', 'product_variants',
+    'inventory_logs', 'order_items',
+    'order_audit_logs', 'product_compliance_audit_logs',
+    'product_images'
+  ];
+  -- The 2 realtime-exposed tables and their single allowed policy name,
+  -- index-aligned (F2.22.5.C).
+  realtime_tables   CONSTANT text[] := ARRAY['orders', 'inventory_items'];
+  realtime_policies CONSTANT text[] := ARRAY[
+    'orders_realtime_select_authenticated',
+    'inventory_items_realtime_select_authenticated'
+  ];
+  t               text;
+  expected_policy text;
+  policy_count    integer;
+  pol             record;
+  hit             record;
+  i               integer;
 BEGIN
-  SELECT count(*) INTO policy_count
-    FROM pg_policies
-   WHERE schemaname = 'public'
-     AND tablename IN (
-       'users', 'stores', 'products', 'product_variants',
-       'inventory_items', 'inventory_logs',
-       'orders', 'order_items',
-       'order_audit_logs', 'product_compliance_audit_logs',
-       'product_images'
-     );
-  IF policy_count <> 0 THEN
-    FOR hit IN
-      SELECT schemaname, tablename, policyname, cmd
-        FROM pg_policies
-       WHERE schemaname = 'public'
-         AND tablename IN (
-           'users', 'stores', 'products', 'product_variants',
-           'inventory_items', 'inventory_logs',
-           'orders', 'order_items',
-           'order_audit_logs', 'product_compliance_audit_logs',
-           'product_images'
-         )
-    LOOP
-      RAISE NOTICE 'unexpected policy: %.%.% (%)',
-        hit.schemaname, hit.tablename, hit.policyname, hit.cmd;
-    END LOOP;
-    RAISE EXCEPTION 'TEST FAIL [B]: expected 0 policies on the 11 tables, found %', policy_count;
-  END IF;
-  RAISE NOTICE 'PASS [B]: 0 policies on the 11 required tables (deny-all by absence)';
+  -- ---- B.1: pure deny-all tables must have zero policies ----
+  FOREACH t IN ARRAY deny_all_tables LOOP
+    SELECT count(*) INTO policy_count
+      FROM pg_policies
+     WHERE schemaname = 'public' AND tablename = t;
+    IF policy_count <> 0 THEN
+      FOR hit IN
+        SELECT policyname, cmd, roles
+          FROM pg_policies
+         WHERE schemaname = 'public' AND tablename = t
+      LOOP
+        RAISE NOTICE 'unexpected policy on public.%: % (cmd=%, roles=%)',
+          t, hit.policyname, hit.cmd, hit.roles;
+      END LOOP;
+      RAISE EXCEPTION
+        'TEST FAIL [B.1]: public.% must have 0 policies (deny-all by absence), found %',
+        t, policy_count;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'PASS [B.1]: 0 policies on the 9 pure deny-all tables';
+
+  -- ---- B.2: each realtime table carries exactly its one locked SELECT policy ----
+  FOR i IN 1 .. array_length(realtime_tables, 1) LOOP
+    t := realtime_tables[i];
+    expected_policy := realtime_policies[i];
+
+    SELECT count(*) INTO policy_count
+      FROM pg_policies
+     WHERE schemaname = 'public' AND tablename = t;
+    IF policy_count <> 1 THEN
+      FOR hit IN
+        SELECT policyname, cmd, roles
+          FROM pg_policies
+         WHERE schemaname = 'public' AND tablename = t
+      LOOP
+        RAISE NOTICE 'observed policy on public.%: % (cmd=%, roles=%)',
+          t, hit.policyname, hit.cmd, hit.roles;
+      END LOOP;
+      RAISE EXCEPTION
+        'TEST FAIL [B.2]: public.% must carry exactly 1 policy, found %',
+        t, policy_count;
+    END IF;
+
+    SELECT policyname, cmd, roles INTO pol
+      FROM pg_policies
+     WHERE schemaname = 'public' AND tablename = t
+     LIMIT 1;
+
+    IF pol.policyname <> expected_policy THEN
+      RAISE EXCEPTION
+        'TEST FAIL [B.2]: public.% policy name = "%" (expected "%")',
+        t, pol.policyname, expected_policy;
+    END IF;
+    IF pol.cmd <> 'SELECT' THEN
+      RAISE EXCEPTION
+        'TEST FAIL [B.2]: public.% policy "%" cmd = % (expected SELECT)',
+        t, pol.policyname, pol.cmd;
+    END IF;
+    IF NOT (pol.roles = ARRAY['authenticated']::name[]) THEN
+      RAISE EXCEPTION
+        'TEST FAIL [B.2]: public.% policy "%" roles = % (expected {authenticated})',
+        t, pol.policyname, pol.roles;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'PASS [B.2]: orders + inventory_items each carry only their locked SELECT-only TO-authenticated realtime policy';
+
+  -- ---- B.3: no write policy + no anon/public policy anywhere in the 11 ----
+  FOR hit IN
+    SELECT tablename, policyname, cmd, roles
+      FROM pg_policies
+     WHERE schemaname = 'public'
+       AND tablename = ANY (deny_all_tables || realtime_tables)
+  LOOP
+    IF hit.cmd <> 'SELECT' THEN
+      RAISE EXCEPTION
+        'TEST FAIL [B.3]: public.% policy "%" has cmd % (no INSERT/UPDATE/DELETE/ALL policy permitted)',
+        hit.tablename, hit.policyname, hit.cmd;
+    END IF;
+    IF ('anon' = ANY (hit.roles)) OR ('public' = ANY (hit.roles)) THEN
+      RAISE EXCEPTION
+        'TEST FAIL [B.3]: public.% policy "%" targets % (no anon/public policy permitted)',
+        hit.tablename, hit.policyname, hit.roles;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'PASS [B.3]: no write policies and no anon/public policies across the 11 baseline tables';
 END
 $B$;
 

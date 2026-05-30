@@ -341,6 +341,12 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
     hold_reason: null,
     jurisdiction: "FL",
     last_compliance_check: null,
+    approval_status: "approved",
+    proposed_by_store_id: null,
+    proposed_by_user_id: null,
+    reviewed_by_user_id: null,
+    reviewed_at: null,
+    rejection_reason: null,
     created_at: "2026-05-01T00:00:00Z",
     updated_at: "2026-05-01T00:00:00Z",
     ...overrides,
@@ -715,7 +721,7 @@ describe("DashboardHomePage - Low-stock inventory widget", () => {
       isLoading: false,
       isError: true,
       data: undefined,
-      error: new ApiError(503, "service unavailable", { detail: "boom" }),
+      error: new ApiError({ status: 503, message: "service unavailable", details: { detail: "boom" } }),
       refetch: refetch as never,
     });
 
@@ -928,7 +934,7 @@ describe("DashboardHomePage - Orders to review widget", () => {
       isLoading: false,
       isError: true,
       data: undefined,
-      error: new ApiError(503, "service unavailable", { detail: "boom" }),
+      error: new ApiError({ status: 503, message: "service unavailable", details: { detail: "boom" } }),
       refetch: refetch as never,
     });
 
@@ -1110,7 +1116,7 @@ describe("DashboardHomePage - Product review widget", () => {
       isLoading: false,
       isError: true,
       data: undefined,
-      error: new ApiError(503, "service unavailable", { detail: "boom" }),
+      error: new ApiError({ status: 503, message: "service unavailable", details: { detail: "boom" } }),
       refetch: refetch as never,
     });
 
@@ -1327,7 +1333,7 @@ describe("DashboardHomePage - Recent inventory activity widget", () => {
       isLoading: false,
       isError: true,
       data: undefined,
-      error: new ApiError(503, "service unavailable", { detail: "boom" }),
+      error: new ApiError({ status: 503, message: "service unavailable", details: { detail: "boom" } }),
       refetch: refetch as never,
     });
 
@@ -1560,7 +1566,7 @@ describe("DashboardHomePage - KPI strip", () => {
       isLoading: false,
       isError: true,
       data: undefined,
-      error: new ApiError(503, "service unavailable", { detail: "boom" }),
+      error: new ApiError({ status: 503, message: "service unavailable", details: { detail: "boom" } }),
       refetch: refetch as never,
     });
 
