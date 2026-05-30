@@ -1,6 +1,8 @@
 import { Link, useLocation } from "react-router-dom";
 import { useState } from "react";
-import { ArrowRight, Flame, LogIn, Menu, X } from "lucide-react";
+import { ArrowRight, LogIn, Menu, X } from "lucide-react";
+
+import { BrandMark } from "@/components/common/brand-mark";
 
 const NAV_LINKS: ReadonlyArray<{ label: string; to: string }> = [
   { label: "Home", to: "/" },
@@ -33,9 +35,7 @@ export function PublicHeader() {
           className="flex items-center gap-2 rounded-md font-semibold tracking-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           aria-label="NubeRush home"
         >
-          <span className="premium-action inline-flex h-9 w-9 items-center justify-center rounded-xl text-primary-foreground">
-            <Flame className="h-4 w-4" aria-hidden="true" />
-          </span>
+          <BrandMark className="h-9 w-9" />
           <span className="text-base">NubeRush</span>
         </Link>
 

@@ -4,7 +4,8 @@ import { useAuth } from '@/auth';
 import { getApiErrorMessage } from '@/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ArrowLeft, Phone, Flame, Loader2 } from 'lucide-react';
+import { ArrowLeft, Phone, Loader2 } from 'lucide-react';
+import { BrandMark } from '@/components/common/brand-mark';
 
 // F2.3 / F2.22.2.G: real auth wiring.
 //
@@ -111,9 +112,7 @@ const AuthScreen = () => {
           <div className="premium-glass rounded-[2rem] px-5 py-8 md:px-7">
             {/* Logo */}
             <div className="mb-7 text-center">
-              <div className="premium-action mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl">
-                <Flame className="h-9 w-9 text-white" />
-              </div>
+              <BrandMark className="mx-auto mb-4 h-16 w-16" />
               <h1 className="text-3xl font-semibold tracking-tight text-white">
                 {mode === 'signin' ? 'Welcome Back' : 'Create Account'}
               </h1>

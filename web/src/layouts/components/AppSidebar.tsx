@@ -1,6 +1,7 @@
-import { Flame, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { BrandMark } from "@/components/common/brand-mark";
 import type { WorkspaceConfig, WorkspaceId } from "../AppShell";
 import type { NavItemConfig } from "../navigation";
 import { NavItem } from "./NavItem";
@@ -120,12 +121,7 @@ function SidebarContent({
   return (
     <>
       <div className="flex items-center gap-2.5 px-4 py-4 border-b border-border">
-        <span
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shrink-0"
-          aria-hidden="true"
-        >
-          <Flame className="w-4 h-4" />
-        </span>
+        <BrandMark className="h-8 w-8 shrink-0" />
         <span className="font-semibold text-sm tracking-tight truncate">
           NubeRush
         </span>

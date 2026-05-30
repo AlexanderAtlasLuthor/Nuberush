@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom";
-import { ArrowUpRight, Flame, Mail } from "lucide-react";
+import { ArrowUpRight, Mail } from "lucide-react";
+
+import { BrandMark } from "@/components/common/brand-mark";
 
 const PUBLIC_LINKS: ReadonlyArray<{ label: string; to: string }> = [
   { label: "Home", to: "/" },
@@ -33,9 +35,7 @@ export function PublicFooter() {
               className="flex items-center gap-2 font-semibold tracking-tight"
               aria-label="NubeRush home"
             >
-              <span className="premium-action inline-flex h-9 w-9 items-center justify-center rounded-lg text-primary-foreground">
-                <Flame className="h-4 w-4" aria-hidden="true" />
-              </span>
+              <BrandMark className="h-9 w-9" />
               <span>NubeRush</span>
             </Link>
             <p className="mt-4 text-sm leading-relaxed text-foreground/62">
