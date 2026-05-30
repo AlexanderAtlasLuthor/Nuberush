@@ -71,6 +71,119 @@
   }
 }
 
+@layer components {
+  .public-ambient {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 15% 8%, hsl(var(--primary) / 0.24), transparent 27rem),
+      radial-gradient(circle at 86% 16%, hsl(191 74% 52% / 0.16), transparent 30rem),
+      radial-gradient(circle at 50% 102%, hsl(263 66% 50% / 0.12), transparent 36rem),
+      hsl(var(--background));
+  }
+
+  .public-ambient::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    background-image:
+      linear-gradient(hsl(var(--foreground) / 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--foreground) / 0.035) 1px, transparent 1px);
+    background-size: 72px 72px;
+    mask-image: linear-gradient(to bottom, black 0%, transparent 72%);
+  }
+
+  .public-ambient::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      linear-gradient(120deg, transparent 0 24%, hsl(var(--foreground) / 0.04) 24% 24.08%, transparent 24.08% 100%),
+      linear-gradient(150deg, transparent 0 62%, hsl(var(--primary) / 0.08) 62% 62.08%, transparent 62.08% 100%);
+  }
+
+  .premium-glass {
+    border: 1px solid hsl(var(--foreground) / 0.1);
+    background:
+      linear-gradient(145deg, hsl(var(--foreground) / 0.09), hsl(var(--card) / 0.44)),
+      hsl(var(--card) / 0.32);
+    box-shadow: 0 24px 80px hsl(240 18% 2% / 0.34);
+    backdrop-filter: blur(24px) saturate(1.25);
+    -webkit-backdrop-filter: blur(24px) saturate(1.25);
+  }
+
+  .premium-glass-soft {
+    border: 1px solid hsl(var(--foreground) / 0.08);
+    background:
+      linear-gradient(145deg, hsl(var(--foreground) / 0.07), hsl(var(--card) / 0.34)),
+      hsl(var(--card) / 0.24);
+    box-shadow: 0 16px 54px hsl(240 18% 2% / 0.22);
+    backdrop-filter: blur(18px) saturate(1.16);
+    -webkit-backdrop-filter: blur(18px) saturate(1.16);
+  }
+
+  .premium-action {
+    background:
+      linear-gradient(135deg, hsl(var(--primary)), hsl(28 100% 58%));
+    box-shadow:
+      0 14px 34px hsl(var(--primary) / 0.27),
+      inset 0 1px 0 hsl(var(--primary-foreground) / 0.34);
+  }
+
+  .premium-action:hover {
+    filter: brightness(1.04);
+  }
+
+  .premium-ring {
+    position: relative;
+  }
+
+  .premium-ring::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    z-index: -1;
+    border-radius: inherit;
+    background: linear-gradient(135deg, hsl(var(--primary) / 0.42), hsl(191 74% 52% / 0.22), transparent 62%);
+  }
+
+  .public-header-shell {
+    border: 1px solid hsl(var(--foreground) / 0.1);
+    background:
+      linear-gradient(145deg, hsl(var(--foreground) / 0.1), hsl(var(--card) / 0.72)),
+      hsl(var(--background) / 0.7);
+    box-shadow: 0 18px 54px hsl(240 18% 2% / 0.36);
+    backdrop-filter: blur(22px) saturate(1.22);
+    -webkit-backdrop-filter: blur(22px) saturate(1.22);
+  }
+
+  .public-mobile-menu-panel {
+    border: 1px solid hsl(var(--foreground) / 0.1);
+    background:
+      linear-gradient(145deg, hsl(var(--foreground) / 0.1), hsl(var(--card) / 0.82)),
+      hsl(var(--background) / 0.82);
+    box-shadow: 0 24px 70px hsl(240 18% 2% / 0.42);
+    backdrop-filter: blur(24px) saturate(1.2);
+    -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  }
+
+  @media (min-width: 768px) {
+    .public-header-shell {
+      border: 1px solid hsl(var(--foreground) / 0.1);
+      background:
+        linear-gradient(145deg, hsl(var(--foreground) / 0.1), hsl(var(--card) / 0.64)),
+        hsl(var(--background) / 0.58);
+      box-shadow: 0 24px 80px hsl(240 18% 2% / 0.34);
+      backdrop-filter: blur(24px) saturate(1.25);
+      -webkit-backdrop-filter: blur(24px) saturate(1.25);
+    }
+  }
+}
+
 @keyframes logo-spin {
   0% { transform: rotate(0deg) scale(0.5); opacity: 0; }
   50% { transform: rotate(180deg) scale(1.1); opacity: 1; }

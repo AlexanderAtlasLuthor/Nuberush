@@ -28,13 +28,13 @@ export function HowItWorksPage() {
           <>
             <Link
               to={HOW_IT_WORKS_COPY.primaryCta.to}
-              className="inline-flex items-center justify-center h-10 px-5 rounded-md text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="premium-action inline-flex h-10 items-center justify-center rounded-full px-5 text-sm font-semibold text-primary-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               {HOW_IT_WORKS_COPY.primaryCta.label}
             </Link>
             <Link
               to={HOW_IT_WORKS_COPY.secondaryCta.to}
-              className="inline-flex items-center justify-center h-10 px-5 rounded-md text-sm font-medium border border-border text-foreground hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="inline-flex h-10 items-center justify-center rounded-full border border-foreground/12 bg-foreground/8 px-5 text-sm font-medium text-foreground backdrop-blur-xl transition-colors hover:bg-foreground/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               {HOW_IT_WORKS_COPY.secondaryCta.label}
             </Link>
@@ -47,20 +47,20 @@ export function HowItWorksPage() {
         title={HOW_IT_WORKS_PAGE_SECTION.title}
         description={HOW_IT_WORKS_PAGE_SECTION.description}
       >
-        <ol className="space-y-4">
+        <ol className="grid gap-4 md:grid-cols-2">
           {HOW_IT_WORKS_DETAILED_STEPS.map((step) => (
             <li
               key={step.step}
-              className="rounded-xl border border-border bg-card p-5 flex items-start gap-4"
+              className="premium-glass-soft flex items-start gap-4 rounded-lg p-5"
             >
-              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary text-sm font-semibold">
+              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-sm font-semibold text-primary ring-1 ring-primary/20">
                 {step.step}
               </span>
               <div>
                 <p className="text-sm font-semibold text-foreground">
                   {step.title}
                 </p>
-                <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                <p className="mt-1 text-sm leading-relaxed text-foreground/62">
                   {step.body}
                 </p>
               </div>
@@ -74,11 +74,11 @@ export function HowItWorksPage() {
         title={HOW_IT_WORKS_PRINCIPLES_SECTION.title}
         tone="muted"
       >
-        <ul className="space-y-3">
+        <ul className="grid gap-3 md:grid-cols-2">
           {HOW_IT_WORKS_PRINCIPLES.map((principle) => (
             <li
               key={principle}
-              className="rounded-lg border border-border bg-card/60 px-4 py-3 text-sm text-foreground/90 leading-relaxed"
+              className="premium-glass-soft rounded-lg px-4 py-3 text-sm leading-relaxed text-foreground/82"
             >
               {principle}
             </li>

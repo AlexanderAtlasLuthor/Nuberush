@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
 import { PublicPageHeader } from "../components/PublicPageHeader";
-import { PublicSection } from "../components/PublicSection";
 import { PublicCtaBand } from "../components/PublicCtaBand";
 import {
   FEATURES_PAGE_COPY,
@@ -26,13 +25,13 @@ export function FeaturesPage() {
           <>
             <Link
               to={FEATURES_PAGE_COPY.primaryCta.to}
-              className="inline-flex items-center justify-center h-10 px-5 rounded-md text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="premium-action inline-flex h-10 items-center justify-center rounded-full px-5 text-sm font-semibold text-primary-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               {FEATURES_PAGE_COPY.primaryCta.label}
             </Link>
             <Link
               to={FEATURES_PAGE_COPY.secondaryCta.to}
-              className="inline-flex items-center justify-center h-10 px-5 rounded-md text-sm font-medium border border-border text-foreground hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="inline-flex h-10 items-center justify-center rounded-full border border-foreground/12 bg-foreground/8 px-5 text-sm font-medium text-foreground backdrop-blur-xl transition-colors hover:bg-foreground/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               {FEATURES_PAGE_COPY.secondaryCta.label}
             </Link>
@@ -40,24 +39,24 @@ export function FeaturesPage() {
         }
       />
 
-      <section className="w-full bg-background py-12 md:py-16">
+      <section className="w-full bg-transparent py-12 md:py-16">
         <div className="container space-y-10">
           {FEATURES_PAGE_GROUPS.map((group) => {
             const Icon = group.icon;
             return (
               <article
                 key={group.title}
-                className="rounded-2xl border border-border bg-card/40 p-6 md:p-8"
+                className="premium-glass-soft rounded-lg p-5 md:p-7"
               >
                 <header className="flex items-start gap-4 md:items-center">
-                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
+                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
                     <Icon className="h-5 w-5" aria-hidden="true" />
                   </span>
                   <div>
                     <h2 className="text-xl md:text-2xl font-semibold tracking-tight text-foreground">
                       {group.title}
                     </h2>
-                    <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                    <p className="mt-1 text-sm leading-relaxed text-foreground/62">
                       {group.description}
                     </p>
                   </div>
@@ -67,12 +66,12 @@ export function FeaturesPage() {
                   {group.capabilities.map((cap) => (
                     <li
                       key={cap.title}
-                      className="rounded-xl border border-border bg-card p-5"
+                      className="rounded-lg border border-foreground/10 bg-background/26 p-5 backdrop-blur-xl transition-colors hover:border-primary/30"
                     >
                       <p className="text-sm font-semibold text-foreground">
                         {cap.title}
                       </p>
-                      <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+                      <p className="mt-2 text-sm leading-relaxed text-foreground/62">
                         {cap.body}
                       </p>
                     </li>

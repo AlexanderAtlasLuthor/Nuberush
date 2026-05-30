@@ -25,13 +25,13 @@ export function ForStoresPage() {
           <>
             <Link
               to={FOR_STORES_COPY.primaryCta.to}
-              className="inline-flex items-center justify-center h-10 px-5 rounded-md text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="premium-action inline-flex h-10 items-center justify-center rounded-full px-5 text-sm font-semibold text-primary-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               {FOR_STORES_COPY.primaryCta.label}
             </Link>
             <Link
               to={FOR_STORES_COPY.secondaryCta.to}
-              className="inline-flex items-center justify-center h-10 px-5 rounded-md text-sm font-medium border border-border text-foreground hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="inline-flex h-10 items-center justify-center rounded-full border border-foreground/12 bg-foreground/8 px-5 text-sm font-medium text-foreground backdrop-blur-xl transition-colors hover:bg-foreground/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               {FOR_STORES_COPY.secondaryCta.label}
             </Link>
@@ -50,22 +50,25 @@ export function ForStoresPage() {
             return (
               <li
                 key={section.title}
-                className="rounded-xl border border-border bg-card p-6"
+                className="premium-glass-soft rounded-lg p-5 md:p-6"
               >
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
+                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
                     <Icon className="h-4 w-4" aria-hidden="true" />
                   </span>
                   <p className="text-base font-semibold text-foreground">
                     {section.title}
                   </p>
                 </div>
-                <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
+                <p className="mt-3 text-sm leading-relaxed text-foreground/62">
                   {section.body}
                 </p>
-                <ul className="mt-4 space-y-2 text-sm text-foreground/90 leading-relaxed list-disc pl-5">
+                <ul className="mt-4 space-y-2 text-sm leading-relaxed text-foreground/78">
                   {section.bullets.map((bullet) => (
-                    <li key={bullet}>{bullet}</li>
+                    <li key={bullet} className="flex gap-2">
+                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/80" />
+                      <span>{bullet}</span>
+                    </li>
                   ))}
                 </ul>
               </li>

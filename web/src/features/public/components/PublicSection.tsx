@@ -25,12 +25,15 @@ export function PublicSection({
   tone = "default",
   ariaLabel,
 }: PublicSectionProps) {
-  const toneClass = tone === "muted" ? "bg-card/40" : "bg-background";
+  const toneClass =
+    tone === "muted"
+      ? "bg-foreground/[0.025] backdrop-blur-sm"
+      : "bg-transparent";
 
   return (
     <section
       aria-label={ariaLabel}
-      className={cn("w-full py-16 md:py-20", toneClass, className)}
+      className={cn("w-full py-14 md:py-20", toneClass, className)}
     >
       <div className="container">
         {(eyebrow || title || description) && (
@@ -41,12 +44,12 @@ export function PublicSection({
               </p>
             )}
             {title && (
-              <h2 className="mt-2 text-2xl md:text-3xl font-semibold tracking-tight text-foreground">
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground md:text-4xl">
                 {title}
               </h2>
             )}
             {description && (
-              <p className="mt-3 text-base text-muted-foreground leading-relaxed">
+              <p className="mt-3 text-base leading-relaxed text-foreground/64">
                 {description}
               </p>
             )}

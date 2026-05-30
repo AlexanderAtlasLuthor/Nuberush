@@ -12,15 +12,15 @@ export function PublicFeatureGrid({ features }: PublicFeatureGridProps) {
         return (
           <li
             key={feature.title}
-            className="rounded-xl border border-border bg-card p-5"
+            className="premium-glass-soft rounded-lg p-5 transition-transform duration-300 hover:-translate-y-1 hover:border-primary/30"
           >
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
               <Icon className="h-4 w-4" aria-hidden="true" />
             </span>
             <p className="mt-4 text-sm font-semibold text-foreground">
               {feature.title}
             </p>
-            <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+            <p className="mt-1 text-sm leading-relaxed text-foreground/62">
               {feature.body}
             </p>
           </li>

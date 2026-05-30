@@ -15,7 +15,7 @@ import { PublicPageMeta } from "@/features/public/components/PublicPageMeta";
 
 export function PublicLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
+    <div className="public-ambient min-h-screen flex flex-col text-foreground">
       <PublicPageMeta />
       <a
         href="#main-content"

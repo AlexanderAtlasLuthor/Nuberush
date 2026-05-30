@@ -76,30 +76,30 @@ export function SupportPage() {
         title="Common starting points"
         description="Find the closest match to your situation, then reach out to the team."
       >
-        <ul className="space-y-4">
+        <ul className="grid gap-4 md:grid-cols-3">
           {TOPICS.map((topic) => (
             <li
               key={topic.title}
-              className="rounded-xl border border-border bg-card p-5"
+              className="premium-glass-soft rounded-lg p-5"
             >
               <p className="text-sm font-semibold text-foreground">
                 {topic.title}
               </p>
-              <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+              <p className="mt-2 text-sm leading-relaxed text-foreground/62">
                 {topic.body}
               </p>
               <p className="mt-3 text-sm">
                 {topic.cta.to ? (
                   <Link
                     to={topic.cta.to}
-                    className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
+                    className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
                   >
                     {topic.cta.label} →
                   </Link>
                 ) : topic.cta.mailto ? (
                   <a
                     href={topic.cta.mailto}
-                    className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
+                    className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
                   >
                     {topic.cta.label} →
                   </a>
@@ -115,18 +115,20 @@ export function SupportPage() {
         description="The most reliable way to reach the team. Response time varies by request and is not guaranteed."
         tone="muted"
       >
-        <p className="text-base">
-          <a
-            href="mailto:info@nuberush.com"
-            className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
-          >
-            info@nuberush.com
-          </a>
-        </p>
-        <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
-          A formal help center and FAQ are planned for a later phase. Until
-          then, email is the supported channel.
-        </p>
+        <div className="premium-glass-soft rounded-lg p-5">
+          <p className="text-base">
+            <a
+              href="mailto:info@nuberush.com"
+              className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
+            >
+              info@nuberush.com
+            </a>
+          </p>
+          <p className="mt-3 text-sm leading-relaxed text-foreground/62">
+            A formal help center and FAQ are planned for a later phase. Until
+            then, email is the supported channel.
+          </p>
+        </div>
       </PublicSection>
 
       <PublicSection
@@ -139,12 +141,12 @@ export function SupportPage() {
             <li key={link.to}>
               <Link
                 to={link.to}
-                className="block rounded-xl border border-border bg-card p-5 hover:border-primary/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                className="premium-glass-soft block rounded-lg p-5 transition-transform duration-300 hover:-translate-y-1 hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 <p className="text-sm font-semibold text-foreground">
                   {link.label}
                 </p>
-                <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+                <p className="mt-2 text-sm leading-relaxed text-foreground/62">
                   {link.body}
                 </p>
               </Link>

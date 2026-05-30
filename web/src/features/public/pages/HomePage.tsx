@@ -57,12 +57,12 @@ export function HomePage() {
           {PROBLEMS.map((problem) => (
             <li
               key={problem.title}
-              className="rounded-xl border border-border bg-card p-5"
+              className="premium-glass-soft rounded-lg p-5"
             >
               <p className="text-sm font-semibold text-foreground">
                 {problem.title}
               </p>
-              <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+              <p className="mt-2 text-sm leading-relaxed text-foreground/62">
                 {problem.body}
               </p>
             </li>
@@ -82,15 +82,15 @@ export function HomePage() {
             return (
               <li
                 key={pillar.title}
-                className="rounded-xl border border-border bg-card p-5"
+                className="premium-glass-soft rounded-lg p-5 transition-transform duration-300 hover:-translate-y-1"
               >
-                <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
                   <Icon className="h-4 w-4" aria-hidden="true" />
                 </span>
                 <p className="mt-4 text-sm font-semibold text-foreground">
                   {pillar.title}
                 </p>
-                <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                <p className="mt-1 text-sm leading-relaxed text-foreground/62">
                   {pillar.body}
                 </p>
               </li>
@@ -117,16 +117,16 @@ export function HomePage() {
           {HOW_IT_WORKS_STEPS.map((step) => (
             <li
               key={step.step}
-              className="rounded-xl border border-border bg-card p-5 flex items-start gap-4"
+              className="premium-glass-soft flex items-start gap-4 rounded-lg p-5"
             >
-              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary text-sm font-semibold">
+              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-sm font-semibold text-primary ring-1 ring-primary/20">
                 {step.step}
               </span>
               <div>
                 <p className="text-sm font-semibold text-foreground">
                   {step.title}
                 </p>
-                <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                <p className="mt-1 text-sm leading-relaxed text-foreground/62">
                   {step.body}
                 </p>
               </div>
@@ -153,7 +153,7 @@ export function HomePage() {
           {REGULATED_COMMERCE_COPY.highlights.map((highlight) => (
             <li
               key={highlight}
-              className="rounded-lg border border-border bg-card/60 px-4 py-3 text-sm text-foreground/90 leading-relaxed"
+              className="premium-glass-soft rounded-lg px-4 py-3 text-sm leading-relaxed text-foreground/82"
             >
               {highlight}
             </li>
@@ -173,17 +173,17 @@ export function HomePage() {
             return (
               <li
                 key={area.title}
-                className="rounded-xl border border-border bg-card p-5"
+                className="premium-glass-soft rounded-lg p-5 transition-transform duration-300 hover:-translate-y-1"
               >
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
                     <Icon className="h-4 w-4" aria-hidden="true" />
                   </span>
                   <p className="text-sm font-semibold text-foreground">
                     {area.title}
                   </p>
                 </div>
-                <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
+                <p className="mt-3 text-sm leading-relaxed text-foreground/62">
                   {area.body}
                 </p>
               </li>
