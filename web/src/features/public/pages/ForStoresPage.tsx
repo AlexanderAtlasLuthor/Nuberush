@@ -80,10 +80,10 @@ export function ForStoresPage() {
                       : section.title}
                   </p>
                 </div>
-                <p className="mt-3 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+                <p className="mt-3 text-sm leading-relaxed text-foreground/62 sm:block">
                   {section.body}
                 </p>
-                <ul className="mt-4 hidden space-y-2 text-sm leading-relaxed text-foreground/78 sm:block">
+                <ul className="mt-4 space-y-2 text-sm leading-relaxed text-foreground/78 sm:block">
                   {section.bullets.map((bullet) => (
                     <li key={bullet} className="flex gap-2">
                       <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/80" />

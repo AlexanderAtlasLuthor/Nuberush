@@ -83,7 +83,7 @@ export function FeaturesPage() {
                         ? MOBILE_GROUP_TITLES[group.title] ?? group.title
                         : group.title}
                     </h2>
-                    <p className="mt-1 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+                    <p className="mt-1 text-sm leading-relaxed text-foreground/62 sm:block">
                       {group.description}
                     </p>
                   </div>
@@ -100,7 +100,7 @@ export function FeaturesPage() {
                           ? MOBILE_CAPABILITY_TITLES[cap.title] ?? cap.title
                           : cap.title}
                       </p>
-                      <p className="mt-2 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+                      <p className="mt-2 text-sm leading-relaxed text-foreground/62 sm:block">
                         {cap.body}
                       </p>
                     </li>

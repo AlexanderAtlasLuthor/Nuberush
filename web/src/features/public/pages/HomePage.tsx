@@ -97,7 +97,7 @@ export function HomePage() {
                   ? MOBILE_PROBLEM_TITLES[problem.title] ?? problem.title
                   : problem.title}
               </p>
-              <p className="mt-2 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+              <p className="mt-2 text-sm leading-relaxed text-foreground/62 sm:block">
                 {problem.body}
               </p>
             </li>
@@ -129,7 +129,7 @@ export function HomePage() {
                     ? MOBILE_SOLUTION_TITLES[pillar.title] ?? pillar.title
                     : pillar.title}
                 </p>
-                <p className="mt-1 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+                <p className="mt-1 text-sm leading-relaxed text-foreground/62 sm:block">
                   {pillar.body}
                 </p>
               </li>
@@ -171,7 +171,7 @@ export function HomePage() {
                     ? MOBILE_STEP_TITLES[step.title] ?? step.title
                     : step.title}
                 </p>
-                <p className="mt-1 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+                <p className="mt-1 text-sm leading-relaxed text-foreground/62 sm:block">
                   {step.body}
                 </p>
               </div>
@@ -234,7 +234,7 @@ export function HomePage() {
                       : area.title}
                   </p>
                 </div>
-                <p className="mt-3 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+                <p className="mt-3 text-sm leading-relaxed text-foreground/62 sm:block">
                   {area.body}
                 </p>
               </li>

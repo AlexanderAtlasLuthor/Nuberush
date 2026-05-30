@@ -74,7 +74,7 @@ export function ContactPage() {
                     section.title
                   : section.title}
               </p>
-              <p className="mt-2 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+              <p className="mt-2 text-sm leading-relaxed text-foreground/62 sm:block">
                 {section.body}
               </p>
               {section.title === "Merchant demo inquiries" && (
@@ -127,7 +127,7 @@ export function ContactPage() {
               {BUSINESS_EMAIL}
             </a>
           </p>
-          <p className="mt-4 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+          <p className="mt-4 text-sm leading-relaxed text-foreground/62 sm:block">
             The team responds from this address. Response time varies by
             request.
           </p>

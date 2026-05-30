@@ -80,7 +80,7 @@ export function HowItWorksPage() {
                     ? MOBILE_DETAILED_STEP_TITLES[step.title] ?? step.title
                     : step.title}
                 </p>
-                <p className="mt-1 hidden text-sm leading-relaxed text-foreground/62 sm:block">
+                <p className="mt-1 text-sm leading-relaxed text-foreground/62 sm:block">
                   {step.body}
                 </p>
               </div>

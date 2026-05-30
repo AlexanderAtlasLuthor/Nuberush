@@ -42,7 +42,7 @@ export function PublicHero({
       className="relative w-full overflow-hidden border-b border-foreground/10"
     >
       <div className="absolute inset-x-0 top-0 -z-10 h-full bg-[radial-gradient(circle_at_50%_8%,hsl(var(--primary)/0.22),transparent_34rem)]" />
-      <div className="container relative grid content-center pb-14 pt-20 text-center md:min-h-[calc(100svh-5.75rem)] md:pb-20 md:pt-24">
+      <div className="container relative grid content-center pb-14 pt-28 text-center md:min-h-[calc(100svh-5.75rem)] md:pb-20 md:pt-24">
         <div className="pointer-events-none absolute left-1/2 top-10 -z-10 hidden w-[min(920px,82vw)] -translate-x-1/2 md:block">
           <div className="premium-glass-soft h-80 rotate-[-2deg] rounded-[2rem] p-4 opacity-70">
             <div className="grid h-full grid-cols-[1fr_1.3fr] gap-4">
