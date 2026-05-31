@@ -47,7 +47,10 @@ from app.schemas.store_applications import StoreApplicationListItem
 from app.schemas.store_applications import StoreApplicationListResponse
 from app.schemas.store_applications import StoreApplicationRejectRequest
 from app.schemas.store_applications import StoreApplicationSubmitRequest
+from app.services import email_templates
 from app.services import supabase_admin
+from app.services.email_sender import EmailSenderError
+from app.services.email_sender import send_business_email
 from app.services.supabase_admin import SupabaseAdminError
 
 
@@ -75,17 +78,30 @@ def _duplicate_conflict() -> HTTPException:
 
 
 def _notify_application_submitted(application: StoreApplication) -> None:
-    """Seam for the future mock email trigger (`store_application_submitted`).
+    """Send the `store_application_submitted` mock business email (F2.24.C8).
 
-    Intentionally a no-op in C2. The branded transactional-email layer is
-    deferred to C8 (mock sender; no provider, no API key, no env var, no
-    external dependency). Keeping the call site here means C8 only has to
-    fill in the body — the intake flow already invokes it at the right
-    moment, and a test can monkeypatch this function to assert the trigger
-    fired without any email infrastructure existing yet.
+    Called only AFTER the intake transaction has committed and the row has
+    been refreshed. Builds the branded plain-text message and hands it to
+    the mock/log sender. A sender failure is logged and SWALLOWED — a
+    committed application must still return its 201, so this seam never
+    re-raises.
     """
-    # TODO(F2.24.C8): emit the `store_application_submitted` mock email.
-    return None
+    try:
+        send_business_email(email_templates.build_submitted_email(application))
+    except EmailSenderError:
+        logger.exception(
+            "Mock sender failed for store_application_submitted email "
+            "(application %s); the application was committed and is "
+            "unaffected.",
+            application.id,
+        )
+    except Exception:  # noqa: BLE001 — any failure must not undo the commit
+        logger.exception(
+            "Unexpected failure sending store_application_submitted email "
+            "(application %s); the application was committed and is "
+            "unaffected.",
+            application.id,
+        )
 
 
 def create_store_application(
@@ -179,13 +195,28 @@ def _assert_admin(actor: User) -> None:
 
 
 def _notify_application_rejected(application: StoreApplication) -> None:
-    """Seam for the future mock rejection email (`store_application_rejected`).
+    """Send the `store_application_rejected` mock business email (F2.24.C8).
 
-    No-op in C3 — same deferral as the submission seam. C8 fills in the
-    mock sender; no provider, no API key, no env var, no external call.
+    Called only AFTER the rejection has committed and the row refreshed.
+    Failures are logged and swallowed so a committed rejection still returns
+    its 200; this seam never re-raises.
     """
-    # TODO(F2.24.C8): emit the `store_application_rejected` mock email.
-    return None
+    try:
+        send_business_email(email_templates.build_rejected_email(application))
+    except EmailSenderError:
+        logger.exception(
+            "Mock sender failed for store_application_rejected email "
+            "(application %s); the rejection was committed and is "
+            "unaffected.",
+            application.id,
+        )
+    except Exception:  # noqa: BLE001 — any failure must not undo the commit
+        logger.exception(
+            "Unexpected failure sending store_application_rejected email "
+            "(application %s); the rejection was committed and is "
+            "unaffected.",
+            application.id,
+        )
 
 
 def list_store_applications(
@@ -305,14 +336,29 @@ def reject_store_application(
 
 
 def _notify_application_approved(application: StoreApplication) -> None:
-    """Seam for the future mock approval email (`store_application_approved`).
+    """Send the `store_application_approved` mock business email (F2.24.C8).
 
-    No-op in C4 — same deferral as the submission/rejection seams. C8 fills
-    in the mock sender; no provider, no API key, no env var, no external
-    call.
+    Called only AFTER the approval transaction has committed (store + owner
+    provisioned) and the row refreshed. Failures are logged and swallowed so
+    a committed approval still returns its 200; this seam never re-raises and
+    never touches the provisioning/auth-cleanup paths above it.
     """
-    # TODO(F2.24.C8): emit the `store_application_approved` mock email.
-    return None
+    try:
+        send_business_email(email_templates.build_approved_email(application))
+    except EmailSenderError:
+        logger.exception(
+            "Mock sender failed for store_application_approved email "
+            "(application %s); the approval was committed and is "
+            "unaffected.",
+            application.id,
+        )
+    except Exception:  # noqa: BLE001 — any failure must not undo the commit
+        logger.exception(
+            "Unexpected failure sending store_application_approved email "
+            "(application %s); the approval was committed and is "
+            "unaffected.",
+            application.id,
+        )
 
 
 def _rollback_auth_user(auth_user_id: UUID) -> None:
