@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import { useState } from "react";
-import { ArrowRight, LogIn, Menu, X } from "lucide-react";
+import { ArrowRight, LogIn, Menu, Store, X } from "lucide-react";
 
 import { BrandMark } from "@/components/common/brand-mark";
 
@@ -70,6 +70,16 @@ export function PublicHeader() {
             Sign in
           </Link>
           <Link
+            to="/apply"
+            aria-current={isActive("/apply") ? "page" : undefined}
+            className={`hidden h-10 items-center justify-center gap-2 rounded-full border border-foreground/15 px-4 text-sm font-medium text-foreground transition-colors hover:bg-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:inline-flex ${
+              isActive("/apply") ? "bg-primary/14 ring-1 ring-primary/25" : ""
+            }`}
+          >
+            <Store className="h-4 w-4" aria-hidden="true" />
+            Apply to sell
+          </Link>
+          <Link
             to="/request-demo"
             aria-current={isActive("/request-demo") ? "page" : undefined}
             className="premium-action hidden h-10 items-center justify-center gap-2 rounded-full px-4 text-sm font-semibold text-primary-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:inline-flex"
@@ -130,6 +140,21 @@ export function PublicHeader() {
             >
               <LogIn className="h-4 w-4" aria-hidden="true" />
               Sign in
+            </Link>
+          </li>
+          <li>
+            <Link
+              to="/apply"
+              onClick={() => setIsMenuOpen(false)}
+              aria-current={isActive("/apply") ? "page" : undefined}
+              className={`flex items-center gap-2 rounded-lg border border-foreground/15 px-3 py-2.5 text-foreground transition-colors hover:bg-foreground/10 ${
+                isActive("/apply")
+                  ? "border-primary/35 bg-primary/14 font-medium ring-1 ring-primary/20"
+                  : ""
+              }`}
+            >
+              <Store className="h-4 w-4" aria-hidden="true" />
+              Apply to sell
             </Link>
           </li>
           <li className="sm:hidden">

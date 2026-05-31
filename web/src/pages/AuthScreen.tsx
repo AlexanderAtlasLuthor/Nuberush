@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth';
 import { getApiErrorMessage } from '@/api';
 import { Button } from '@/components/ui/button';
@@ -20,8 +20,11 @@ import { BrandMark } from '@/components/common/brand-mark';
 //     invalid Supabase credentials and a failed /auth/me both land here.
 //   - Social/phone buttons are visually preserved but inert: no
 //     OAuth/phone flow is wired.
-//   - Sign-up mode is disabled — public registration is off by design;
-//     admins create users via POST /auth/users.
+//   - There is NO self-serve sign-up. Store owners apply via the public
+//     /apply onboarding wizard (F2.24); the NubeRush team reviews the
+//     application and the backend provisions the store + owner account.
+//     The "apply" link at the bottom routes there. Admins still create
+//     internal users via POST /auth/users.
 //
 // Visual-only changes should not alter the auth flow above.
 
@@ -30,7 +33,6 @@ const AuthScreen = () => {
   const location = useLocation();
   const { login, isLoading: authLoading } = useAuth();
 
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -44,12 +46,6 @@ const AuthScreen = () => {
   const fromPath = fromState?.from?.pathname;
 
   const handleSubmit = async () => {
-    if (mode === 'signup') {
-      setErrorMsg(
-        'Public registration is disabled. Please contact your administrator.',
-      );
-      return;
-    }
     if (!email || !password) {
       setErrorMsg('Email and password are required.');
       return;
@@ -114,12 +110,10 @@ const AuthScreen = () => {
             <div className="mb-7 text-center">
               <BrandMark className="mx-auto mb-4 h-16 w-16" />
               <h1 className="text-3xl font-semibold tracking-tight text-white">
-                {mode === 'signin' ? 'Welcome Back' : 'Create Account'}
+                Welcome Back
               </h1>
               <p className="mt-2 text-sm text-white/56">
-                {mode === 'signin'
-                  ? 'Sign in to continue'
-                  : 'Join NubeRush today'}
+                Sign in to continue
               </p>
             </div>
 
@@ -198,24 +192,20 @@ const AuthScreen = () => {
                   <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                   Signing in…
                 </span>
-              ) : mode === 'signin' ? 'Sign In' : 'Sign Up'}
+              ) : 'Sign In'}
             </Button>
 
-            {/* Toggle mode */}
+            {/* Onboarding: store owners don't self-register — they apply,
+                get reviewed, and the team provisions the account. Route
+                the "sign up" affordance to the public /apply wizard. */}
             <p className="mt-6 text-center text-sm text-white/56">
-              {mode === 'signin'
-                ? "Don't have an account? "
-                : 'Already have an account? '}
-              <button
-                type="button"
-                onClick={() => {
-                  setMode(mode === 'signin' ? 'signup' : 'signin');
-                  setErrorMsg(null);
-                }}
+              Want to sell on NubeRush?{' '}
+              <Link
+                to="/apply"
                 className="font-semibold text-primary transition-colors hover:text-primary/85"
               >
-                {mode === 'signin' ? 'Sign Up' : 'Sign In'}
-              </button>
+                Apply to open a store
+              </Link>
             </p>
           </div>
         </div>

@@ -6,6 +6,7 @@ import { BrandMark } from "@/components/common/brand-mark";
 const PUBLIC_LINKS: ReadonlyArray<{ label: string; to: string }> = [
   { label: "Home", to: "/" },
   { label: "For stores", to: "/for-stores" },
+  { label: "Apply to sell", to: "/apply" },
   { label: "How it works", to: "/how-it-works" },
   { label: "Features", to: "/features" },
   { label: "Contact", to: "/contact" },
