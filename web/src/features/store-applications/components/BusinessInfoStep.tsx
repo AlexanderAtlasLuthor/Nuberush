@@ -4,7 +4,6 @@
 import { WizardField } from "./WizardField";
 import { WizardSelect } from "./WizardSelect";
 import {
-  BUSINESS_TYPE_OPTIONS,
   COUNTRY_OPTIONS,
   LOCATION_COUNT_OPTIONS,
   US_STATE_OPTIONS,
@@ -50,17 +49,6 @@ export function BusinessInfoStep({
           required
           maxLength={200}
           autoComplete="organization"
-          disabled={disabled}
-        />
-        <WizardSelect
-          id="business_type"
-          label="Business type"
-          value={values.business_type}
-          onChange={(v) => onChange("business_type", v)}
-          options={BUSINESS_TYPE_OPTIONS}
-          error={errors.business_type}
-          required
-          placeholder="Select a business type"
           disabled={disabled}
         />
         <WizardField

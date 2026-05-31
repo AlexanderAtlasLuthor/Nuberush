@@ -4,18 +4,6 @@
 
 import type { WizardSelectOption } from "./WizardSelect";
 
-export const BUSINESS_TYPE_OPTIONS: ReadonlyArray<WizardSelectOption> = [
-  { value: "Convenience store", label: "Convenience store" },
-  { value: "Grocery store", label: "Grocery store" },
-  { value: "Liquor store", label: "Liquor store" },
-  { value: "Smoke & vape shop", label: "Smoke & vape shop" },
-  { value: "Dispensary", label: "Dispensary" },
-  { value: "Pharmacy", label: "Pharmacy" },
-  { value: "Specialty retail", label: "Specialty retail" },
-  { value: "Restaurant", label: "Restaurant" },
-  { value: "Other", label: "Other" },
-];
-
 // 1–10 individually, then a few larger steps. Plain integer string values.
 export const LOCATION_COUNT_OPTIONS: ReadonlyArray<WizardSelectOption> = [
   ...Array.from({ length: 10 }, (_, i) => {

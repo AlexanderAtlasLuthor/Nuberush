@@ -59,7 +59,6 @@ export function ReviewStep({
       <div className="rounded-xl border border-border bg-card p-5">
         <dl className="space-y-3">
           <SummaryRow label="Business" value={values.business_name} />
-          <SummaryRow label="Type" value={values.business_type} />
           <SummaryRow label="Business phone" value={values.business_phone} />
           <SummaryRow label="Address" value={address} />
           <SummaryRow label="Locations" value={values.location_count} />

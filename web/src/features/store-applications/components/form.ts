@@ -5,6 +5,15 @@
 
 import type { StoreApplicationSubmitRequest } from "../types";
 
+// The backend requires `business_type`, but the public surface does not
+// ask for it: NubeRush only onboards a single class of merchant, so the
+// answer is always the same. We send a neutral value rather than a
+// vape/smoke label to keep the application payload aligned with the
+// public compliance posture (the marketing site never frames the
+// business around vape/delivery). This is intentionally NOT a form
+// field — it is a fixed, non-user-editable value.
+export const NEUTRAL_BUSINESS_TYPE = "Retail";
+
 export interface ApplicationFormValues {
   business_name: string;
   business_type: string;
@@ -40,7 +49,7 @@ export type FieldChange = (key: StringFieldKey, value: string) => void;
 
 export const INITIAL_VALUES: ApplicationFormValues = {
   business_name: "",
-  business_type: "",
+  business_type: NEUTRAL_BUSINESS_TYPE,
   business_phone: "",
   address_line_1: "",
   address_line_2: "",
@@ -88,7 +97,7 @@ export function validateStep(
 
   if (step === 1) {
     requireNonBlank(errors, values, "business_name", "Business name");
-    requireNonBlank(errors, values, "business_type", "Business type");
+    // business_type is not asked for — it's a fixed neutral value.
     requireNonBlank(errors, values, "business_phone", "Business phone");
     requireNonBlank(errors, values, "address_line_1", "Street address");
     requireNonBlank(errors, values, "city", "City");
@@ -162,7 +171,8 @@ export function toSubmitPayload(
 ): StoreApplicationSubmitRequest {
   const payload: StoreApplicationSubmitRequest = {
     business_name: values.business_name.trim(),
-    business_type: values.business_type.trim(),
+    // Fixed neutral value; not a user-facing field (see above).
+    business_type: NEUTRAL_BUSINESS_TYPE,
     owner_full_name: values.owner_full_name.trim(),
     owner_email: values.owner_email.trim(),
     owner_phone: values.owner_phone.trim(),
