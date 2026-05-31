@@ -964,7 +964,13 @@ class TestChangeUserRole:
     ):
         admin = make_user(role=UserRole.admin)
         store = make_store(code="role-toa")
-        target = make_user(role=UserRole.owner, store_id=store.id)
+        # F2.24.C5: a user may only be promoted to admin with an official
+        # @nuberush.com address.
+        target = make_user(
+            role=UserRole.owner,
+            store_id=store.id,
+            email="promote@nuberush.com",
+        )
 
         result = svc.change_user_role(
             db_session,

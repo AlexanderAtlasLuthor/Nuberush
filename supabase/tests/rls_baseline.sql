@@ -3,11 +3,12 @@
 -- =============================================================================
 --
 -- Validates the F2.22.3.D deny-all baseline, extended in F2.22.4.E to
--- the product_images metadata table and reconciled in F2.22.8.B with the
--- two F2.22.5.C realtime SELECT policies:
---   A. RLS is ENABLED and FORCED on each of the 11 public.* application tables.
---   B. Policy posture across the 11 tables:
---        B.1 the 9 pure deny-all tables carry ZERO policies (deny-all by
+-- the product_images metadata table, in F2.24.C1 to the two
+-- store-application tables, and reconciled in F2.22.8.B with the two
+-- F2.22.5.C realtime SELECT policies:
+--   A. RLS is ENABLED and FORCED on each of the 13 public.* application tables.
+--   B. Policy posture across the 13 tables:
+--        B.1 the 11 pure deny-all tables carry ZERO policies (deny-all by
 --            absence);
 --        B.2 public.orders and public.inventory_items carry ONLY their
 --            locked F2.22.5.C SELECT-only TO-authenticated realtime policy
@@ -38,7 +39,10 @@ DECLARE
     'order_audit_logs', 'product_compliance_audit_logs',
     -- F2.22.4.E: product image metadata is a public.* table and must
     -- carry the same deny-all baseline as every other business table.
-    'product_images'
+    'product_images',
+    -- F2.24.C1: merchant store-application tables share the deny-all
+    -- baseline; application data flows only through FastAPI.
+    'store_applications', 'store_application_audit_logs'
   ];
   t text;
   r record;
@@ -60,12 +64,12 @@ BEGIN
       RAISE EXCEPTION 'TEST FAIL [A]: public.% missing relforcerowsecurity=true (FORCE not applied?)', t;
     END IF;
   END LOOP;
-  RAISE NOTICE 'PASS [A]: RLS ENABLED+FORCED on all 11 required tables';
+  RAISE NOTICE 'PASS [A]: RLS ENABLED+FORCED on all 13 required tables';
 END
 $A$;
 
 -- ---------------------------------------------------------------------------
--- Part B — Policy posture across the 11 baseline tables.
+-- Part B — Policy posture across the 13 baseline tables.
 --
 -- F2.22.3.D established deny-all by ABSENCE of any policy. F2.22.5.C then
 -- intentionally added exactly two narrow realtime policies — one SELECT-only
@@ -73,11 +77,11 @@ $A$;
 -- (see ../migrations/20260529115507_realtime_orders_inventory.sql). Part B
 -- therefore splits the check rather than asserting a blanket zero:
 --
---   B.1  Pure deny-all tables (9) must still have ZERO policies.
+--   B.1  Pure deny-all tables (11) must still have ZERO policies.
 --   B.2  Realtime-exposed tables (orders, inventory_items) may carry ONLY
 --        their locked SELECT-only TO-authenticated policy — exactly one each,
 --        by the expected name.
---   B.3  Across ALL 11 tables: no write policy (INSERT/UPDATE/DELETE/ALL)
+--   B.3  Across ALL 13 tables: no write policy (INSERT/UPDATE/DELETE/ALL)
 --        and no anon/public policy may exist.
 --
 -- The realtime policies' predicate behavior (cross-tenant isolation) is
@@ -91,7 +95,9 @@ DECLARE
     'users', 'stores', 'products', 'product_variants',
     'inventory_logs', 'order_items',
     'order_audit_logs', 'product_compliance_audit_logs',
-    'product_images'
+    'product_images',
+    -- F2.24.C1: merchant store-application tables (deny-all by absence).
+    'store_applications', 'store_application_audit_logs'
   ];
   -- The 2 realtime-exposed tables and their single allowed policy name,
   -- index-aligned (F2.22.5.C).
@@ -126,7 +132,7 @@ BEGIN
         t, policy_count;
     END IF;
   END LOOP;
-  RAISE NOTICE 'PASS [B.1]: 0 policies on the 9 pure deny-all tables';
+  RAISE NOTICE 'PASS [B.1]: 0 policies on the 11 pure deny-all tables';
 
   -- ---- B.2: each realtime table carries exactly its one locked SELECT policy ----
   FOR i IN 1 .. array_length(realtime_tables, 1) LOOP
@@ -191,7 +197,7 @@ BEGIN
         hit.tablename, hit.policyname, hit.roles;
     END IF;
   END LOOP;
-  RAISE NOTICE 'PASS [B.3]: no write policies and no anon/public policies across the 11 baseline tables';
+  RAISE NOTICE 'PASS [B.3]: no write policies and no anon/public policies across the 13 baseline tables';
 END
 $B$;
 
@@ -244,7 +250,10 @@ DECLARE
     'order_audit_logs', 'product_compliance_audit_logs',
     -- F2.22.4.E: product image metadata is a public.* table and must
     -- carry the same deny-all baseline as every other business table.
-    'product_images'
+    'product_images',
+    -- F2.24.C1: merchant store-application tables share the deny-all
+    -- baseline; application data flows only through FastAPI.
+    'store_applications', 'store_application_audit_logs'
   ];
   t text;
   visible_count integer;
@@ -256,7 +265,7 @@ BEGIN
         visible_count, t;
     END IF;
   END LOOP;
-  RAISE NOTICE 'PASS [C.1/authenticated/SELECT]: 0 rows visible on all 11 tables despite seeded row';
+  RAISE NOTICE 'PASS [C.1/authenticated/SELECT]: 0 rows visible on all 13 tables despite seeded row';
 END
 $C_auth_sel$;
 
@@ -315,7 +324,10 @@ DECLARE
     'order_audit_logs', 'product_compliance_audit_logs',
     -- F2.22.4.E: product image metadata is a public.* table and must
     -- carry the same deny-all baseline as every other business table.
-    'product_images'
+    'product_images',
+    -- F2.24.C1: merchant store-application tables share the deny-all
+    -- baseline; application data flows only through FastAPI.
+    'store_applications', 'store_application_audit_logs'
   ];
   t text;
   visible_count integer;
@@ -327,7 +339,7 @@ BEGIN
         visible_count, t;
     END IF;
   END LOOP;
-  RAISE NOTICE 'PASS [C.4/anon/SELECT]: 0 rows visible on all 11 tables';
+  RAISE NOTICE 'PASS [C.4/anon/SELECT]: 0 rows visible on all 13 tables';
 END
 $C_anon_sel$;
 

@@ -7,12 +7,16 @@ from app.api.routes.admin_earnings import router as admin_earnings_router
 from app.api.routes.admin_operations import router as admin_operations_router
 from app.api.routes.admin_products import router as admin_products_router
 from app.api.routes.admin_settings import router as admin_settings_router
+from app.api.routes.admin_store_applications import (
+    router as admin_store_applications_router,
+)
 from app.api.routes.audit import router as audit_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.inventory import router as inventory_router
 from app.api.routes.orders import router as orders_router
 from app.api.routes.products import router as products_router
 from app.api.routes.products import variants_router
+from app.api.routes.public import router as public_router
 from app.api.routes.store_dashboard import router as store_dashboard_router
 from app.api.routes.store_earnings import router as store_earnings_router
 from app.api.routes.stores import router as stores_router
@@ -36,6 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(public_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(products_router)
@@ -52,6 +57,7 @@ app.include_router(admin_operations_router)
 app.include_router(admin_products_router)
 app.include_router(admin_compliance_router)
 app.include_router(admin_settings_router)
+app.include_router(admin_store_applications_router)
 
 
 @app.get("/health", tags=["system"])

@@ -11,9 +11,11 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.api.deps import require_manager_or_above
 from app.core.permissions import can_caller_create_role
+from app.core.permissions import ensure_admin_email_allowed
 from app.core.permissions import resolve_target_store_id
 from app.db.models import Store
 from app.db.models import User
+from app.db.models import UserRole
 from app.db.session import get_db
 from app.schemas.auth import CreateUserRequest
 from app.schemas.auth import UserRead
@@ -103,6 +105,13 @@ def create_user(
             )
 
     normalized_email = str(payload.email).lower()
+    # F2.24.C5: an admin may only be created with an official @nuberush.com
+    # address. Admin creation is ALSO blocked by USER_CREATION_MATRIX above
+    # (can_caller_create_role denies it for every caller today), so this is
+    # the defense-in-depth layer — gated behind the same role, it activates
+    # automatically and stays correct if that matrix is ever widened.
+    if payload.role == UserRole.admin:
+        ensure_admin_email_allowed(normalized_email)
     if db.scalar(select(User).where(User.email == normalized_email)):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

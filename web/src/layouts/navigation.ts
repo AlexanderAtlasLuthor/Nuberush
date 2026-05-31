@@ -7,6 +7,7 @@
 import {
   Boxes,
   Building2,
+  ClipboardCheck,
   ClipboardList,
   DollarSign,
   FileWarning,
@@ -103,6 +104,12 @@ export const ADMIN_NAV_ITEMS: ReadonlyArray<NavItemConfig> = [
     href: "/app/admin/stores",
     icon: Building2,
     description: "Store lifecycle",
+  },
+  {
+    label: "Applications",
+    href: "/app/admin/applications",
+    icon: ClipboardCheck,
+    description: "Merchant application review",
   },
   {
     label: "Users",

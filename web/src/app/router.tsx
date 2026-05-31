@@ -25,6 +25,8 @@ import AdminAuditPage from "@/features/audit/pages/AdminAuditPage";
 import StoreSettingsPage from "@/features/store/pages/StoreSettingsPage";
 import AdminStoresPage from "@/features/stores/pages/AdminStoresPage";
 import AdminStoreDetailPage from "@/features/stores/pages/AdminStoreDetailPage";
+import AdminStoreApplicationsPage from "@/features/admin-store-applications/pages/AdminStoreApplicationsPage";
+import AdminStoreApplicationDetailPage from "@/features/admin-store-applications/pages/AdminStoreApplicationDetailPage";
 import HomePage from "@/features/public/pages/HomePage";
 import ForStoresPage from "@/features/public/pages/ForStoresPage";
 import HowItWorksPage from "@/features/public/pages/HowItWorksPage";
@@ -32,6 +34,7 @@ import FeaturesPage from "@/features/public/pages/FeaturesPage";
 import ContactPage from "@/features/public/pages/ContactPage";
 import RequestDemoPage from "@/features/public/pages/RequestDemoPage";
 import SupportPage from "@/features/public/pages/SupportPage";
+import ApplyPage from "@/features/store-applications/pages/ApplyPage";
 import LegalHubPage from "@/features/public/legal/LegalHubPage";
 import TermsPage from "@/features/public/legal/TermsPage";
 import PrivacyPage from "@/features/public/legal/PrivacyPage";
@@ -62,6 +65,8 @@ export const appRoutes: RouteObject[] = [
       { path: "/features", element: <FeaturesPage /> },
       { path: "/contact", element: <ContactPage /> },
       { path: "/request-demo", element: <RequestDemoPage /> },
+      // F2.24.C6: public merchant onboarding wizard. Public, no auth gate.
+      { path: "/apply", element: <ApplyPage /> },
       { path: "/support", element: <SupportPage /> },
       { path: "/legal", element: <LegalHubPage /> },
       { path: "/legal/terms", element: <TermsPage /> },
@@ -109,6 +114,18 @@ export const appRoutes: RouteObject[] = [
           // limited to the router; same convention used in F2.15.7.
           { path: "stores", element: <AdminStoresPage /> },
           { path: "stores/:storeId", element: <AdminStoreDetailPage /> },
+          // F2.24.C7: admin merchant-application review queue + detail.
+          // Consumes the C3/C4 admin store-applications endpoints. The
+          // public `/apply` intake (C6) is unrelated and lives under
+          // PublicShell.
+          {
+            path: "applications",
+            element: <AdminStoreApplicationsPage />,
+          },
+          {
+            path: "applications/:applicationId",
+            element: <AdminStoreApplicationDetailPage />,
+          },
           // F2.15.7: real users management replaces the placeholder.
           // Same component handles both /app/store/users (store scope)
           // and /app/admin/users (global scope); the page reads

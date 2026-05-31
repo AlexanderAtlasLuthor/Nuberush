@@ -143,6 +143,49 @@ def can_caller_assign_role(
     )
 
 
+# F2.24.C5 — admin-domain guard. A user may only EVER hold the admin role
+# with an official identity whose email domain is exactly `nuberush.com`.
+# The check is case-insensitive and exact: no subdomains (sub.nuberush.com),
+# no lookalikes (nuberush.co, nuberush.comm, evilnuberush.com,
+# nuberush.com.fake) and no malformed addresses pass.
+_ADMIN_EMAIL_DOMAIN = "nuberush.com"
+
+
+def is_nuberush_admin_email(email: str) -> bool:
+    """True only if `email` is a well-formed address whose domain equals
+    `nuberush.com` exactly (case-insensitive).
+
+    Rejects subdomains, lookalike domains, blanks, and any address that is
+    not exactly `local@nuberush.com` (e.g. multiple `@`, missing local or
+    domain part).
+    """
+    if not isinstance(email, str):
+        return False
+    candidate = email.strip().lower()
+    # Exactly one '@' splits into a non-empty local part and the domain.
+    parts = candidate.split("@")
+    if len(parts) != 2:
+        return False
+    local, domain = parts
+    if not local:
+        return False
+    return domain == _ADMIN_EMAIL_DOMAIN
+
+
+def ensure_admin_email_allowed(email: str) -> None:
+    """Raise 403 unless `email` may hold the admin role (@nuberush.com).
+
+    The single enforcement helper every admin create/promote path calls so
+    no external, applicant, owner, or lookalike address can ever become an
+    admin. Message is intentionally generic (no echo of the rejected value).
+    """
+    if not is_nuberush_admin_email(email):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin users must use a @nuberush.com email address.",
+        )
+
+
 # Matrix of which caller role can MODIFY (update profile, deactivate,
 # reactivate) a target user with a given role. The rule is "manage your
 # strict subordinates plus your own rank, never higher". Admin sees
@@ -247,6 +290,11 @@ def assert_can_change_user_role(
         raise _forbid(
             f"You cannot assign role '{new_role.value}'."
         )
+    # F2.24.C5: promoting a user to admin requires an official
+    # @nuberush.com address. This is the single chokepoint every
+    # admin-promotion path routes through.
+    if new_role == UserRole.admin:
+        ensure_admin_email_allowed(target.email)
     _assert_same_store_or_admin(actor, target)
 
 

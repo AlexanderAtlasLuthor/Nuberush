@@ -123,6 +123,24 @@ vi.mock("@/features/stores/pages/AdminStoreDetailPage", () => ({
   default: () => <div>Admin store detail page</div>,
 }));
 
+// F2.24.C7: /app/admin/applications mounts the real
+// AdminStoreApplicationsPage / AdminStoreApplicationDetailPage. Mock
+// them like the other admin pages so router tests stay independent of
+// their internals.
+vi.mock(
+  "@/features/admin-store-applications/pages/AdminStoreApplicationsPage",
+  () => ({
+    default: () => <div>Admin store applications page</div>,
+  }),
+);
+
+vi.mock(
+  "@/features/admin-store-applications/pages/AdminStoreApplicationDetailPage",
+  () => ({
+    default: () => <div>Admin store application detail page</div>,
+  }),
+);
+
 // F2.19.5: /app/admin now mounts the real AdminDashboardPage. Mock
 // it the same way the other admin pages are mocked so router tests
 // stay independent of the dashboard's internals.
@@ -408,6 +426,42 @@ describe("app route split", () => {
         "Route context only; no store data is fetched or fabricated.",
       ),
     ).not.toBeInTheDocument();
+  });
+
+  // F2.24.C7: admin store-applications review queue + detail mount
+  // under the admin shell (not the store shell).
+  it("renders the AdminStoreApplicationsPage at /app/admin/applications", async () => {
+    renderRoute(
+      "/app/admin/applications",
+      makeUser({ role: "admin", store_id: null }),
+      {
+        currentStoreId: null,
+        hasStoreContext: false,
+        isStoreRequired: false,
+      },
+    );
+    expect(
+      await screen.findByText("Admin store applications page"),
+    ).toBeInTheDocument();
+    expectSidebarLink("Applications", "/app/admin/applications");
+    expectNoSidebarLinks(/^\/app\/store/);
+    expect(screen.queryByTestId("store-gate")).not.toBeInTheDocument();
+  });
+
+  it("renders the AdminStoreApplicationDetailPage at /app/admin/applications/:applicationId", async () => {
+    renderRoute(
+      "/app/admin/applications/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      makeUser({ role: "admin", store_id: null }),
+      {
+        currentStoreId: null,
+        hasStoreContext: false,
+        isStoreRequired: false,
+      },
+    );
+    expect(
+      await screen.findByText("Admin store application detail page"),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("store-gate")).not.toBeInTheDocument();
   });
 
   // F2.15.7 + F2.18.3 + F2.19.5 + …: every admin route now mounts

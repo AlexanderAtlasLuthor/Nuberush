@@ -174,6 +174,7 @@ describe("navigation config", () => {
     expect(ADMIN_NAV_ITEMS.map((i) => [i.label, i.href])).toEqual([
       ["Dashboard", "/app/admin"],
       ["Stores", "/app/admin/stores"],
+      ["Applications", "/app/admin/applications"],
       ["Users", "/app/admin/users"],
       ["Products", "/app/admin/products"],
       ["Inventory", "/app/admin/inventory"],

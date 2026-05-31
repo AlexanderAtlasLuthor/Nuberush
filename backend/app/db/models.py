@@ -4,6 +4,7 @@ import enum
 import uuid
 from decimal import Decimal
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Boolean
 from sqlalchemy import CheckConstraint
@@ -18,6 +19,7 @@ from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
@@ -103,6 +105,33 @@ class OrderStatus(str, enum.Enum):
     delivered = "delivered"
     canceled = "canceled"
     returned = "returned"
+
+
+class StoreApplicationStatus(str, enum.Enum):
+    """Lifecycle for a merchant/store sign-up application (F2.24).
+
+    draft           → started but not yet submitted (reserved for a future
+                      "save and continue" flow; not produced by the MVP
+                      intake path).
+    submitted       → handed off by the applicant (reserved; the MVP intake
+                      lands an application straight in `pending_review`).
+    pending_review  → awaiting admin decision. The first operational state.
+    approved        → admin accepted; the application links the store and the
+                      owner user it provisioned (`provisioned_store_id`,
+                      `provisioned_owner_user_id`).
+    rejected        → admin declined; `rejection_reason` is set.
+
+    All five values exist for extensibility, but only `pending_review`,
+    `approved` and `rejected` are operational in F2.24. Provisioning and
+    state transitions are NOT implemented in this data-layer subphase
+    (F2.24.C1) — an application row is inert data here.
+    """
+
+    draft = "draft"
+    submitted = "submitted"
+    pending_review = "pending_review"
+    approved = "approved"
+    rejected = "rejected"
 
 
 class Store(Base):
@@ -713,3 +742,287 @@ class OrderAuditLog(Base):
 
     order: Mapped[Order] = relationship(back_populates="audit_logs")
     performed_by_user: Mapped[User | None] = relationship()
+
+
+class StoreApplication(Base):
+    """A professional merchant/store sign-up application (F2.24).
+
+    Public applicants submit business + owner details; an admin later
+    reviews and approves or rejects them. At the F2.24.C1 data layer this
+    row is INERT: nothing here creates a store, a user, or a Supabase Auth
+    record, and no submit/approve/reject service exists yet.
+
+    Provisioning links (`provisioned_store_id`, `provisioned_owner_user_id`)
+    are populated only when an admin approves the application in a later
+    subphase. The DB CHECK constraints below keep the row honest in the
+    meantime — a non-approved row can never carry provisioning links, and an
+    approved row must carry both.
+
+    `owner_email` is stored verbatim at the model layer; normalization
+    (lowercasing/trim) is the service layer's job in C2 — the column and its
+    index simply support case-sensitive equality lookups today.
+    """
+
+    __tablename__ = "store_applications"
+    __table_args__ = (
+        CheckConstraint(
+            "business_name <> ''",
+            name="ck_store_applications_business_name_non_empty",
+        ),
+        CheckConstraint(
+            "business_type <> ''",
+            name="ck_store_applications_business_type_non_empty",
+        ),
+        CheckConstraint(
+            "owner_full_name <> ''",
+            name="ck_store_applications_owner_full_name_non_empty",
+        ),
+        CheckConstraint(
+            "owner_email <> ''",
+            name="ck_store_applications_owner_email_non_empty",
+        ),
+        CheckConstraint(
+            "location_count > 0",
+            name="ck_store_applications_location_count_positive",
+        ),
+        CheckConstraint(
+            "estimated_weekly_orders IS NULL OR estimated_weekly_orders >= 0",
+            name="ck_store_applications_estimated_weekly_orders_non_negative",
+        ),
+        # rejected ⇔ rejection_reason set. Mirrors the products workflow
+        # (ck_products_rejected_iff_reason): a non-rejected row never keeps a
+        # stale reason, and a rejected row must explain itself.
+        CheckConstraint(
+            "(status = 'rejected') = (rejection_reason IS NOT NULL)",
+            name="ck_store_applications_rejected_iff_reason",
+        ),
+        # approved ⇔ provisioned store linked. Forces approved rows to carry
+        # the store they created, and forbids any non-approved row
+        # (draft / submitted / pending_review / rejected) from carrying one —
+        # which satisfies "pending_review must not have a provisioned store"
+        # as a special case.
+        CheckConstraint(
+            "(status = 'approved') = (provisioned_store_id IS NOT NULL)",
+            name="ck_store_applications_approved_iff_store",
+        ),
+        # approved ⇔ provisioned owner linked. Same shape as the store link.
+        CheckConstraint(
+            "(status = 'approved') = (provisioned_owner_user_id IS NOT NULL)",
+            name="ck_store_applications_approved_iff_owner",
+        ),
+        # Accepting the terms requires a timestamp recording when. A row that
+        # did not accept may leave the timestamp NULL.
+        CheckConstraint(
+            "terms_accepted = false OR terms_accepted_at IS NOT NULL",
+            name="ck_store_applications_terms_accepted_requires_timestamp",
+        ),
+        Index("ix_store_applications_status", "status"),
+        Index("ix_store_applications_owner_email", "owner_email"),
+        Index("ix_store_applications_submitted_at", "submitted_at"),
+        # Unique index doubles as the lookup index the public status endpoint
+        # (C2) will hit — same pattern as ix_users_auth_user_id.
+        Index(
+            "ix_store_applications_public_lookup_token",
+            "public_lookup_token",
+            unique=True,
+        ),
+        Index(
+            "ix_store_applications_reviewed_by_user_id",
+            "reviewed_by_user_id",
+        ),
+        Index(
+            "ix_store_applications_provisioned_store_id",
+            "provisioned_store_id",
+        ),
+        Index(
+            "ix_store_applications_provisioned_owner_user_id",
+            "provisioned_owner_user_id",
+        ),
+        # Backs the public-intake dedup rule at the DB layer (F2.24.C2): at
+        # most one ACTIVE (non-rejected) application per owner_email. This
+        # closes the query-then-insert TOCTOU race on the unauthenticated
+        # endpoint — two concurrent same-email submissions can both pass the
+        # service-level pre-check, and only this partial unique index stops
+        # the second commit. owner_email is stored lowercased by the intake
+        # service, so a plain-column partial unique index matches the
+        # (lowercased) dedup query. `rejected` rows are excluded so a turned-
+        # away applicant may re-apply.
+        Index(
+            "uq_store_applications_active_owner_email",
+            "owner_email",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('draft', 'submitted', 'pending_review', "
+                "'approved')"
+            ),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+
+    # --- Business / store details ---
+    business_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    business_type: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    # --- Owner / contact details ---
+    owner_full_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    owner_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    owner_phone: Mapped[str] = mapped_column(String(30), nullable=False)
+    business_phone: Mapped[str | None] = mapped_column(String(30))
+
+    # --- Address ---
+    address_line_1: Mapped[str] = mapped_column(String(200), nullable=False)
+    address_line_2: Mapped[str | None] = mapped_column(String(200))
+    city: Mapped[str] = mapped_column(String(120), nullable=False)
+    state: Mapped[str] = mapped_column(String(120), nullable=False)
+    postal_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    # ISO-3166 alpha-2; defaults to US for the MVP US-only footprint.
+    country: Mapped[str] = mapped_column(
+        String(2), server_default=text("'US'"), nullable=False
+    )
+
+    # --- Operational profile (Uber-Eats-style benchmark fields) ---
+    location_count: Mapped[int] = mapped_column(
+        Integer, server_default=text("1"), nullable=False
+    )
+    estimated_weekly_orders: Mapped[int | None] = mapped_column(Integer)
+    hours_of_operation: Mapped[str | None] = mapped_column(Text)
+    website_url: Mapped[str | None] = mapped_column(String(255))
+    social_url: Mapped[str | None] = mapped_column(String(255))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    # --- Terms ---
+    terms_accepted: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), nullable=False
+    )
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # --- Lifecycle / review ---
+    status: Mapped[StoreApplicationStatus] = mapped_column(
+        Enum(StoreApplicationStatus, name="store_application_status"),
+        server_default=text("'draft'"),
+        nullable=False,
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+
+    # --- Provisioning links (populated only on approval, in a later phase) ---
+    provisioned_store_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="SET NULL"),
+    )
+    provisioned_owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
+
+    # Opaque token for the public status-lookup endpoint. Generated
+    # Python-side (uuid4 hex = 32 chars) so every ORM insert is always
+    # populated and unique without binding the model to a server-side SQL
+    # expression — a complex server_default round-trips through Postgres's
+    # normalizer and would otherwise show as spurious `alembic check` drift.
+    public_lookup_token: Mapped[str] = mapped_column(
+        String(64),
+        default=lambda: uuid.uuid4().hex,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+    audit_logs: Mapped[list[StoreApplicationAuditLog]] = relationship(
+        back_populates="application",
+        cascade="all, delete-orphan",
+        # Chronological, with id as a tiebreaker for same-tick rows, so the
+        # admin detail view renders the history deterministically (mirrors
+        # the explicit ordering of the order/compliance audit feeds).
+        order_by=(
+            "StoreApplicationAuditLog.created_at, "
+            "StoreApplicationAuditLog.id"
+        ),
+    )
+    reviewed_by_user: Mapped[User | None] = relationship(
+        foreign_keys=[reviewed_by_user_id]
+    )
+    provisioned_store: Mapped[Store | None] = relationship(
+        foreign_keys=[provisioned_store_id]
+    )
+    provisioned_owner_user: Mapped[User | None] = relationship(
+        foreign_keys=[provisioned_owner_user_id]
+    )
+
+
+class StoreApplicationAuditLog(Base):
+    """Append-only audit trail for a store application (F2.24).
+
+    Mirrors the existing per-domain audit tables (`order_audit_logs`,
+    `product_compliance_audit_logs`): a discriminator string (`event_type`,
+    like `OrderAuditLog.action`), a nullable actor FK with ON DELETE SET
+    NULL, and an append-only `created_at`. `payload` is a nullable JSONB bag
+    for event-specific context (the attribute is named `payload`, not
+    `metadata`, because SQLAlchemy reserves `Base.metadata`).
+
+    F2.24.C1 only creates the table/model. No service emits rows yet; the
+    `event_type` values listed in the project plan (application_created,
+    application_approved, application_rejected, owner_provisioned,
+    store_provisioned, email_triggered) are produced in later subphases.
+    """
+
+    __tablename__ = "store_application_audit_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "event_type <> ''",
+            name="ck_store_application_audit_logs_event_type_non_empty",
+        ),
+        Index(
+            "ix_store_application_audit_logs_application_id",
+            "application_id",
+        ),
+        Index(
+            "ix_store_application_audit_logs_actor_user_id",
+            "actor_user_id",
+        ),
+        Index(
+            "ix_store_application_audit_logs_created_at",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("store_applications.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
+    message: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    application: Mapped[StoreApplication] = relationship(
+        back_populates="audit_logs"
+    )
+    actor_user: Mapped[User | None] = relationship()

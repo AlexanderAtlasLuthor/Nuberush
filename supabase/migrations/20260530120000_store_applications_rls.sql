@@ -1,0 +1,61 @@
+-- =============================================================================
+-- F2.24.C1 — store_applications RLS deny-all (defense-in-depth)
+-- =============================================================================
+--
+-- Extends the F2.22.3.D RLS deny-all baseline to the two new public.*
+-- tables created by Alembic revision e3b1d4c7a9f2 (F2.24.C1):
+--   * public.store_applications
+--   * public.store_application_audit_logs
+--
+-- This file ONLY toggles RLS flags on the already-created tables; the
+-- schema itself stays in Alembic (see ./README.md "What does NOT go here").
+--
+-- ----- Architecture (locked, see docs/f2.22-contract-lock.md §7) ------------
+--
+-- Mirrors every other public.* application table: RLS is enabled, FORCED so
+-- the table owner is also subject to policies, and NO positive policies are
+-- created. With RLS on and no permissive policy, the anon and authenticated
+-- roles get zero rows on SELECT and every write raises — exactly the F2.22
+-- hybrid boundary.
+--
+-- This matters especially for store_applications: the F2.24 public intake
+-- endpoint is unauthenticated and writes through FastAPI (the nuberush_app
+-- BYPASSRLS role), never through supabase-js. Denying anon/authenticated
+-- direct access here guarantees the frontend cannot read or write merchant
+-- applications around the API even if an anon key leaks.
+--
+-- FastAPI continues to connect with the dedicated nuberush_app role
+-- (LOGIN + BYPASSRLS, provisioned per docs/f2.22.3-rls-bypass-role.md) and
+-- remains the only reader/writer of these tables. RLS is defense-in-depth,
+-- never the primary gate.
+--
+-- ----- Scope of this migration ---------------------------------------------
+--
+-- IN scope (this file does this):
+--   * ALTER TABLE public.store_applications            ENABLE + FORCE RLS.
+--   * ALTER TABLE public.store_application_audit_logs  ENABLE + FORCE RLS.
+--
+-- OUT of scope (deferred or banned outright):
+--   * No CREATE POLICY of any kind. authenticated/anon write policies are
+--     banned by the F2.22 contract §7 and never added here. No SELECT
+--     policy either — application data flows only through FastAPI, never a
+--     direct table read.
+--   * No CREATE TABLE / ALTER TABLE on columns (Alembic e3b1d4c7a9f2 owns
+--     the schema).
+--   * No CREATE PUBLICATION (application data is never realtime).
+--   * No storage.* changes, no RPCs, no triggers, no business logic SQL.
+--   * No cluster-level operations: no CREATE ROLE, no GRANT/REVOKE, no
+--     passwords, no credentials, no host URLs.
+--
+-- ----- Rollback notes (informational; forward-only migration tree) ----------
+--
+--   ALTER TABLE public.store_applications            DISABLE ROW LEVEL SECURITY;
+--   ALTER TABLE public.store_application_audit_logs  DISABLE ROW LEVEL SECURITY;
+--
+-- =============================================================================
+
+ALTER TABLE public.store_applications            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.store_applications            FORCE  ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_application_audit_logs  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.store_application_audit_logs  FORCE  ROW LEVEL SECURITY;
