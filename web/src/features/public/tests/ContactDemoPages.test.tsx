@@ -96,12 +96,14 @@ describe("ContactPage (F2.21.4)", () => {
 // /request-demo
 // ───────────────────────────────────────────────────────────────────
 
-describe("RequestDemoPage (F2.21.4)", () => {
-  it("renders exactly one h1 with the demo headline", () => {
+describe("RequestDemoPage (F2.24 — merchant application surface)", () => {
+  it("renders exactly one h1 with the apply headline", () => {
     renderPage(<RequestDemoPage />);
     const headings = screen.getAllByRole("heading", { level: 1 });
     expect(headings).toHaveLength(1);
-    expect(headings[0]).toHaveTextContent(/request a demo of nuberush/i);
+    expect(headings[0]).toHaveTextContent(
+      /apply to open your store on nuberush/i,
+    );
   });
 
   it("renders the locked business email and mailto link", () => {
@@ -115,10 +117,10 @@ describe("RequestDemoPage (F2.21.4)", () => {
   });
 
   it.each([
-    "Who should request a demo",
-    "What happens after you reach out",
-    "What to include in your demo request",
-    "What NubeRush can help you evaluate",
+    "Who should apply",
+    "What happens after you apply",
+    "What to include in your application",
+    "What you can do once approved",
     "Current access model",
   ])("renders required section %s", (title) => {
     renderPage(<RequestDemoPage />);
@@ -130,11 +132,11 @@ describe("RequestDemoPage (F2.21.4)", () => {
     "City and state",
     "Store type",
     "Number of locations",
-    "Current operational pain",
+    "Owner name and contact information",
+    "Estimated weekly order volume",
     "Product/inventory/order needs",
     "Compliance visibility needs",
-    "Contact information",
-  ])("renders demo checklist item %s", (item) => {
+  ])("renders application checklist item %s", (item) => {
     renderPage(<RequestDemoPage />);
     expect(screen.getAllByText(item).length).toBeGreaterThan(0);
   });
@@ -146,24 +148,18 @@ describe("RequestDemoPage (F2.21.4)", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("notes that store access is handled by the NubeRush team", () => {
+  it("notes that store access is provisioned by the NubeRush team after review", () => {
     renderPage(<RequestDemoPage />);
     expect(
       screen.getByText(
-        /store access is handled by the nuberush team after fit and operating needs are discussed/i,
+        /store access is provisioned by the nuberush team after the application is reviewed and approved/i,
       ),
     ).toBeInTheDocument();
   });
 
-  it("primary email CTA points to mailto", () => {
+  it("primary CTA starts the application at /apply", () => {
     renderPage(<RequestDemoPage />);
-    const emailTeam = screen.getByRole("link", {
-      name: /^email the team$/i,
-    });
-    expect(emailTeam).toHaveAttribute(
-      "href",
-      "mailto:info@nuberush.com",
-    );
+    expectInternalLinkTo(/^start your application$/i, "/apply");
   });
 
   it("See how it works CTA points to /how-it-works", () => {

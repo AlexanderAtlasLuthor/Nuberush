@@ -18,8 +18,10 @@ export function ApplyPage() {
       />
       <section className="w-full py-12 md:py-16">
         <div className="container">
-          <div className="mx-auto max-w-2xl">
-            <ApplicationWizard />
+          <div className="premium-ring max-w-4xl rounded-[2rem] p-px">
+            <div className="premium-glass rounded-[2rem] px-5 py-8 md:px-10 md:py-12">
+              <ApplicationWizard />
+            </div>
           </div>
         </div>
       </section>

@@ -131,11 +131,8 @@ export function ApplicationWizard() {
   // -------- Welcome --------
   if (stepIndex === 0) {
     return (
-      <div
-        className="rounded-2xl border border-border bg-card p-8"
-        data-testid="apply-welcome"
-      >
-        <h2 className="text-xl font-semibold tracking-tight text-foreground">
+      <div data-testid="apply-welcome">
+        <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
           Apply to join NubeRush
         </h2>
         <p className="mt-3 text-sm leading-relaxed text-muted-foreground">

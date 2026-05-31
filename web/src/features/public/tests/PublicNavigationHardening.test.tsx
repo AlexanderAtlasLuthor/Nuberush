@@ -90,9 +90,9 @@ describe("PublicHeader hardening (F2.21.6)", () => {
     expectLink(/^sign in$/i, "/login");
   });
 
-  it("Request demo links to /request-demo", () => {
+  it("Apply to sell links to /apply", () => {
     renderInRouter(<PublicHeader />);
-    expectLink(/^request demo$/i, "/request-demo");
+    expectLink(/^apply to sell$/i, "/apply");
   });
 
   it("desktop and mobile navs lead to the same destinations", () => {

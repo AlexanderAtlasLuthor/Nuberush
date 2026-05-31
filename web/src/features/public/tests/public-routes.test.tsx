@@ -74,7 +74,7 @@ const PUBLIC_PAGES: ReadonlyArray<{ path: string; heading: RegExp }> = [
   { path: "/how-it-works", heading: /from request to operating on the platform/i },
   { path: "/features", heading: /capabilities for stores that need operational visibility/i },
   { path: "/contact", heading: /contact nuberush/i },
-  { path: "/request-demo", heading: /request a demo of nuberush/i },
+  { path: "/request-demo", heading: /apply to open your store on nuberush/i },
   { path: "/apply", heading: /apply to bring your store onto nuberush/i },
   { path: "/support", heading: /support and contact/i },
   { path: "/legal", heading: /legal documents/i },

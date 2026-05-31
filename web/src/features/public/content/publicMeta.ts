@@ -44,9 +44,9 @@ export const PUBLIC_PAGE_META = {
       "Reach the NubeRush team by email for general inquiries, merchant demo requests, support direction, and partnership conversations.",
   },
   "/request-demo": {
-    title: "Request a NubeRush Demo",
+    title: "Apply to Sell on NubeRush",
     description:
-      "Email the NubeRush team to start a demo conversation about your store. Self-serve signup is not available yet.",
+      "Apply to open your store on NubeRush. The team reviews every application and provisions your store once approved. Self-serve signup is not available yet.",
   },
   "/support": {
     title: "NubeRush Support",

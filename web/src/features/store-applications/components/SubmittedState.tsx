@@ -7,10 +7,7 @@ import { CheckCircle2 } from "lucide-react";
 
 export function SubmittedState() {
   return (
-    <div
-      className="rounded-2xl border border-border bg-card p-8 text-center"
-      data-testid="apply-submitted"
-    >
+    <div className="text-center" data-testid="apply-submitted">
       <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
         <CheckCircle2 className="h-6 w-6" aria-hidden="true" />
       </div>

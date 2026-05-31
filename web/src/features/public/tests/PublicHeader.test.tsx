@@ -45,9 +45,16 @@ describe("PublicHeader", () => {
     expectLinkTo(/^sign in$/i, "/login");
   });
 
-  it("links Request demo to /request-demo", () => {
+  it("links the primary Apply to sell action to /apply", () => {
     renderHeader();
-    expectLinkTo(/^request demo$/i, "/request-demo");
+    expectLinkTo(/^apply to sell$/i, "/apply");
+  });
+
+  it("no longer renders a Request demo button in the header", () => {
+    renderHeader();
+    expect(
+      screen.queryByRole("link", { name: /^request demo$/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("exposes the public site navigation with an aria-label", () => {

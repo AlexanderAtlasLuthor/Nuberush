@@ -737,38 +737,34 @@ export const CONTACT_CTA_SECTION: SectionHeading = {
 // /request-demo ─────────────────────────────────────────────────────
 
 export const REQUEST_DEMO_PAGE_COPY = {
-  eyebrow: "Request demo",
-  headline: "Request a demo of NubeRush.",
+  eyebrow: "Apply to sell",
+  headline: "Apply to open your store on NubeRush.",
   subhead:
-    "Demos start with an email to the NubeRush team. The team works through fit, setup, and onboarding with you — there is no self-serve signup yet.",
-  primaryCta: {
-    label: "Email the team",
-    href: BUSINESS_EMAIL_MAILTO,
-    external: true,
-  },
+    "Tell us about your business. The NubeRush team reviews every application and provisions your store and owner account once approved — there is no self-serve signup.",
+  primaryCta: { label: "Start your application", to: "/apply" },
   secondaryCta: { label: "See how it works", to: "/how-it-works" },
 } as const;
 
 export const REQUEST_DEMO_SECTIONS: ReadonlyArray<SectionCard> = [
   {
-    title: "Who should request a demo",
+    title: "Who should apply",
     body: "Store owners, managers, and operators who want product, inventory, order, and compliance visibility in one operating workspace. Stores serving regulated local commerce are the primary fit today.",
   },
   {
-    title: "What happens after you reach out",
-    body: "The NubeRush team reviews your message and replies from the business address. Response time is not guaranteed and varies by request. If we're a fit, the team proposes a conversation to walk through your operation and what onboarding would look like.",
+    title: "What happens after you apply",
+    body: "The NubeRush team reviews your application from the business address. Response time is not guaranteed and varies by application. If your store is a fit, the team approves it and provisions your store and owner account.",
   },
   {
-    title: "What to include in your demo request",
-    body: "Sharing the details below helps the team route your request and prepare a useful conversation.",
+    title: "What to include in your application",
+    body: "Sharing the details below helps the team review your application and set your store up correctly.",
   },
   {
-    title: "What NubeRush can help you evaluate",
-    body: "A walkthrough covers the actual operator surface — store workspace, product oversight, inventory visibility, order operations, compliance visibility, audit history, and admin oversight. The team will tailor the conversation to your operation.",
+    title: "What you can do once approved",
+    body: "Approved stores get the operator surface — store workspace, product oversight, inventory visibility, order operations, compliance visibility, audit history, and admin oversight from the NubeRush team.",
   },
   {
     title: "Current access model",
-    body: "Onboarding is hands-on. Stores are activated by the NubeRush team after a conversation.",
+    body: "Onboarding is hands-on. Stores are activated by the NubeRush team after the application is reviewed.",
   },
 ];
 
@@ -777,21 +773,21 @@ export const REQUEST_DEMO_CHECKLIST: ReadonlyArray<string> = [
   "City and state",
   "Store type",
   "Number of locations",
-  "Current operational pain",
+  "Owner name and contact information",
+  "Estimated weekly order volume",
   "Product/inventory/order needs",
   "Compliance visibility needs",
-  "Contact information",
 ];
 
 export const REQUEST_DEMO_ACCESS_MODEL: ReadonlyArray<string> = [
   "Self-serve signup is not available yet.",
-  "Demo requests begin by contacting the NubeRush team at info@nuberush.com.",
-  "Store access is handled by the NubeRush team after fit and operating needs are discussed.",
+  "Applications begin with the apply form, or by contacting the NubeRush team at info@nuberush.com.",
+  "Store access is provisioned by the NubeRush team after the application is reviewed and approved.",
 ];
 
 export const REQUEST_DEMO_CHECKLIST_SECTION: SectionHeading = {
   eyebrow: "What to include",
-  title: "Details that help the team prepare your demo.",
+  title: "Details that help the team review your application.",
 };
 
 export const REQUEST_DEMO_ACCESS_SECTION: SectionHeading = {
@@ -800,8 +796,8 @@ export const REQUEST_DEMO_ACCESS_SECTION: SectionHeading = {
 };
 
 export const REQUEST_DEMO_CTA_SECTION: SectionHeading = {
-  eyebrow: "Start the conversation",
-  title: "Email the team to begin.",
+  eyebrow: "Start your application",
+  title: "Apply to open your store.",
   description:
-    "Replies come from the same address. Response time varies by request.",
+    "Use the apply form to get started, or email the team. Replies come from the same address; response time varies by application.",
 };
