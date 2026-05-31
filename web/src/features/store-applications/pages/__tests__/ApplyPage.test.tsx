@@ -49,7 +49,7 @@ function start() {
 function fillBusiness(over: Record<string, string> = {}) {
   const v: Record<string, string> = {
     business_name: "Acme Vapes",
-    business_type: "vape_shop",
+    business_type: "Smoke & vape shop",
     business_phone: "+1 555 0199",
     address_line_1: "1 Test Way",
     city: "Miami",
@@ -185,7 +185,7 @@ describe("ApplyPage wizard", () => {
     expect(mockedSubmit).toHaveBeenCalledTimes(1);
     expect(mockedSubmit).toHaveBeenCalledWith({
       business_name: "Acme Vapes",
-      business_type: "vape_shop",
+      business_type: "Smoke & vape shop",
       owner_full_name: "Jane Owner",
       owner_email: "jane@example.com",
       owner_phone: "+1 555 0100",

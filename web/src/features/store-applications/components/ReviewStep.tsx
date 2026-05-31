@@ -46,7 +46,7 @@ export function ReviewStep({
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="text-center">
         <h2 className="text-xl font-semibold tracking-tight text-foreground">
           Review &amp; submit
         </h2>

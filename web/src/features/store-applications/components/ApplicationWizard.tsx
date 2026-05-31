@@ -131,23 +131,23 @@ export function ApplicationWizard() {
   // -------- Welcome --------
   if (stepIndex === 0) {
     return (
-      <div data-testid="apply-welcome">
+      <div className="text-center" data-testid="apply-welcome">
         <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
           Apply to join NubeRush
         </h2>
-        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+        <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           NubeRush helps stores manage their operations. This is a reviewed
           application — completing the form does not guarantee approval. A
           NubeRush administrator will review the information you submit, and
           you'll be contacted after that review. Access is only available
           once your store is approved.
         </p>
-        <ul className="mt-5 space-y-2 text-sm text-foreground/90">
+        <ul className="mx-auto mt-5 inline-block space-y-2 text-left text-sm text-foreground/90">
           <li>• Every store is reviewed before activation.</li>
           <li>• Approval is not guaranteed.</li>
           <li>• We'll reach out using the owner contact details you provide.</li>
         </ul>
-        <div className="mt-7 flex flex-wrap gap-3">
+        <div className="mt-7 flex flex-wrap justify-center gap-3">
           <Button type="button" onClick={goToStart} data-testid="apply-start">
             Start application
           </Button>

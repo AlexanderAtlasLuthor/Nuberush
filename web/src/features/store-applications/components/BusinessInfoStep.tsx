@@ -2,6 +2,14 @@
 // owns state, validation and navigation.
 
 import { WizardField } from "./WizardField";
+import { WizardSelect } from "./WizardSelect";
+import {
+  BUSINESS_TYPE_OPTIONS,
+  COUNTRY_OPTIONS,
+  LOCATION_COUNT_OPTIONS,
+  US_STATE_OPTIONS,
+  WEEKLY_ORDERS_OPTIONS,
+} from "./selectOptions";
 import type {
   ApplicationFormErrors,
   ApplicationFormValues,
@@ -23,7 +31,7 @@ export function BusinessInfoStep({
 }: BusinessInfoStepProps) {
   return (
     <div className="space-y-6">
-      <div>
+      <div className="text-center">
         <h2 className="text-xl font-semibold tracking-tight text-foreground">
           Business information
         </h2>
@@ -44,15 +52,15 @@ export function BusinessInfoStep({
           autoComplete="organization"
           disabled={disabled}
         />
-        <WizardField
+        <WizardSelect
           id="business_type"
           label="Business type"
           value={values.business_type}
           onChange={(v) => onChange("business_type", v)}
+          options={BUSINESS_TYPE_OPTIONS}
           error={errors.business_type}
           required
-          maxLength={100}
-          placeholder="e.g. Convenience store"
+          placeholder="Select a business type"
           disabled={disabled}
         />
         <WizardField
@@ -68,28 +76,24 @@ export function BusinessInfoStep({
           autoComplete="tel"
           disabled={disabled}
         />
-        <WizardField
+        <WizardSelect
           id="location_count"
           label="Number of locations"
           value={values.location_count}
           onChange={(v) => onChange("location_count", v)}
+          options={LOCATION_COUNT_OPTIONS}
           error={errors.location_count}
           required
-          type="number"
-          inputMode="numeric"
-          min={1}
           disabled={disabled}
         />
-        <WizardField
+        <WizardSelect
           id="estimated_weekly_orders"
           label="Estimated weekly orders"
           value={values.estimated_weekly_orders}
           onChange={(v) => onChange("estimated_weekly_orders", v)}
+          options={WEEKLY_ORDERS_OPTIONS}
           error={errors.estimated_weekly_orders}
           required
-          type="number"
-          inputMode="numeric"
-          min={0}
           disabled={disabled}
         />
       </div>
@@ -131,15 +135,15 @@ export function BusinessInfoStep({
           autoComplete="address-level2"
           disabled={disabled}
         />
-        <WizardField
+        <WizardSelect
           id="state"
           label="State / region"
           value={values.state}
           onChange={(v) => onChange("state", v)}
+          options={US_STATE_OPTIONS}
           error={errors.state}
           required
-          maxLength={120}
-          autoComplete="address-level1"
+          placeholder="Select a state"
           disabled={disabled}
         />
         <WizardField
@@ -153,16 +157,14 @@ export function BusinessInfoStep({
           autoComplete="postal-code"
           disabled={disabled}
         />
-        <WizardField
+        <WizardSelect
           id="country"
-          label="Country code"
+          label="Country"
           value={values.country}
           onChange={(v) => onChange("country", v)}
+          options={COUNTRY_OPTIONS}
           error={errors.country}
           required
-          maxLength={2}
-          placeholder="US"
-          autoComplete="country"
           disabled={disabled}
         />
       </div>

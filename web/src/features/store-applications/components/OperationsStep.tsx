@@ -25,7 +25,7 @@ export function OperationsStep({
 }: OperationsStepProps) {
   return (
     <div className="space-y-6">
-      <div>
+      <div className="text-center">
         <h2 className="text-xl font-semibold tracking-tight text-foreground">
           Store operations
         </h2>
