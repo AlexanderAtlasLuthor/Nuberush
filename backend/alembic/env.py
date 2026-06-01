@@ -28,6 +28,35 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 target_metadata = Base.metadata
 
 
+# Indexes excluded from autogenerate / `alembic check` comparison.
+#
+# `uq_store_applications_active_owner_email` is a Postgres PARTIAL unique
+# index. Alembic cannot round-trip its predicate: the model/migration declare
+# `postgresql_where=text("status IN ('draft','submitted','pending_review',
+# 'approved')")`, but Postgres reflects the predicate in its normalized form
+# `status = ANY (ARRAY[...]::store_application_status)`. The two strings never
+# match textually, so autogenerate emits a spurious `add_index` even though the
+# DB index is present and correct. The index IS verified at the DB level by
+# tests/test_store_applications_model.py::test_active_owner_email_index_exists_and_is_unique
+# (existence + uniqueness) plus the C2 dedup/race tests (behavior).
+#
+# This exclusion is intentionally NAME-SCOPED to this one known false positive.
+# Do NOT broaden it to all indexes or all partial indexes — that would hide
+# real schema drift. Every other object stays under full `alembic check`.
+_AUTOGEN_IGNORED_INDEXES = frozenset(
+    {
+        "uq_store_applications_active_owner_email",
+    }
+)
+
+
+def _include_object(object_, name, type_, reflected, compare_to):  # type: ignore[no-untyped-def]
+    """Exclude only the known partial-index false positive from comparison."""
+    if type_ == "index" and name in _AUTOGEN_IGNORED_INDEXES:
+        return False
+    return True
+
+
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -37,6 +66,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        include_object=_include_object,
     )
 
     with context.begin_transaction():
@@ -56,6 +86,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             compare_server_default=True,
+            include_object=_include_object,
         )
 
         with context.begin_transaction():
