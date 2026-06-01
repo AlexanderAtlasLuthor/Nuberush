@@ -209,7 +209,7 @@ describe("ApplyPage wizard", () => {
     fireEvent.click(screen.getByTestId("apply-submit"));
     await screen.findByTestId("apply-submitted");
 
-    const sent = mockedSubmit.mock.calls[0][0] as Record<string, unknown>;
+    const sent = mockedSubmit.mock.calls[0][0] as unknown as Record<string, unknown>;
     for (const forbidden of [
       "status",
       "role",
