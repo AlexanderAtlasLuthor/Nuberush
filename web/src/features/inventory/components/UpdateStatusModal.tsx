@@ -72,6 +72,10 @@ export function UpdateStatusModal({
   const [reason, setReason] = useState("");
 
   const mutation = useUpdateInventoryStatusMutation();
+  // `reset` is referentially stable (TanStack Query v5); destructure it so
+  // the effect depends on the stable callback rather than the whole mutation
+  // object (whose identity changes across isPending/isSuccess transitions).
+  const { reset } = mutation;
 
   useEffect(() => {
     if (open) {
@@ -80,9 +84,9 @@ export function UpdateStatusModal({
         : "";
       setStatusValue(initial);
       setReason("");
-      mutation.reset();
+      reset();
     }
-  }, [open, item.status, mutation.reset]);
+  }, [open, item.status, reset]);
 
   useEffect(() => {
     if (mutation.isSuccess) {

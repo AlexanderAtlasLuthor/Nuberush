@@ -49,15 +49,19 @@ export function UpdateThresholdModal({
   const [thresholdStr, setThresholdStr] = useState("");
 
   const mutation = useUpdateInventoryThresholdMutation();
+  // `reset` is referentially stable (TanStack Query v5); destructure it so
+  // the effect depends on the stable callback rather than the whole mutation
+  // object (whose identity changes across isPending/isSuccess transitions).
+  const { reset } = mutation;
 
   // Reset form + mutation on every (re)open. The current threshold is
   // pre-filled from the item so the user has context to edit from.
   useEffect(() => {
     if (open) {
       setThresholdStr(String(item.reorder_threshold));
-      mutation.reset();
+      reset();
     }
-  }, [open, item.reorder_threshold, mutation.reset]);
+  }, [open, item.reorder_threshold, reset]);
 
   // Auto-close on success. Cache invalidation already runs inside the
   // mutation's onSuccess; we only own the dialog state here.

@@ -50,15 +50,19 @@ export function CancelOrderModal({
   const [reason, setReason] = useState("");
 
   const mutation = useCancelOrderMutation();
+  // `reset` is referentially stable (TanStack Query v5); destructure it so
+  // the effect depends on the stable callback rather than the whole mutation
+  // object (whose identity changes across isPending/isSuccess transitions).
+  const { reset } = mutation;
 
   // Reset form + mutation on every (re)open so a relaunched dialog
   // (different order, retry after error) starts clean.
   useEffect(() => {
     if (open) {
       setReason("");
-      mutation.reset();
+      reset();
     }
-  }, [open, mutation.reset]);
+  }, [open, reset]);
 
   // Auto-close on success. Cache invalidation runs inside the
   // mutation's onSuccess (F2.7.0); this component only owns dialog

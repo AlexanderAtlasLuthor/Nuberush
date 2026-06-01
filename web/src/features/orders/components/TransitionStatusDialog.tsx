@@ -54,15 +54,19 @@ export function TransitionStatusDialog({
   targetStatus,
 }: TransitionStatusDialogProps) {
   const mutation = useTransitionOrderStatusMutation();
+  // `reset` is referentially stable (TanStack Query v5); destructure it so
+  // the effect depends on the stable callback rather than the whole mutation
+  // object (whose identity changes across isPending/isSuccess transitions).
+  const { reset } = mutation;
 
   // Reset on every (re)open so a relaunched dialog (different target,
   // retry after error) starts clean. Without this, last session's
   // error message bleeds across opens.
   useEffect(() => {
     if (open) {
-      mutation.reset();
+      reset();
     }
-  }, [open, mutation.reset]);
+  }, [open, reset]);
 
   // Auto-close on success. Cache invalidation is handled by the
   // mutation's onSuccess (F2.7.0); this component only owns dialog

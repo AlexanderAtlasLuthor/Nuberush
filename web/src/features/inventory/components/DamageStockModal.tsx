@@ -51,6 +51,10 @@ export function DamageStockModal({
   const [reason, setReason] = useState("");
 
   const mutation = useDamageStockMutation();
+  // `reset` is referentially stable (TanStack Query v5); destructure it so
+  // the effect depends on the stable callback rather than the whole mutation
+  // object (whose identity changes across isPending/isSuccess transitions).
+  const { reset } = mutation;
 
   // Reset form + mutation on every (re)open so a relaunched dialog
   // (different row, retry after error) starts clean.
@@ -58,9 +62,9 @@ export function DamageStockModal({
     if (open) {
       setQuantityStr("");
       setReason("");
-      mutation.reset();
+      reset();
     }
-  }, [open, mutation.reset]);
+  }, [open, reset]);
 
   // Auto-close on success. Cache invalidation already runs inside the
   // mutation's onSuccess; we only own the dialog state here.
