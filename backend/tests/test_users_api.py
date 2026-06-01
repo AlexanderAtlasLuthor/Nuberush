@@ -934,7 +934,15 @@ class TestRoleChangeRoute:
     ):
         admin = make_user(role=UserRole.admin)
         store = make_store(code="api-rol-toa")
-        target = make_user(role=UserRole.owner, store_id=store.id)
+        # Promotion target must carry a @nuberush.com address: the C5 admin
+        # domain guard (ensure_admin_email_allowed) rejects promoting any
+        # other domain to admin. The default make_user email is
+        # owner-<hex>@example.com, so set a valid admin-domain email here.
+        target = make_user(
+            role=UserRole.owner,
+            email="future-admin@nuberush.com",
+            store_id=store.id,
+        )
         resp = client.patch(
             f"/auth/users/{target.id}/role",
             headers=_auth(admin),

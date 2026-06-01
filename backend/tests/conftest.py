@@ -70,6 +70,34 @@ def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in SETTINGS_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
 
+    # Stripping the process env above is NOT enough on its own: every settings
+    # class sets `model_config = SettingsConfigDict(env_file=ENV_FILE)`, so
+    # pydantic-settings re-reads backend/.env from disk on each instantiation
+    # and the dev Supabase/DB config leaks straight back in (a populated
+    # SUPABASE_URL derives an issuer, which makes verify_supabase_jwt require
+    # an `iss` claim the bare test tokens don't carry -> 401 "Invalid token").
+    #
+    # Neutralize the file source for the duration of each test so settings
+    # reflect the process env ONLY (the contract the suite already assumes).
+    # Each concrete class carries its OWN merged model_config dict, so patch
+    # all three, not just CommonSettings. monkeypatch.setitem auto-reverts on
+    # teardown, leaving production behavior untouched. Tests that genuinely
+    # need Supabase config opt in via monkeypatch.setenv(...).
+    from app.core import config
+
+    for settings_cls in (
+        config.AppSettings,
+        config.DatabaseSettings,
+        config.SupabaseAuthSettings,
+    ):
+        monkeypatch.setitem(settings_cls.model_config, "env_file", None)
+
+    # Drop any value cached from a prior (file-backed) instantiation so the
+    # next call rebuilds from the now file-free source.
+    config.get_app_settings.cache_clear()
+    config.get_db_settings.cache_clear()
+    config.get_supabase_auth_settings.cache_clear()
+
 
 @pytest.fixture(autouse=True)
 def _supabase_jwt_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
