@@ -23,6 +23,7 @@ web/.next/
 web/coverage/
 web/vite-*.log
 web/vite-*.err.log
+web/*.tsbuildinfo
 
 # Python
 __pycache__/
