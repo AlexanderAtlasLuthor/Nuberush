@@ -16,7 +16,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 import { EarningsHeroCard } from "../components/EarningsHeroCard";
-import { MoneyTile, formatUsd } from "../components/MoneyTile";
+import { MoneyTile } from "../components/MoneyTile";
+import { formatUsd } from "../components/format";
 import { useAdminEarningsQuery } from "../hooks";
 
 function PageHeader() {

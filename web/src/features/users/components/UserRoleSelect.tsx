@@ -27,24 +27,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { UserRole } from "../types";
+import {
+  VISIBLE_USER_ROLE_OPTIONS,
+  type CreatableUserRole,
+} from "./userRoleOptions";
 
-/**
- * Subset of `UserRole` the create-form picker exposes. Narrower than
- * the wire enum because `admin` is filtered out (see file header).
- */
-export type CreatableUserRole = "owner" | "manager" | "staff" | "driver";
-
-interface RoleOption {
-  readonly value: CreatableUserRole;
-  readonly label: string;
-}
-
-export const VISIBLE_USER_ROLE_OPTIONS: ReadonlyArray<RoleOption> = [
-  { value: "owner", label: "Owner" },
-  { value: "manager", label: "Manager" },
-  { value: "staff", label: "Staff" },
-  { value: "driver", label: "Driver" },
-];
+// Re-export the picker's role type so existing `@/.../UserRoleSelect`
+// import sites keep working. Type-only, so it does not re-trigger the
+// Fast Refresh component-only rule.
+export type { CreatableUserRole };
 
 export interface UserRoleSelectProps {
   /**

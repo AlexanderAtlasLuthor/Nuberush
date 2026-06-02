@@ -7,7 +7,8 @@ import { Link } from "react-router-dom";
 
 import { useAdminEarningsQuery } from "../hooks";
 import { EarningsHeroCard } from "./EarningsHeroCard";
-import { MoneyTile, formatUsd } from "./MoneyTile";
+import { MoneyTile } from "./MoneyTile";
+import { formatUsd } from "./format";
 
 export function AdminEarningsWidget() {
   const query = useAdminEarningsQuery();

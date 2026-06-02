@@ -22,12 +22,11 @@
 // Recompute trigger: useMemo on user.role + user.store_id only. No
 // effects, no async work.
 
-import { createContext, useMemo } from "react";
+import { useMemo } from "react";
 import type { ReactNode } from "react";
 import { useAuth } from "./useAuth";
+import { StoreContext } from "./storeContext";
 import type { StoreContextState } from "./store-context.types";
-
-export const StoreContext = createContext<StoreContextState | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();

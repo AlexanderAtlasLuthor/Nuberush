@@ -4,14 +4,16 @@
 // individual files; this keeps the public surface in one place and lets
 // internals change without ripple edits.
 
-export { AuthProvider, AuthContext } from "./AuthProvider";
-export type { AuthContextValue } from "./AuthProvider";
+export { AuthProvider } from "./AuthProvider";
+export { AuthContext } from "./auth-context";
+export type { AuthContextValue } from "./auth-context";
 
 export { useAuth } from "./useAuth";
 
 export { ProtectedRoute } from "./ProtectedRoute";
 
-export { StoreProvider, StoreContext } from "./StoreProvider";
+export { StoreProvider } from "./StoreProvider";
+export { StoreContext } from "./storeContext";
 export { useStoreContext } from "./useStoreContext";
 export { StoreGate } from "./StoreGate";
 

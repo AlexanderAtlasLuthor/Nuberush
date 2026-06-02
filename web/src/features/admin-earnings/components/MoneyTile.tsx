@@ -8,6 +8,8 @@ import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
+import { formatUsd } from "./format";
+
 export type MoneyTileVariant = "hero" | "satellite";
 
 export interface MoneyTileProps {
@@ -20,18 +22,6 @@ export interface MoneyTileProps {
   "data-testid"?: string;
 }
 
-function formatUsd(value: string): string {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return value;
-  }
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(parsed);
-}
 
 function TileBody({
   title,
@@ -124,4 +114,3 @@ export function MoneyTile(props: MoneyTileProps) {
   );
 }
 
-export { formatUsd };

@@ -8,10 +8,8 @@ import { useStoreContext } from "@/auth";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EarningsHeroCard } from "@/features/admin-earnings/components/EarningsHeroCard";
-import {
-  MoneyTile,
-  formatUsd,
-} from "@/features/admin-earnings/components/MoneyTile";
+import { MoneyTile } from "@/features/admin-earnings/components/MoneyTile";
+import { formatUsd } from "@/features/admin-earnings/components/format";
 
 import { useStoreEarningsQuery } from "../hooks";
 

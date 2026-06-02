@@ -6,8 +6,8 @@
 // keeps the stack trace pointed at the misuse.
 
 import { useContext } from "react";
-import { AuthContext } from "./AuthProvider";
-import type { AuthContextValue } from "./AuthProvider";
+import { AuthContext } from "./auth-context";
+import type { AuthContextValue } from "./auth-context";
 
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);

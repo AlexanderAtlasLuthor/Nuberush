@@ -9,7 +9,7 @@ import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
-import { formatUsd } from "./MoneyTile";
+import { formatUsd } from "./format";
 
 export interface CompositionSegment {
   label: string;

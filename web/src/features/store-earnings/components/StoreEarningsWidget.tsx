@@ -7,10 +7,8 @@ import { Link } from "react-router-dom";
 
 import { useStoreContext } from "@/auth";
 import { EarningsHeroCard } from "@/features/admin-earnings/components/EarningsHeroCard";
-import {
-  MoneyTile,
-  formatUsd,
-} from "@/features/admin-earnings/components/MoneyTile";
+import { MoneyTile } from "@/features/admin-earnings/components/MoneyTile";
+import { formatUsd } from "@/features/admin-earnings/components/format";
 
 import { useStoreEarningsQuery } from "../hooks";
 

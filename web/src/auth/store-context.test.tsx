@@ -25,7 +25,7 @@ import type { ReactNode } from "react";
 import { StoreProvider } from "./StoreProvider";
 import { useStoreContext } from "./useStoreContext";
 import { StoreGate } from "./StoreGate";
-import type { AuthContextValue } from "./AuthProvider";
+import type { AuthContextValue } from "./auth-context";
 import type { AuthUser } from "./types";
 
 // Single mockable export. The default returns "no user, not loading".

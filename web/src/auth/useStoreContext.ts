@@ -6,7 +6,7 @@
 // keeps the stack pointed at the misuse.
 
 import { useContext } from "react";
-import { StoreContext } from "./StoreProvider";
+import { StoreContext } from "./storeContext";
 import type { StoreContextState } from "./store-context.types";
 
 export function useStoreContext(): StoreContextState {

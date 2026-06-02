@@ -27,7 +27,6 @@
 //     SIGNED_OUT clears the user.
 
 import {
-  createContext,
   useCallback,
   useEffect,
   useMemo,
@@ -37,18 +36,9 @@ import {
 import type { ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
 import * as authApi from "./auth.api";
-import type { AuthUser, LoginCredentials } from "./types";
-
-export interface AuthContextValue {
-  user: AuthUser | null;
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  login: (credentials: LoginCredentials) => Promise<AuthUser>;
-  logout: () => void;
-  refreshSession: () => Promise<void>;
-}
-
-export const AuthContext = createContext<AuthContextValue | null>(null);
+import { AuthContext } from "./auth-context";
+import type { AuthContextValue } from "./auth-context";
+import type { AuthUser } from "./types";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
