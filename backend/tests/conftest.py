@@ -17,6 +17,7 @@ SETTINGS_ENV_VARS = (
     "APP_NAME",
     "APP_ENV",
     "APP_DEBUG",
+    "APP_PUBLIC_BASE_URL",
     "BACKEND_CORS_ORIGINS",
     "DATABASE_URL",
     # F2.22.2.D: strip Supabase auth vars so SupabaseAuthSettings falls
@@ -157,8 +158,12 @@ class _FakeSupabaseAdmin:
     def __init__(self) -> None:
         self.created: list[dict] = []  # email / password / user_metadata / id
         self.deleted: list[uuid.UUID] = []  # auth_user_ids passed to delete
+        # F2.25.4: owner password-setup ("recover") email calls — each row is
+        # exactly {email, redirect_to}; no token, no password is ever recorded.
+        self.password_setup_emails: list[dict] = []
         self.create_should_fail = False
         self.delete_should_fail = False
+        self.password_setup_should_fail = False
         self.next_auth_user_id: uuid.UUID | None = None  # pin the returned id
 
     def create_auth_user(
@@ -186,6 +191,19 @@ class _FakeSupabaseAdmin:
         if self.delete_should_fail:
             raise SupabaseAdminError("simulated Supabase delete failure")
 
+    def send_password_setup_email(
+        self, email: str, *, redirect_to: str
+    ) -> None:
+        from app.services.supabase_admin import SupabaseAdminError
+
+        if self.password_setup_should_fail:
+            raise SupabaseAdminError(
+                "simulated Supabase password setup failure"
+            )
+        self.password_setup_emails.append(
+            {"email": email, "redirect_to": redirect_to}
+        )
+
 
 @pytest.fixture(autouse=True)
 def supabase_admin_fake(monkeypatch: pytest.MonkeyPatch) -> _FakeSupabaseAdmin:
@@ -207,6 +225,11 @@ def supabase_admin_fake(monkeypatch: pytest.MonkeyPatch) -> _FakeSupabaseAdmin:
     )
     monkeypatch.setattr(
         supabase_admin, "delete_auth_user", fake.delete_auth_user
+    )
+    monkeypatch.setattr(
+        supabase_admin,
+        "send_password_setup_email",
+        fake.send_password_setup_email,
     )
     return fake
 

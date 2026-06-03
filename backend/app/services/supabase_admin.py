@@ -145,3 +145,49 @@ def delete_auth_user(auth_user_id: uuid.UUID) -> None:
             "Supabase Admin API returned status "
             f"{response.status_code} on user delete"
         )
+
+
+_RECOVER_PATH = "/auth/v1/recover"
+
+
+def send_password_setup_email(email: str, *, redirect_to: str) -> None:
+    """Trigger a Supabase-sent password setup / recovery email (F2.25.4).
+
+    The owner's `auth.users` record already exists (created at approval with
+    a strong random password that is never exposed). This asks Supabase Auth
+    to email the owner a recovery/set-password link that lands back at
+    `redirect_to` (the frontend `/auth/callback`), where the owner sets their
+    own password via `supabase.auth.updateUser`.
+
+    Supabase Auth owns the token and SENDS the email. FastAPI never sees the
+    recovery token, never generates a custom token, and never sends a
+    plaintext password. The recovery token is NOT returned from this call.
+
+    Like the rest of this module, the service-role key is server-only and
+    never logged; errors carry at most an HTTP status code — never the key,
+    the response body, or any token.
+
+    Raises `SupabaseAdminError` on transport error or non-2xx response. The
+    caller is responsible for swallowing it post-commit so a committed
+    approval is never undone by a notification problem.
+    """
+    base, key = _require_admin_config()
+    try:
+        response = httpx.post(
+            f"{base}{_RECOVER_PATH}",
+            headers=_admin_headers(key),
+            json={"email": email},
+            params={"redirect_to": redirect_to},
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        # Bare message: never echo the key, the redirect URL, or any token.
+        raise SupabaseAdminError(
+            "Supabase Auth request failed during password setup email"
+        ) from exc
+
+    if response.status_code not in (200, 201, 204):
+        raise SupabaseAdminError(
+            "Supabase Auth returned status "
+            f"{response.status_code} on password setup email"
+        )

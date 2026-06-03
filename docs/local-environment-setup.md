@@ -527,3 +527,37 @@ docker stop nuberush-pg
 That's the full loop. If steps 1–4 succeed you can validate any
 phase locally and your Claude won't need to fall back to "the
 sandbox is the only place that works."
+
+## F2.25.4 Owner activation / set password
+
+F2.25.4 lets an approved store owner set their own password through
+Supabase Auth. On approval the owner's Supabase `auth.users` record is
+already created (with a random password that is never exposed); the
+backend then asks Supabase Auth to email the owner a set-password link
+that lands at the frontend `/auth/callback` route.
+
+### Backend env var
+
+- Set `APP_PUBLIC_BASE_URL=http://localhost:5173` for local development
+  (it is the public frontend origin, **not** a secret). In production set
+  it to the real frontend origin, e.g.
+  `https://your-production-domain.com`. The backend builds the redirect as
+  `{APP_PUBLIC_BASE_URL}/auth/callback`.
+- If `APP_PUBLIC_BASE_URL` is left blank (the default), the backend skips
+  the owner-activation email trigger entirely, so local/dev/test stay
+  offline.
+
+### Supabase dashboard step
+
+- Add `http://localhost:5173/auth/callback` to **Authentication → URL
+  Configuration → Redirect URLs** for local development.
+- Add the production equivalent
+  (`https://your-production-domain.com/auth/callback`) in production.
+- Without the redirect URL on the allowlist, Supabase rejects the link.
+
+### Notes
+
+- The frontend `/auth/callback` and `/auth/set-password` routes are
+  implemented in the later frontend part of F2.25.4.
+- No service-role key belongs in the frontend env — the anon key remains
+  the only Supabase credential the frontend holds.

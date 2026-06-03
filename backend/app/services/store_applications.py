@@ -37,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_app_settings
 from app.core.config import get_email_settings
 from app.db.models import Store
 from app.db.models import StoreApplication
@@ -451,6 +452,51 @@ def _notify_application_approved(
     )
 
 
+def _notify_owner_activation(application: StoreApplication) -> None:
+    """Trigger a Supabase-sent owner password-setup email (F2.25.4).
+
+    Called only AFTER the approval transaction has committed and the row
+    refreshed. The owner's Supabase `auth.users` record already exists (made
+    at approval with a never-exposed random password); this asks Supabase
+    Auth to email the owner a set-password/recovery link back to the
+    frontend `/auth/callback`, where the owner chooses their own password.
+    Supabase owns the token and sends the email — FastAPI never sees the
+    token and never sends a plaintext password.
+
+    Safe-by-default and non-blocking: when `APP_PUBLIC_BASE_URL` is blank
+    (the default, e.g. dev/test) the trigger is skipped entirely. Any
+    failure is logged (secret-free) and SWALLOWED — a committed approval
+    must never become a 5xx, and the activation email is never allowed to
+    roll back the store/owner/application provisioning above it.
+    """
+    base_url = get_app_settings().app_public_base_url.strip().rstrip("/")
+    if not base_url:
+        logger.info(
+            "APP_PUBLIC_BASE_URL not configured; skipping owner activation "
+            "email for application %s.",
+            application.id,
+        )
+        return
+
+    redirect_to = f"{base_url}/auth/callback"
+    try:
+        supabase_admin.send_password_setup_email(
+            application.owner_email, redirect_to=redirect_to
+        )
+    except SupabaseAdminError:
+        logger.exception(
+            "Supabase password-setup email failed for application %s; the "
+            "approval was committed and is unaffected.",
+            application.id,
+        )
+    except Exception:  # noqa: BLE001 — activation must not undo the commit
+        logger.exception(
+            "Unexpected failure sending owner activation email for "
+            "application %s; the approval was committed and is unaffected.",
+            application.id,
+        )
+
+
 def _rollback_auth_user(auth_user_id: UUID) -> None:
     """Best-effort delete of a Supabase auth user after a failed DB commit.
 
@@ -673,4 +719,5 @@ def approve_store_application(
 
     db.refresh(application)
     _notify_application_approved(db, application)
+    _notify_owner_activation(application)
     return application

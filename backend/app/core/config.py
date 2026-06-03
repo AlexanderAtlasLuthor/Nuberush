@@ -24,6 +24,12 @@ class AppSettings(CommonSettings):
     app_name: str = "NubeRush API"
     app_env: str = DEVELOPMENT_ENV
     app_debug: bool = True
+    # Public frontend origin used to build Supabase auth redirect URLs
+    # (e.g. owner activation / set-password → {base}/auth/callback). NOT a
+    # secret. Blank by default: when blank, the owner-activation email
+    # trigger is skipped safely, so dev/test stay offline. The app starts
+    # fine without it set.
+    app_public_base_url: str = ""
     # NoDecode keeps pydantic-settings from JSON-parsing this env var so the
     # field_validator below sees the raw CSV string we actually receive.
     backend_cors_origins: Annotated[list[str], NoDecode] = [
