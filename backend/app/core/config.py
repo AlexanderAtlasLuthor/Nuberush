@@ -94,6 +94,29 @@ class SupabaseAuthSettings(CommonSettings):
         return self
 
 
+class EmailSettings(CommonSettings):
+    """Real business-email delivery config (F2.25.1 — config only).
+
+    F2.25.1 prepares the server-only delivery contract for the existing
+    business-email seam (`app.services.email_sender`); it does NOT wire a
+    provider or send anything. Resend is the selected provider for F2.25,
+    but no SDK or package is added — a later subphase (F2.25.2) implements
+    the real sender. Until then the seam stays log-only.
+
+    All fields default to safe/empty so the app imports and starts without
+    email configured, and `email_enabled` defaults False so local, dev, and
+    test stay log-only/offline. `resend_api_key` is a SERVER-ONLY SECRET:
+    it lives on the backend only, is never exposed to the frontend, and is
+    never logged.
+    """
+
+    email_enabled: bool = False
+    email_provider: str = "resend"
+    email_from_address: str = ""
+    email_from_name: str = "NubeRush"
+    resend_api_key: str = ""
+
+
 @lru_cache
 def get_app_settings() -> AppSettings:
     return AppSettings()
@@ -107,3 +130,8 @@ def get_db_settings() -> DatabaseSettings:
 @lru_cache
 def get_supabase_auth_settings() -> SupabaseAuthSettings:
     return SupabaseAuthSettings()
+
+
+@lru_cache
+def get_email_settings() -> EmailSettings:
+    return EmailSettings()

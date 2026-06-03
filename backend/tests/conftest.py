@@ -28,6 +28,15 @@ SETTINGS_ENV_VARS = (
     "SUPABASE_JWT_AUDIENCE",
     "SUPABASE_JWT_ISSUER",
     "SUPABASE_SERVICE_ROLE_KEY",
+    # F2.25.1: strip email-delivery vars so EmailSettings falls back to its
+    # safe defaults (disabled, no key) and a developer's populated
+    # backend/.env can never leak real email config — least of all a real
+    # RESEND_API_KEY or EMAIL_ENABLED=true — into the offline test suite.
+    "EMAIL_ENABLED",
+    "EMAIL_PROVIDER",
+    "EMAIL_FROM_ADDRESS",
+    "EMAIL_FROM_NAME",
+    "RESEND_API_KEY",
 )
 
 
@@ -89,6 +98,7 @@ def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
         config.AppSettings,
         config.DatabaseSettings,
         config.SupabaseAuthSettings,
+        config.EmailSettings,
     ):
         monkeypatch.setitem(settings_cls.model_config, "env_file", None)
 
@@ -97,6 +107,7 @@ def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     config.get_app_settings.cache_clear()
     config.get_db_settings.cache_clear()
     config.get_supabase_auth_settings.cache_clear()
+    config.get_email_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
