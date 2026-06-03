@@ -93,23 +93,26 @@ class _LoggingEmailSender:
         )
 
 
-# Module-level default sender. Kept private and dispatched through
-# `send_business_email` so the rest of the app depends on the function seam,
-# not on a concrete sender class.
-_default_sender: EmailSender = _LoggingEmailSender()
-
-
 def send_business_email(message: BusinessEmailMessage) -> None:
-    """Send a business email through the configured (mock) sender.
+    """Send a business email through the configured sender.
 
     The single entry point `store_applications` calls from its post-commit
-    notification seams. In C8 this logs via `_LoggingEmailSender`. Any
-    transport failure surfaces as `EmailSenderError`; the caller is
-    responsible for swallowing it so a committed DB change is never undone
-    by a notification problem.
+    notification seams. The concrete sender is resolved per call by
+    `build_email_sender` (F2.25.2): with email delivery disabled or
+    unconfigured it is `_LoggingEmailSender` (the log-only behavior); with
+    delivery enabled and configured it is the real transport. The seam
+    stays provider-agnostic — the concrete transport and its config live
+    only in the separate provider module. Any transport failure surfaces
+    as `EmailSenderError`; the caller is responsible for swallowing it so a
+    committed DB change is never undone by a notification problem.
     """
+    # Imported inside the function so the provider module (which imports
+    # names from this module) does not create an import cycle at load time.
+    from app.services.email_provider import build_email_sender
+
     try:
-        _default_sender.send(message)
+        sender = build_email_sender()
+        sender.send(message)
     except EmailSenderError:
         # Already the right type — let the caller's handler log + swallow.
         raise
