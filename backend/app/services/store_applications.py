@@ -25,6 +25,7 @@ import secrets
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from typing import Literal
 from uuid import UUID
 from uuid import uuid4
 
@@ -36,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_email_settings
 from app.db.models import Store
 from app.db.models import StoreApplication
 from app.db.models import StoreApplicationAuditLog
@@ -49,6 +51,8 @@ from app.schemas.store_applications import StoreApplicationRejectRequest
 from app.schemas.store_applications import StoreApplicationSubmitRequest
 from app.services import email_templates
 from app.services import supabase_admin
+from app.services.email_sender import BusinessEmailEvent
+from app.services.email_sender import BusinessEmailMessage
 from app.services.email_sender import EmailSenderError
 from app.services.email_sender import send_business_email
 from app.services.supabase_admin import SupabaseAdminError
@@ -77,31 +81,140 @@ def _duplicate_conflict() -> HTTPException:
     )
 
 
-def _notify_application_submitted(application: StoreApplication) -> None:
-    """Send the `store_application_submitted` mock business email (F2.24.C8).
+def _write_email_triggered_audit(
+    db: Session,
+    *,
+    application_id: UUID,
+    event: BusinessEmailEvent,
+    status: Literal["sent", "failed"],
+    provider: str,
+    recipient: str,
+    error_type: str | None = None,
+) -> None:
+    """Persist one `email_triggered` audit row (F2.25.3).
 
-    Called only AFTER the intake transaction has committed and the row has
-    been refreshed. Builds the branded plain-text message and hands it to
-    the mock/log sender. A sender failure is logged and SWALLOWED — a
-    committed application must still return its 201, so this seam never
-    re-raises.
+    Post-commit, isolated, non-blocking: this owns its own transaction on
+    the already-clean session and is called only AFTER the business
+    transaction has committed. The payload is deliberately secret- and
+    body-free — it records the business event, the configured provider, the
+    sent/failed outcome and (on failure) the exception CLASS name only. It
+    never carries the message body, subject, exception message, provider
+    response, Authorization header, or RESEND_API_KEY.
+
+    Any failure writing the audit is rolled back, logged (secret-free) and
+    SWALLOWED — a committed submit/approve/reject must never become a 5xx
+    because its audit row could not be written.
     """
+    payload: dict[str, object | None] = {
+        "event": event,
+        "provider": provider,
+        "status": status,
+        "provider_message_id": None,
+        "source": "business_email",
+        "recipient": recipient,
+    }
+    if status == "failed" and error_type is not None:
+        payload["error_type"] = error_type
+
     try:
-        send_business_email(email_templates.build_submitted_email(application))
+        audit = StoreApplicationAuditLog(
+            application_id=application_id,
+            event_type="email_triggered",
+            actor_user_id=None,  # system-triggered side-effect, not a user action
+            message=(
+                f"Business email '{event}' send attempt recorded: {status}."
+            ),
+            payload=payload,
+        )
+        db.add(audit)
+        db.commit()
+    except Exception:  # noqa: BLE001 — audit must never undo the business commit
+        db.rollback()
+        logger.exception(
+            "Failed to write email_triggered audit for application %s "
+            "(event=%s, status=%s); the business change was committed and "
+            "is unaffected.",
+            application_id,
+            event,
+            status,
+        )
+
+
+def _send_business_email_and_audit(
+    db: Session,
+    *,
+    application_id: UUID,
+    message: BusinessEmailMessage,
+) -> None:
+    """Send a business email post-commit, then record an audit row.
+
+    Called only AFTER the business transaction has committed and the row
+    refreshed. The send failure is logged and SWALLOWED (a committed
+    submit/approve/reject must still return its success response), and the
+    outcome — sent or failed — is recorded via `_write_email_triggered_audit`
+    in its own isolated, non-blocking transaction.
+
+    `application_id` and the recipient are captured as primitives before any
+    audit commit so the audit write does not depend on the (now re-expirable)
+    ORM application instance.
+    """
+    event = message.event_type
+    recipient = message.to_email
+    provider = get_email_settings().email_provider
+
+    status: Literal["sent", "failed"] = "sent"
+    error_type: str | None = None
+
+    try:
+        send_business_email(message)
     except EmailSenderError:
+        status = "failed"
+        error_type = "EmailSenderError"
         logger.exception(
-            "Mock sender failed for store_application_submitted email "
-            "(application %s); the application was committed and is "
-            "unaffected.",
-            application.id,
+            "Sender failed for %s email; the business change was committed "
+            "and is unaffected.",
+            event,
         )
-    except Exception:  # noqa: BLE001 — any failure must not undo the commit
+    except Exception as exc:  # noqa: BLE001 — any failure must not undo commit
+        status = "failed"
+        error_type = type(exc).__name__
         logger.exception(
-            "Unexpected failure sending store_application_submitted email "
-            "(application %s); the application was committed and is "
-            "unaffected.",
-            application.id,
+            "Unexpected failure sending %s email; the business change was "
+            "committed and is unaffected.",
+            event,
         )
+
+    # Outer guard in addition to the helper's own swallow: even a catastrophic
+    # failure of the audit path (or a replaced helper) must never turn a
+    # committed submit/approve/reject into a 5xx.
+    try:
+        _write_email_triggered_audit(
+            db,
+            application_id=application_id,
+            event=event,
+            status=status,
+            provider=provider,
+            recipient=recipient,
+            error_type=error_type,
+        )
+    except Exception:  # noqa: BLE001 — audit must never undo the business commit
+        logger.exception(
+            "email_triggered audit path failed for application %s (event=%s); "
+            "the business change was committed and is unaffected.",
+            application_id,
+            event,
+        )
+
+
+def _notify_application_submitted(
+    db: Session, application: StoreApplication
+) -> None:
+    """Send the `store_application_submitted` email + audit (F2.25.3)."""
+    _send_business_email_and_audit(
+        db,
+        application_id=application.id,
+        message=email_templates.build_submitted_email(application),
+    )
 
 
 def create_store_application(
@@ -175,7 +288,7 @@ def create_store_application(
 
     db.refresh(application)
 
-    _notify_application_submitted(application)
+    _notify_application_submitted(db, application)
 
     return application
 
@@ -194,29 +307,15 @@ def _assert_admin(actor: User) -> None:
         )
 
 
-def _notify_application_rejected(application: StoreApplication) -> None:
-    """Send the `store_application_rejected` mock business email (F2.24.C8).
-
-    Called only AFTER the rejection has committed and the row refreshed.
-    Failures are logged and swallowed so a committed rejection still returns
-    its 200; this seam never re-raises.
-    """
-    try:
-        send_business_email(email_templates.build_rejected_email(application))
-    except EmailSenderError:
-        logger.exception(
-            "Mock sender failed for store_application_rejected email "
-            "(application %s); the rejection was committed and is "
-            "unaffected.",
-            application.id,
-        )
-    except Exception:  # noqa: BLE001 — any failure must not undo the commit
-        logger.exception(
-            "Unexpected failure sending store_application_rejected email "
-            "(application %s); the rejection was committed and is "
-            "unaffected.",
-            application.id,
-        )
+def _notify_application_rejected(
+    db: Session, application: StoreApplication
+) -> None:
+    """Send the `store_application_rejected` email + audit (F2.25.3)."""
+    _send_business_email_and_audit(
+        db,
+        application_id=application.id,
+        message=email_templates.build_rejected_email(application),
+    )
 
 
 def list_store_applications(
@@ -331,34 +430,25 @@ def reject_store_application(
         ) from exc
 
     db.refresh(application)
-    _notify_application_rejected(application)
+    _notify_application_rejected(db, application)
     return application
 
 
-def _notify_application_approved(application: StoreApplication) -> None:
-    """Send the `store_application_approved` mock business email (F2.24.C8).
+def _notify_application_approved(
+    db: Session, application: StoreApplication
+) -> None:
+    """Send the `store_application_approved` email + audit (F2.25.3).
 
     Called only AFTER the approval transaction has committed (store + owner
-    provisioned) and the row refreshed. Failures are logged and swallowed so
-    a committed approval still returns its 200; this seam never re-raises and
-    never touches the provisioning/auth-cleanup paths above it.
+    provisioned) and the row refreshed. Send + audit failures are swallowed
+    so a committed approval still returns its 200; this seam never re-raises
+    and never touches the provisioning/auth-cleanup paths above it.
     """
-    try:
-        send_business_email(email_templates.build_approved_email(application))
-    except EmailSenderError:
-        logger.exception(
-            "Mock sender failed for store_application_approved email "
-            "(application %s); the approval was committed and is "
-            "unaffected.",
-            application.id,
-        )
-    except Exception:  # noqa: BLE001 — any failure must not undo the commit
-        logger.exception(
-            "Unexpected failure sending store_application_approved email "
-            "(application %s); the approval was committed and is "
-            "unaffected.",
-            application.id,
-        )
+    _send_business_email_and_audit(
+        db,
+        application_id=application.id,
+        message=email_templates.build_approved_email(application),
+    )
 
 
 def _rollback_auth_user(auth_user_id: UUID) -> None:
@@ -582,5 +672,5 @@ def approve_store_application(
         ) from exc
 
     db.refresh(application)
-    _notify_application_approved(application)
+    _notify_application_approved(db, application)
     return application

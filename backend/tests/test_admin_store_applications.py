@@ -490,9 +490,15 @@ def test_approve_writes_three_audit_logs_in_order(
     resp = client.post(f"{_LIST}/{app_row.id}/approve", headers=_auth(admin))
     assert resp.status_code == 200, resp.text
 
+    # F2.25.3: the approval also writes a post-commit `email_triggered` audit
+    # row (actor=None); exclude it so this test keeps asserting only the three
+    # in-transaction provisioning audit events and their admin actor.
     logs = db_session.scalars(
         select(StoreApplicationAuditLog)
-        .where(StoreApplicationAuditLog.application_id == app_row.id)
+        .where(
+            StoreApplicationAuditLog.application_id == app_row.id,
+            StoreApplicationAuditLog.event_type != "email_triggered",
+        )
         .order_by(
             StoreApplicationAuditLog.created_at,
             StoreApplicationAuditLog.id,

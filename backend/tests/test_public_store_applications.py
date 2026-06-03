@@ -115,9 +115,12 @@ def test_submit_creates_application_created_audit_log(
     assert resp.status_code == 201, resp.text
     application = _only_application(db_session)
 
+    # F2.25.3: a post-commit `email_triggered` audit row is also written for
+    # the submitted email; filter to the business-event row this test owns.
     logs = db_session.scalars(
         select(StoreApplicationAuditLog).where(
-            StoreApplicationAuditLog.application_id == application.id
+            StoreApplicationAuditLog.application_id == application.id,
+            StoreApplicationAuditLog.event_type == "application_created",
         )
     ).all()
     assert len(logs) == 1
