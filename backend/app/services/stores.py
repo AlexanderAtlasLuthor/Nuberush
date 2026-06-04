@@ -60,9 +60,28 @@ from app.schemas.stores import StoreCreate
 from app.schemas.stores import StoreListResponse
 from app.schemas.stores import StoreRead
 from app.schemas.stores import StoreUpdate
+from app.services.operational_audit import write_operational_audit_log
 
 
 _MAX_LIST_LIMIT = 100
+
+
+def build_store_audit_snapshot(store: Store) -> dict[str, object]:
+    """Small, stable, allow-listed snapshot of a store for the operational
+    audit trail (F2.26.1.D).
+
+    Only the real `Store` columns the operational-audit allow-list permits
+    for a `store` target (`name`, `code`, `is_active`, `timezone`). No
+    invented fields (slug/status/address/phone do not exist on the model),
+    and no secrets — stores carry none. All values are JSON-safe scalars;
+    the writer re-applies the allow-list + redaction as defense-in-depth.
+    """
+    return {
+        "name": store.name,
+        "code": store.code,
+        "is_active": store.is_active,
+        "timezone": store.timezone,
+    }
 
 
 def _assert_admin_caller(actor: User) -> None:
@@ -102,6 +121,8 @@ def update_store(
     db: Session,
     store_id: UUID,
     payload: StoreUpdate,
+    *,
+    actor: User,
 ) -> Store:
     """Apply a partial update to a store profile.
 
@@ -110,11 +131,30 @@ def update_store(
     to `name` and `timezone`; this function does not enforce that
     list itself, so any future schema change must remain consistent
     with the F2.14 contract.
+
+    F2.26.1.D: `actor` is now required so the mutation can leave an
+    operational audit event (`store_updated`) in the SAME transaction
+    as the field change. The route already resolves the caller via
+    `require_owner_or_admin` and threads it here.
     """
     store = get_store(db, store_id)
+    before = build_store_audit_snapshot(store)
     changes = payload.model_dump(exclude_unset=True)
     for field, value in changes.items():
         setattr(store, field, value)
+
+    write_operational_audit_log(
+        db,
+        actor_user_id=actor.id,
+        target_type="store",
+        target_id=store.id,
+        action="store_updated",
+        store_id=store.id,
+        before=before,
+        after=build_store_audit_snapshot(store),
+        metadata={"source": "stores.update_store"},
+    )
+
     try:
         db.commit()
     except IntegrityError as exc:
@@ -215,6 +255,23 @@ def create_store(
     )
     db.add(store)
     try:
+        # Flush first so the server-generated id is populated and any
+        # duplicate-code violation surfaces here. The operational audit
+        # row is then appended to the SAME transaction as the store
+        # insert: one commit persists both, and any failure rolls back
+        # both, so a rolled-back create never leaves an audit row.
+        db.flush()
+        write_operational_audit_log(
+            db,
+            actor_user_id=actor.id,
+            target_type="store",
+            target_id=store.id,
+            action="store_created",
+            store_id=store.id,
+            before=None,
+            after=build_store_audit_snapshot(store),
+            metadata={"source": "stores.create_store"},
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -246,7 +303,21 @@ def deactivate_store(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Store is already inactive.",
         )
+    before = build_store_audit_snapshot(store)
     store.is_active = False
+
+    write_operational_audit_log(
+        db,
+        actor_user_id=actor.id,
+        target_type="store",
+        target_id=store.id,
+        action="store_deactivated",
+        store_id=store.id,
+        before=before,
+        after=build_store_audit_snapshot(store),
+        metadata={"source": "stores.deactivate_store"},
+    )
+
     try:
         db.commit()
     except IntegrityError as exc:
@@ -277,7 +348,21 @@ def reactivate_store(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Store is already active.",
         )
+    before = build_store_audit_snapshot(store)
     store.is_active = True
+
+    write_operational_audit_log(
+        db,
+        actor_user_id=actor.id,
+        target_type="store",
+        target_id=store.id,
+        action="store_activated",
+        store_id=store.id,
+        before=before,
+        after=build_store_audit_snapshot(store),
+        metadata={"source": "stores.reactivate_store"},
+    )
+
     try:
         db.commit()
     except IntegrityError as exc:

@@ -20,7 +20,9 @@ from app.db.session import get_db
 from app.schemas.auth import CreateUserRequest
 from app.schemas.auth import UserRead
 from app.services import supabase_admin
+from app.services.operational_audit import write_operational_audit_log
 from app.services.supabase_admin import SupabaseAdminError
+from app.services.users import build_user_audit_snapshot
 
 
 logger = logging.getLogger(__name__)
@@ -161,6 +163,24 @@ def create_user(
     )
     db.add(new_user)
     try:
+        # Flush first so the server-generated id is populated and any
+        # unique-constraint race (email / auth_user_id) surfaces here.
+        # The operational audit row is then appended to the SAME
+        # transaction as the user insert: a single commit persists both,
+        # and any failure rolls back both (plus the Supabase cleanup
+        # below), so a rolled-back create never leaves an audit row.
+        db.flush()
+        write_operational_audit_log(
+            db,
+            actor_user_id=current_user.id,
+            target_type="user",
+            target_id=new_user.id,
+            action="user_created",
+            store_id=new_user.store_id,
+            before=None,
+            after=build_user_audit_snapshot(new_user),
+            metadata={"source": "auth.create_user"},
+        )
         db.commit()
     except Exception as exc:
         # public.users insert failed after the auth.users row was created

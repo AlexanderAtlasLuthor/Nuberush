@@ -57,6 +57,28 @@ from app.db.models import UserRole
 from app.schemas.users import UserRoleChangeRequest
 from app.schemas.users import UserStoreAssignmentRequest
 from app.schemas.users import UserUpdateRequest
+from app.services.operational_audit import write_operational_audit_log
+
+
+def build_user_audit_snapshot(user: User) -> dict[str, object]:
+    """Small, stable, allow-listed snapshot of a user for the operational
+    audit trail (F2.26.1.C).
+
+    Only the fields the operational-audit allow-list already permits for a
+    `user` target (`role`, `store_id`, `is_active`, `full_name`, `phone`).
+    `email` and `auth_user_id` are intentionally excluded (PII / identity
+    bridge), and no password/token/secret is ever read here. `role` is
+    reduced to its string value and `store_id` to a string so the dict is
+    JSON-safe and stable; the writer re-applies the allow-list + redaction
+    as defense-in-depth.
+    """
+    return {
+        "role": user.role.value,
+        "store_id": str(user.store_id) if user.store_id is not None else None,
+        "is_active": user.is_active,
+        "full_name": user.full_name,
+        "phone": user.phone,
+    }
 
 
 # Roles allowed to access the user-management surface. staff and
@@ -270,9 +292,22 @@ def update_user(
     target = _get_user_for_management_or_forbidden(db, user_id, actor=actor)
     assert_can_modify_user(actor, target)
 
+    before = build_user_audit_snapshot(target)
     changes = payload.model_dump(exclude_unset=True)
     for field, value in changes.items():
         setattr(target, field, value)
+
+    write_operational_audit_log(
+        db,
+        actor_user_id=actor.id,
+        target_type="user",
+        target_id=target.id,
+        action="user_updated",
+        store_id=target.store_id,
+        before=before,
+        after=build_user_audit_snapshot(target),
+        metadata={"source": "users.update_user"},
+    )
 
     _commit_or_translate(
         db, detail="User update violates database constraints."
@@ -293,7 +328,21 @@ def deactivate_user(
     target = _get_user_for_management_or_forbidden(db, user_id, actor=actor)
     assert_can_deactivate_user(db, actor, target)
 
+    before = build_user_audit_snapshot(target)
     target.is_active = False
+
+    write_operational_audit_log(
+        db,
+        actor_user_id=actor.id,
+        target_type="user",
+        target_id=target.id,
+        action="user_deactivated",
+        store_id=target.store_id,
+        before=before,
+        after=build_user_audit_snapshot(target),
+        metadata={"source": "users.deactivate_user"},
+    )
+
     _commit_or_translate(
         db, detail="User deactivation violates database constraints."
     )
@@ -313,7 +362,21 @@ def reactivate_user(
     # with the canonical message; admins skip the check by design.
     assert_user_store_invariant(target.role, target.store_id)
 
+    before = build_user_audit_snapshot(target)
     target.is_active = True
+
+    write_operational_audit_log(
+        db,
+        actor_user_id=actor.id,
+        target_type="user",
+        target_id=target.id,
+        action="user_activated",
+        store_id=target.store_id,
+        before=before,
+        after=build_user_audit_snapshot(target),
+        metadata={"source": "users.reactivate_user"},
+    )
+
     _commit_or_translate(
         db, detail="User reactivation violates database constraints."
     )
@@ -345,6 +408,8 @@ def change_user_role(
     new_role = payload.role
     assert_can_change_user_role(actor, target, new_role)
 
+    before = build_user_audit_snapshot(target)
+
     # Cross-field invariant: admins are global, non-admins are
     # store-bound. Promoting to admin clears store_id; demoting from
     # admin requires the target to already have a store assigned
@@ -363,6 +428,21 @@ def change_user_role(
             )
 
     target.role = new_role
+
+    # store_id semantics (F2.26.1.C): use the FINAL store binding —
+    # NULL when the user is now admin/global, the store when store-bound.
+    write_operational_audit_log(
+        db,
+        actor_user_id=actor.id,
+        target_type="user",
+        target_id=target.id,
+        action="user_role_changed",
+        store_id=target.store_id,
+        before=before,
+        after=build_user_audit_snapshot(target),
+        metadata={"source": "users.change_user_role"},
+    )
+
     _commit_or_translate(
         db, detail="User role change violates database constraints."
     )
@@ -391,6 +471,9 @@ def assign_user_store(
     _assert_admin_caller(actor)
     target = _get_user_or_404(db, user_id)
 
+    before = build_user_audit_snapshot(target)
+    previous_store_id = target.store_id
+
     if target.role == UserRole.admin:
         if payload.store_id is not None:
             raise HTTPException(
@@ -411,6 +494,28 @@ def assign_user_store(
         # same whether the call comes from /users or /stores.
         assert_active_store_for_assignment(db, payload.store_id)
         target.store_id = payload.store_id
+
+    # store_id semantics (F2.26.1.C): an assignment scopes the event to the
+    # store the user now belongs to; a removal scopes it to the store the
+    # user was removed FROM (the new binding is NULL/global).
+    if target.store_id is None:
+        action = "user_store_removed"
+        event_store_id = previous_store_id
+    else:
+        action = "user_store_assigned"
+        event_store_id = target.store_id
+
+    write_operational_audit_log(
+        db,
+        actor_user_id=actor.id,
+        target_type="user",
+        target_id=target.id,
+        action=action,
+        store_id=event_store_id,
+        before=before,
+        after=build_user_audit_snapshot(target),
+        metadata={"source": "users.assign_user_store"},
+    )
 
     _commit_or_translate(
         db, detail="Store assignment violates database constraints."

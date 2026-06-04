@@ -150,13 +150,15 @@ def test_get_store_raises_404_for_unknown_store(db_session: Session) -> None:
 
 
 def test_update_store_updates_name(
-    db_session: Session, make_store: Callable[..., Store]
+    db_session: Session,
+    make_store: Callable[..., Store],
+    admin_user: User,
 ) -> None:
     store = make_store(name="Old Name", timezone="America/New_York")
     original_timezone = store.timezone
 
     updated = svc.update_store(
-        db_session, store.id, StoreUpdate(name="New Name")
+        db_session, store.id, StoreUpdate(name="New Name"), actor=admin_user
     )
 
     assert updated.name == "New Name"
@@ -164,13 +166,18 @@ def test_update_store_updates_name(
 
 
 def test_update_store_updates_timezone(
-    db_session: Session, make_store: Callable[..., Store]
+    db_session: Session,
+    make_store: Callable[..., Store],
+    admin_user: User,
 ) -> None:
     store = make_store(name="Stable Name", timezone="America/New_York")
     original_name = store.name
 
     updated = svc.update_store(
-        db_session, store.id, StoreUpdate(timezone="America/Chicago")
+        db_session,
+        store.id,
+        StoreUpdate(timezone="America/Chicago"),
+        actor=admin_user,
     )
 
     assert updated.timezone == "America/Chicago"
@@ -178,7 +185,9 @@ def test_update_store_updates_timezone(
 
 
 def test_update_store_updates_name_and_timezone(
-    db_session: Session, make_store: Callable[..., Store]
+    db_session: Session,
+    make_store: Callable[..., Store],
+    admin_user: User,
 ) -> None:
     store = make_store(name="Old Name", timezone="America/New_York")
 
@@ -186,6 +195,7 @@ def test_update_store_updates_name_and_timezone(
         db_session,
         store.id,
         StoreUpdate(name="Both Updated", timezone="America/Chicago"),
+        actor=admin_user,
     )
 
     assert updated.name == "Both Updated"
@@ -193,7 +203,9 @@ def test_update_store_updates_name_and_timezone(
 
 
 def test_update_store_allows_empty_payload_without_changing_fields(
-    db_session: Session, make_store: Callable[..., Store]
+    db_session: Session,
+    make_store: Callable[..., Store],
+    admin_user: User,
 ) -> None:
     store = make_store(name="Untouched", timezone="America/New_York")
     original_name = store.name
@@ -201,7 +213,9 @@ def test_update_store_allows_empty_payload_without_changing_fields(
     original_code = store.code
     original_is_active = store.is_active
 
-    updated = svc.update_store(db_session, store.id, StoreUpdate())
+    updated = svc.update_store(
+        db_session, store.id, StoreUpdate(), actor=admin_user
+    )
 
     assert updated.name == original_name
     assert updated.timezone == original_timezone
@@ -215,7 +229,9 @@ def test_update_store_allows_empty_payload_without_changing_fields(
 
 
 def test_update_store_does_not_change_code(
-    db_session: Session, make_store: Callable[..., Store]
+    db_session: Session,
+    make_store: Callable[..., Store],
+    admin_user: User,
 ) -> None:
     store = make_store()
     original_code = store.code
@@ -224,13 +240,16 @@ def test_update_store_does_not_change_code(
         db_session,
         store.id,
         StoreUpdate(name="Anything", timezone="America/Chicago"),
+        actor=admin_user,
     )
 
     assert updated.code == original_code
 
 
 def test_update_store_does_not_change_is_active(
-    db_session: Session, make_store: Callable[..., Store]
+    db_session: Session,
+    make_store: Callable[..., Store],
+    admin_user: User,
 ) -> None:
     store = make_store(is_active=True)
     original_is_active = store.is_active
@@ -239,6 +258,7 @@ def test_update_store_does_not_change_is_active(
         db_session,
         store.id,
         StoreUpdate(name="Anything", timezone="America/Chicago"),
+        actor=admin_user,
     )
 
     assert updated.is_active is original_is_active
@@ -250,7 +270,9 @@ def test_update_store_does_not_change_is_active(
 
 
 def test_update_store_persists_changes(
-    db_session: Session, make_store: Callable[..., Store]
+    db_session: Session,
+    make_store: Callable[..., Store],
+    admin_user: User,
 ) -> None:
     store = make_store(name="Before", timezone="America/New_York")
     target_id = store.id
@@ -259,6 +281,7 @@ def test_update_store_persists_changes(
         db_session,
         target_id,
         StoreUpdate(name="After", timezone="America/Chicago"),
+        actor=admin_user,
     )
 
     # Drop the in-session identity-map copy and re-read from the DB
@@ -272,10 +295,14 @@ def test_update_store_persists_changes(
 
 def test_update_store_raises_404_for_unknown_store(
     db_session: Session,
+    admin_user: User,
 ) -> None:
     with pytest.raises(HTTPException) as exc_info:
         svc.update_store(
-            db_session, uuid.uuid4(), StoreUpdate(name="Whatever")
+            db_session,
+            uuid.uuid4(),
+            StoreUpdate(name="Whatever"),
+            actor=admin_user,
         )
 
     assert exc_info.value.status_code == 404

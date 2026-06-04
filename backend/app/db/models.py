@@ -1026,3 +1026,92 @@ class StoreApplicationAuditLog(Base):
         back_populates="audit_logs"
     )
     actor_user: Mapped[User | None] = relationship()
+
+
+class OperationalAuditLog(Base):
+    """Append-only operational audit trail (F2.26.1.A — storage only).
+
+    This is the persistent foundation for operational events — user
+    management (create / update / role change / store assign-remove /
+    activate-deactivate) and store lifecycle (create / update / activate /
+    deactivate), with later phases extending it to settings and regulatory
+    decisions. See docs/f2.26-web-app-mvp-closure-contract.md §6.
+
+    F2.26.1.A creates the table and model ONLY. No service writes rows yet,
+    the unified audit feed (`app.services.audit`) does not read it, and no
+    `AuditSource` / `AuditEntityType` value references it. Those land in
+    F2.26.1.B (write seams) and F2.26.2 (feed integration).
+
+    Mirrors the existing per-domain append-only audit tables
+    (`order_audit_logs`, `product_compliance_audit_logs`,
+    `store_application_audit_logs`): a nullable actor FK with ON DELETE SET
+    NULL, an append-only `created_at`, and no `updated_at`.
+
+    `target_type` and `action` are `varchar`, NOT PostgreSQL enums — the
+    same choice as `OrderAuditLog.action` and
+    `StoreApplicationAuditLog.event_type`. New event kinds therefore never
+    require an `ALTER TYPE ... ADD VALUE` migration; the closed verb set is
+    enforced in the (future) service layer, not the DB.
+
+    `store_id` is nullable by design: store-scoped events carry their store;
+    global (admin-wide) events leave it NULL. The visibility rule that keeps
+    NULL-store events admin-only is the unified-feed integration's job in a
+    later subphase, not this one.
+
+    The JSONB attribute is named `event_metadata` (not `metadata`) because
+    SQLAlchemy reserves `Base.metadata`; the database column is still named
+    `metadata` via the explicit column-name argument.
+    """
+
+    __tablename__ = "operational_audit_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "target_type <> ''",
+            name="ck_operational_audit_logs_target_type_non_empty",
+        ),
+        CheckConstraint(
+            "action <> ''",
+            name="ck_operational_audit_logs_action_non_empty",
+        ),
+        Index("ix_operational_audit_logs_created_at", "created_at"),
+        Index("ix_operational_audit_logs_store_id", "store_id"),
+        Index(
+            "ix_operational_audit_logs_actor_user_id",
+            "actor_user_id",
+        ),
+        Index(
+            "ix_operational_audit_logs_target",
+            "target_type",
+            "target_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
+    target_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    store_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="SET NULL"),
+    )
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Column name is "metadata"; the attribute is renamed to avoid the
+    # reserved `Base.metadata`.
+    event_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSONB
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    actor_user: Mapped[User | None] = relationship()
+    store: Mapped[Store | None] = relationship()

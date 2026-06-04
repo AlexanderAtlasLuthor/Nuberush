@@ -135,7 +135,7 @@ def update_store_endpoint(
     current_user=Depends(require_owner_or_admin),
     db: Session = Depends(get_db),
 ) -> Store:
-    return svc.update_store(db, store_id, payload)
+    return svc.update_store(db, store_id, payload, actor=current_user)
 
 
 # --------------------------------------------------------------------- #
