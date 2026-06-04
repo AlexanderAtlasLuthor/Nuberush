@@ -70,10 +70,47 @@ class BusinessEmailMessage:
     body: str
 
 
+# The closed set of NOTIFICATION email events (F2.25.7). Deliberately a
+# SEPARATE Literal from `BusinessEmailEvent`: notification emails and
+# business (store-application lifecycle) emails are conceptually distinct
+# and must not bleed into each other's vocabulary. Adding a notification
+# event here never grows `BusinessEmailEvent`, and vice versa.
+NotificationEmailEvent = Literal[
+    "store_low_stock_digest_requested",
+    "admin_operations_alert_digest_requested",
+    "store_onboarding_reminder_requested",
+]
+
+
+@dataclass(frozen=True)
+class NotificationEmailMessage:
+    """An immutable, transport-agnostic notification email (F2.25.7).
+
+    Built by `app.services.notification_email_templates` from primitive,
+    caller-supplied values and handed to `send_notification_email`.
+    Structurally identical to `BusinessEmailMessage` so the same transport
+    can deliver it, but carries the disjoint `NotificationEmailEvent` set.
+    No internal IDs, tokens, or provider details.
+    """
+
+    event_type: NotificationEmailEvent
+    to_email: str
+    subject: str
+    body: str
+
+
+# Any message an `EmailSender` transport can deliver. Both variants are
+# structurally identical (event_type/to_email/subject/body); the union
+# keeps the seam type-honest now that two disjoint event vocabularies share
+# one transport. Runtime behavior is unchanged — the transports read only
+# the common fields.
+OutboundEmailMessage = BusinessEmailMessage | NotificationEmailMessage
+
+
 class EmailSender(Protocol):
     """The seam a future real-provider transport will implement."""
 
-    def send(self, message: BusinessEmailMessage) -> None: ...
+    def send(self, message: OutboundEmailMessage) -> None: ...
 
 
 class _LoggingEmailSender:
@@ -83,11 +120,14 @@ class _LoggingEmailSender:
     (the destination) at INFO; the subject is included as it is non-PII
     branded boilerplate. The body — which may restate applicant-provided
     context — is intentionally NOT logged to avoid an accidental PII sink.
+
+    Delivers both business and notification messages — they share the
+    fields this logs (F2.25.7).
     """
 
-    def send(self, message: BusinessEmailMessage) -> None:
+    def send(self, message: OutboundEmailMessage) -> None:
         logger.info(
-            "Mock business email triggered: event=%s to=%s subject=%r",
+            "Mock email triggered: event=%s to=%s subject=%r",
             message.event_type,
             message.to_email,
             message.subject,
