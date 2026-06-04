@@ -195,6 +195,16 @@ const AuthScreen = () => {
               ) : 'Sign In'}
             </Button>
 
+            {/* F2.25.5: user-initiated password recovery. */}
+            <p className="mt-4 text-center text-sm text-white/56">
+              <Link
+                to="/auth/forgot-password"
+                className="font-semibold text-primary transition-colors hover:text-primary/85"
+              >
+                Forgot password?
+              </Link>
+            </p>
+
             {/* Onboarding: store owners don't self-register — they apply,
                 get reviewed, and the team provisions the account. Route
                 the "sign up" affordance to the public /apply wizard. */}

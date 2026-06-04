@@ -3,6 +3,7 @@ import type { RouteObject } from "react-router-dom";
 import AuthScreen from "@/pages/AuthScreen";
 import AuthCallbackPage from "@/pages/AuthCallbackPage";
 import SetPasswordPage from "@/pages/SetPasswordPage";
+import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 import { ProtectedRoute, StoreGate } from "@/auth";
 import DashboardHomePage from "@/features/dashboard/pages/DashboardHomePage";
 import OrdersPage from "@/features/orders/pages/OrdersPage";
@@ -94,6 +95,10 @@ export const appRoutes: RouteObject[] = [
   {
     path: "/auth/set-password",
     element: <SetPasswordPage />,
+  },
+  {
+    path: "/auth/forgot-password",
+    element: <ForgotPasswordPage />,
   },
   {
     path: "/app",

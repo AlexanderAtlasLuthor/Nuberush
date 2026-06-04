@@ -64,6 +64,10 @@ vi.mock("@/pages/SetPasswordPage", () => ({
   default: () => <div>Set password page</div>,
 }));
 
+vi.mock("@/pages/ForgotPasswordPage", () => ({
+  default: () => <div>Forgot password page</div>,
+}));
+
 // F2.22.5.E: stub the Realtime invalidation bridge so the router
 // test renders AppShell without needing a QueryClientProvider in
 // scope. The bridge's real (hook-firing) behavior is covered by
@@ -732,6 +736,17 @@ describe("public auth-link routes", () => {
     expect(await screen.findByText("Set password page")).toBeInTheDocument();
     expect(screen.getByTestId("location-path").textContent).toBe(
       "/auth/set-password",
+    );
+  });
+
+  it("/auth/forgot-password is public and renders without redirecting to /login", async () => {
+    renderRoute("/auth/forgot-password", null);
+
+    expect(
+      await screen.findByText("Forgot password page"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("location-path").textContent).toBe(
+      "/auth/forgot-password",
     );
   });
 });
