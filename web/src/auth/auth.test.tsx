@@ -243,6 +243,37 @@ describe("AuthProvider logout", () => {
   });
 });
 
+// --- AuthProvider recovery / update events (F2.25.4) ----------------------
+
+describe("AuthProvider session-establishing events", () => {
+  it.each(["USER_UPDATED", "PASSWORD_RECOVERY"])(
+    "loads the user from /auth/me on a %s event with a session",
+    async (event) => {
+      // Start logged out (no persisted session at bootstrap).
+      apiRequestMock.mockResolvedValue(TEST_USER);
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await act(async () => {});
+      expect(result.current.user).toBeNull();
+
+      // The event the Supabase client fires after a recovery link is
+      // consumed (PASSWORD_RECOVERY) or a password is set (USER_UPDATED).
+      // The provider defers getMe via setTimeout(0); flush it.
+      await act(async () => {
+        authChangeCb?.(event, FAKE_SESSION);
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      expect(apiRequestMock).toHaveBeenCalledWith(
+        "/auth/me",
+        expect.objectContaining({ method: "GET" }),
+      );
+      expect(result.current.user).toEqual(TEST_USER);
+      expect(result.current.isAuthenticated).toBe(true);
+    },
+  );
+});
+
 // --- ProtectedRoute ------------------------------------------------------
 
 describe("ProtectedRoute", () => {

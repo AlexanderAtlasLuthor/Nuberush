@@ -97,7 +97,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
         return;
       }
-      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+      if (
+        event === "SIGNED_IN" ||
+        event === "TOKEN_REFRESHED" ||
+        // F2.25.4: USER_UPDATED fires after an owner sets their password via
+        // supabase.auth.updateUser; PASSWORD_RECOVERY fires when a recovery
+        // link establishes a session. Both carry a valid session, so resolve
+        // the app user the same way as a sign-in.
+        event === "USER_UPDATED" ||
+        event === "PASSWORD_RECOVERY"
+      ) {
         // Defer out of the auth callback: calling Supabase APIs
         // (getMe → apiRequest → getSession) re-entrantly inside the
         // listener can deadlock the client's internal lock.

@@ -39,12 +39,14 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 // Single shared client. `persistSession` + `autoRefreshToken` keep the
 // session alive across reloads so the app no longer loses auth on a
-// hard refresh. `detectSessionInUrl` is off: NubeRush uses
-// password sign-in, not OAuth redirect callbacks.
+// hard refresh. `detectSessionInUrl` is on (F2.25.4) so Supabase auth
+// links — owner activation / password setup that land on /auth/callback —
+// are consumed automatically. It only acts when the URL carries auth
+// params, so password sign-in (no URL params) is unaffected.
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: false,
+    detectSessionInUrl: true,
   },
 });

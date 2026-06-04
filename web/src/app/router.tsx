@@ -1,6 +1,8 @@
 import { createBrowserRouter } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import AuthScreen from "@/pages/AuthScreen";
+import AuthCallbackPage from "@/pages/AuthCallbackPage";
+import SetPasswordPage from "@/pages/SetPasswordPage";
 import { ProtectedRoute, StoreGate } from "@/auth";
 import DashboardHomePage from "@/features/dashboard/pages/DashboardHomePage";
 import OrdersPage from "@/features/orders/pages/OrdersPage";
@@ -82,6 +84,16 @@ export const appRoutes: RouteObject[] = [
   {
     path: "/login",
     element: <AuthScreen />,
+  },
+  // F2.25.4: public Supabase auth-link routes. Owners land here from the
+  // password setup / recovery email; they are NOT behind ProtectedRoute.
+  {
+    path: "/auth/callback",
+    element: <AuthCallbackPage />,
+  },
+  {
+    path: "/auth/set-password",
+    element: <SetPasswordPage />,
   },
   {
     path: "/app",

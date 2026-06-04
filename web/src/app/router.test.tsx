@@ -53,6 +53,17 @@ vi.mock("@/pages/AuthScreen", () => ({
   default: () => <div>Login page</div>,
 }));
 
+// F2.25.4: stub the Supabase auth-link pages so routing tests stay offline
+// (the real pages call supabase.auth on mount). Routing only needs to prove
+// these paths resolve as PUBLIC routes.
+vi.mock("@/pages/AuthCallbackPage", () => ({
+  default: () => <div>Auth callback page</div>,
+}));
+
+vi.mock("@/pages/SetPasswordPage", () => ({
+  default: () => <div>Set password page</div>,
+}));
+
 // F2.22.5.E: stub the Realtime invalidation bridge so the router
 // test renders AppShell without needing a QueryClientProvider in
 // scope. The bridge's real (hook-firing) behavior is covered by
@@ -699,5 +710,28 @@ describe("app route split", () => {
     expect(await screen.findByText("Products page")).toBeInTheDocument();
     expectSidebarLink("Products", "/app/store/products");
     expectNoSidebarLinks(/^\/app\/admin/);
+  });
+});
+
+// F2.25.4: the Supabase auth-link routes are PUBLIC — reachable without an
+// authenticated user and never bounced to /login. (/app protection itself is
+// covered by the ProtectedRoute redirect test in `web/src/auth/auth.test.tsx`.)
+describe("public auth-link routes", () => {
+  it("/auth/callback is public and renders without redirecting to /login", async () => {
+    renderRoute("/auth/callback", null);
+
+    expect(await screen.findByText("Auth callback page")).toBeInTheDocument();
+    expect(screen.getByTestId("location-path").textContent).toBe(
+      "/auth/callback",
+    );
+  });
+
+  it("/auth/set-password is public and renders without redirecting to /login", async () => {
+    renderRoute("/auth/set-password", null);
+
+    expect(await screen.findByText("Set password page")).toBeInTheDocument();
+    expect(screen.getByTestId("location-path").textContent).toBe(
+      "/auth/set-password",
+    );
   });
 });
