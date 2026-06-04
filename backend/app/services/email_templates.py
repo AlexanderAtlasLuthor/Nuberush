@@ -115,3 +115,35 @@ def build_rejected_email(application: _ApplicationLike) -> BusinessEmailMessage:
         subject=f"Your {_BRAND} store application was not approved",
         body=body,
     )
+
+
+def build_onboarding_email(
+    application: _ApplicationLike, *, onboarding_url: str
+) -> BusinessEmailMessage:
+    """`store_onboarding` — welcome + setup checklist (F2.25.6).
+
+    A tokenless business email. The onboarding link is passed in by the
+    caller (composed from APP_PUBLIC_BASE_URL) so this builder stays pure —
+    no config/env access, no secrets. It carries NO auth token, password,
+    or Supabase recovery link; it only points the owner at the in-app
+    onboarding landing page where the setup steps live.
+    """
+    body = (
+        f"{_greeting(application)}\n\n"
+        f"Welcome to {_BRAND}! Your store \"{application.business_name}\" "
+        "is approved and ready to set up.\n\n"
+        "Get started with these steps:\n"
+        "  - Complete your store profile\n"
+        "  - Add your first products\n"
+        "  - Set your inventory thresholds\n"
+        "  - Review your orders dashboard\n"
+        "  - Contact NubeRush support if you need a hand\n\n"
+        f"Open your getting-started checklist here:\n{onboarding_url}\n\n"
+        f"{_SIGNOFF}"
+    )
+    return BusinessEmailMessage(
+        event_type="store_onboarding",
+        to_email=application.owner_email,
+        subject=f"Start setting up your {_BRAND} store",
+        body=body,
+    )

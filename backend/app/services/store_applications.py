@@ -497,6 +497,40 @@ def _notify_owner_activation(application: StoreApplication) -> None:
         )
 
 
+def _notify_store_onboarding(
+    db: Session, application: StoreApplication
+) -> None:
+    """Send the tokenless store-onboarding business email (F2.25.6).
+
+    Called post-commit after approval. Points the owner at the in-app
+    onboarding landing page (`/app/store/onboarding`); carries no auth
+    token. Routes through `_send_business_email_and_audit`, so it sends via
+    `send_business_email`, records an `email_triggered` audit row, and
+    swallows any failure — a committed approval is never rolled back.
+
+    Safe-by-default: when `APP_PUBLIC_BASE_URL` is blank (the default, e.g.
+    dev/test) the onboarding email is skipped entirely. The onboarding route
+    itself always exists; only the email is gated.
+    """
+    base_url = get_app_settings().app_public_base_url.strip().rstrip("/")
+    if not base_url:
+        logger.info(
+            "APP_PUBLIC_BASE_URL not configured; skipping store onboarding "
+            "email for application %s.",
+            application.id,
+        )
+        return
+
+    onboarding_url = f"{base_url}/app/store/onboarding"
+    _send_business_email_and_audit(
+        db,
+        application_id=application.id,
+        message=email_templates.build_onboarding_email(
+            application, onboarding_url=onboarding_url
+        ),
+    )
+
+
 def _rollback_auth_user(auth_user_id: UUID) -> None:
     """Best-effort delete of a Supabase auth user after a failed DB commit.
 
@@ -720,4 +754,5 @@ def approve_store_application(
     db.refresh(application)
     _notify_application_approved(db, application)
     _notify_owner_activation(application)
+    _notify_store_onboarding(db, application)
     return application

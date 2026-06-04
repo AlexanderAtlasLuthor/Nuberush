@@ -130,6 +130,10 @@ vi.mock("@/features/store/pages/StoreSettingsPage", () => ({
   default: () => <div>Store settings page</div>,
 }));
 
+vi.mock("@/features/store-onboarding/pages/StoreOnboardingPage", () => ({
+  default: () => <div>Store onboarding page</div>,
+}));
+
 vi.mock("@/features/stores/pages/AdminStoresPage", () => ({
   default: () => <div>Admin stores page</div>,
 }));
@@ -678,6 +682,7 @@ describe("app route split", () => {
 
   it.each([
     ["/app/store", "Store dashboard page"],
+    ["/app/store/onboarding", "Store onboarding page"],
     ["/app/store/products", "Products page"],
     ["/app/store/products/product-1", "Product detail page"],
     ["/app/store/inventory", "Inventory page"],

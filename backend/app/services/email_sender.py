@@ -41,6 +41,7 @@ BusinessEmailEvent = Literal[
     "store_application_submitted",
     "store_application_approved",
     "store_application_rejected",
+    "store_onboarding",
 ]
 
 

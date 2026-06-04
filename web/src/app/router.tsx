@@ -4,6 +4,7 @@ import AuthScreen from "@/pages/AuthScreen";
 import AuthCallbackPage from "@/pages/AuthCallbackPage";
 import SetPasswordPage from "@/pages/SetPasswordPage";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
+import StoreOnboardingPage from "@/features/store-onboarding/pages/StoreOnboardingPage";
 import { ProtectedRoute, StoreGate } from "@/auth";
 import DashboardHomePage from "@/features/dashboard/pages/DashboardHomePage";
 import OrdersPage from "@/features/orders/pages/OrdersPage";
@@ -204,6 +205,7 @@ export const appRoutes: RouteObject[] = [
             element: <StoreShell />,
             children: [
               { index: true, element: <DashboardHomePage /> },
+              { path: "onboarding", element: <StoreOnboardingPage /> },
               { path: "products", element: <ProductsPage /> },
               {
                 path: "products/:productId",
