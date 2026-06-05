@@ -27,6 +27,7 @@ import type { Product } from "../types";
 import { ProductApprovalBadge } from "./ProductApprovalBadge";
 import { ProductComplianceBadge } from "./ProductComplianceBadge";
 import { ProductStatusBadge } from "./ProductStatusBadge";
+import { ProductThumbnail } from "./ProductThumbnail";
 
 interface ProductsTableProps {
   products: Product[];
@@ -38,6 +39,7 @@ export function ProductsTable({ products }: ProductsTableProps) {
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="w-16">Image</TableHead>
             <TableHead>Name</TableHead>
             <TableHead>Brand</TableHead>
             <TableHead>Category</TableHead>
@@ -53,6 +55,13 @@ export function ProductsTable({ products }: ProductsTableProps) {
         <TableBody>
           {products.map((product) => (
             <TableRow key={product.id} data-testid="products-row">
+              <TableCell data-testid="products-row-thumbnail">
+                <ProductThumbnail
+                  primaryImage={product.primary_image}
+                  productName={product.name}
+                  size="sm"
+                />
+              </TableCell>
               <TableCell className="font-medium">{product.name}</TableCell>
               <TableCell className="text-sm text-muted-foreground">
                 {product.brand ?? "—"}

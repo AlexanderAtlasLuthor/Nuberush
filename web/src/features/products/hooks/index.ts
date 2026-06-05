@@ -31,6 +31,7 @@ export {
   MAX_IMAGE_SIZE_BYTES,
   PRODUCT_IMAGES_BUCKET,
 } from "./useProductImageUpload";
+export { useDeleteProductImage } from "./useDeleteProductImage";
 
 export {
   productsKeys,

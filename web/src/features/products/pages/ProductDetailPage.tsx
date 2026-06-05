@@ -39,6 +39,7 @@ import { ProductActionsBar } from "../components/ProductActionsBar";
 import { ProductCompliancePanel } from "../components/ProductCompliancePanel";
 import { ProductComplianceAuditPanel } from "../components/ProductComplianceAuditPanel";
 import { ProductDetailHeader } from "../components/ProductDetailHeader";
+import { ProductThumbnail } from "../components/ProductThumbnail";
 import { ProductVariantsTable } from "../components/ProductVariantsTable";
 import { useProductQuery } from "../hooks";
 
@@ -131,6 +132,19 @@ export default function ProductDetailPage() {
     <div className="p-6 md:p-8 space-y-6 max-w-7xl">
       <PageHeader productId={productId} />
       <ProductDetailHeader product={product} />
+      {/* Read-only primary image. Store users cannot manage product
+          images (admin-only write); this surface is display only — no
+          upload, change, or delete controls. */}
+      <section className="space-y-2" data-testid="store-product-image">
+        <h2 className="text-sm font-medium text-muted-foreground">
+          Product image
+        </h2>
+        <ProductThumbnail
+          primaryImage={product.primary_image}
+          productName={product.name}
+          size="lg"
+        />
+      </section>
       <ProductActionsBar product={product} />
       <ProductCompliancePanel product={product} />
       <ProductVariantsTable productId={product.id} />

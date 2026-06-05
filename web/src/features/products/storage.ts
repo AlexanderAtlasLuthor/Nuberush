@@ -28,6 +28,7 @@ import { apiRequest } from "@/api";
 import { supabase } from "@/lib/supabase";
 
 import type {
+  Product,
   ProductImage,
   ProductImageConfirmRequest,
   ProductImageUploadUrlRequest,
@@ -166,4 +167,31 @@ export function confirmProductImageUpload(
     body: params.body,
     signal,
   });
+}
+
+// --------------------------------------------------------------------- //
+// 4. Clear the primary image (F2.26.3.A backend lifecycle).
+// --------------------------------------------------------------------- //
+
+export interface DeleteProductImageParams {
+  productId: string;
+}
+
+/**
+ * `DELETE /products/{product_id}/images`.
+ *
+ * Admin-only on the backend. Clears the product's primary image — both
+ * the `public.product_images` metadata row and the storage object — and
+ * returns the updated `Product` with `primary_image === null`.
+ *
+ * Idempotent backend-side: clearing a product that has no image is a
+ * success (200 with `primary_image: null`), not a 404. There is no
+ * request body; the backend re-derives everything from the product id.
+ */
+export function deleteProductImage(
+  params: DeleteProductImageParams,
+  signal?: AbortSignal,
+): Promise<Product> {
+  const path = `/products/${encodeURIComponent(params.productId)}/images`;
+  return apiRequest<Product>(path, { method: "DELETE", signal });
 }

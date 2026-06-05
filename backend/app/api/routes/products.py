@@ -315,6 +315,35 @@ def confirm_product_image(
     )
 
 
+@router.delete(
+    "/{product_id}/images",
+    response_model=ProductRead,
+)
+def delete_product_image(
+    product_id: UUID,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Product:
+    """Clear a product's primary image. Admin-only.
+
+    Idempotent: clearing a product that has no image returns it
+    unchanged (`primary_image: null`) with 200 rather than 404. The
+    metadata row is removed and the storage object cleaned up in the
+    same operation; if the storage cleanup fails the whole operation is
+    rolled back and a controlled 502 is returned, keeping the metadata
+    row and the storage object in sync.
+    """
+    try:
+        return storage_svc.delete_product_image(db, product_id)
+    except SupabaseStorageError as exc:
+        # Coarse 502 — the underlying Supabase failure stays in the
+        # exception chain (server logs), not the response body.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Upstream storage service unavailable.",
+        ) from exc
+
+
 @router.get(
     "/{product_id}/compliance-audit",
     response_model=list[ProductComplianceAuditLogRead],

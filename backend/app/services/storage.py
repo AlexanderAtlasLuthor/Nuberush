@@ -257,6 +257,46 @@ def _request_signed_upload_url(
     return f"{base}/storage/v1{relative_url}"
 
 
+def _request_object_delete(bucket: str, object_key: str) -> None:
+    """Delete a single object from Supabase Storage.
+
+    Mirrors :func:`_request_signed_upload_url`: uses the server-side
+    service-role key and raises :class:`SupabaseStorageError` on
+    transport failure or an unexpected non-2xx status. The exception
+    message never echoes the service-role key, the request URL, or the
+    response body.
+
+    Supabase Storage endpoint:
+      DELETE {SUPABASE_URL}/storage/v1/object/{bucket}/{object_key}
+
+    A ``404`` (object already absent) is treated as success: the
+    caller's intent — that the object no longer exist — is already
+    satisfied, and failing on it would needlessly block metadata
+    cleanup for an orphaned key.
+    """
+    base, key = _require_storage_config()
+    endpoint = f"{base}/storage/v1/object/{bucket}/{object_key}"
+    try:
+        response = httpx.request(
+            "DELETE",
+            endpoint,
+            headers=_storage_headers(key),
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        raise SupabaseStorageError(
+            "Supabase Storage request failed during object delete"
+        ) from exc
+
+    if response.status_code == 404:
+        return
+    if response.status_code not in (200, 204):
+        raise SupabaseStorageError(
+            "Supabase Storage returned status "
+            f"{response.status_code} on object delete"
+        )
+
+
 # --------------------------------------------------------------------- #
 # Public entry points (used by the routes)
 # --------------------------------------------------------------------- #
@@ -325,6 +365,7 @@ def confirm_product_image(
             ProductImage.product_id == product_id
         )
     )
+    old_object_key: str | None = None
     if existing is None:
         image = ProductImage(
             product_id=product_id,
@@ -333,10 +374,80 @@ def confirm_product_image(
         )
         db.add(image)
     else:
+        # Capture the superseded object so it can be cleaned up AFTER
+        # the new metadata is durably committed. Only a genuinely
+        # different key needs cleanup — re-confirming the same key must
+        # never delete the bytes we are keeping.
+        if existing.object_key != object_key:
+            old_object_key = existing.object_key
         existing.object_key = object_key
         existing.uploaded_by_user_id = actor.id
         image = existing
 
     db.commit()
     db.refresh(image)
+
+    # Replace cleanup (best-effort). The new record is already durable
+    # and valid; we never roll it back over a cleanup failure, since
+    # that would discard a good upload. The old object is deleted only
+    # after the commit, and a storage failure here leaves the old object
+    # orphaned rather than turning a successful replacement into an
+    # error. This best-effort posture is also why an unconfigured
+    # storage backend (no SUPABASE_URL) does not break a confirm: the
+    # raised SupabaseStorageError is swallowed below.
+    if old_object_key is not None:
+        try:
+            _request_object_delete(PRODUCT_IMAGES_BUCKET, old_object_key)
+        except SupabaseStorageError:
+            pass
+
     return image
+
+
+def delete_product_image(db: Session, product_id: UUID) -> Product:
+    """Clear a product's primary image (metadata row + storage object).
+
+    Admin-only at the route. Returns the product so the caller can
+    serialize the updated ``primary_image: null`` state.
+
+    Idempotent: if the product has no image, the product is returned
+    unchanged (no storage call, no error) — clearing an already-clear
+    product is a success, not a 404.
+
+    Consistency strategy — *fail-hard*: the metadata row is deleted and
+    flushed, then the storage object is removed; only if that storage
+    delete succeeds is the transaction committed. If the storage delete
+    fails the whole operation is rolled back, so the metadata row and
+    the storage object stay in sync (both remain) rather than leaving a
+    split-brain where the row is gone but the bytes linger. This differs
+    from the replace path in :func:`confirm_product_image`, where a new
+    desired record already exists and must be preserved; here there is
+    no new state to protect, so all-or-nothing is the safer choice.
+    """
+    product = _require_product(db, product_id)
+
+    existing = db.scalar(
+        select(ProductImage).where(
+            ProductImage.product_id == product_id
+        )
+    )
+    if existing is None:
+        # Nothing to delete and nothing to clean up — idempotent no-op.
+        return product
+
+    object_key = existing.object_key
+    db.delete(existing)
+    db.flush()  # stage the row removal without committing yet
+
+    try:
+        _request_object_delete(PRODUCT_IMAGES_BUCKET, object_key)
+    except SupabaseStorageError:
+        # Storage cleanup failed — roll back the metadata removal so the
+        # DB and storage stay consistent, and surface the failure so the
+        # route can return a controlled 502.
+        db.rollback()
+        raise
+
+    db.commit()
+    db.refresh(product)
+    return product

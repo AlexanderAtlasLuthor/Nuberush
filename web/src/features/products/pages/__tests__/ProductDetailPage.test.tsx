@@ -20,6 +20,7 @@ import * as productsHooks from "../../hooks";
 import type {
   Product,
   ProductComplianceAuditLog,
+  ProductImage,
   ProductVariant,
 } from "../../types";
 import type { ProductSellableResponse } from "../../api";
@@ -531,5 +532,84 @@ describe("ProductDetailPage — route param", () => {
     const back = screen.getByTestId("product-detail-back");
     const anchor = back.tagName === "A" ? back : back.querySelector("a");
     expect(anchor).toHaveAttribute("href", "/app/store/products");
+  });
+});
+
+// --------------------------------------------------------------------- //
+// F2.26.3.B — read-only primary image on the store detail surface
+// --------------------------------------------------------------------- //
+
+function makeImage(overrides: Partial<ProductImage> = {}): ProductImage {
+  return {
+    id: "img-1",
+    product_id: PRODUCT_ID,
+    object_key: `products/${PRODUCT_ID}/hero.jpg`,
+    public_url:
+      "https://example.supabase.co/storage/v1/object/public/product-images/" +
+      `products/${PRODUCT_ID}/hero.jpg`,
+    uploaded_by_user_id: "user-1",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("ProductDetailPage — primary image (read-only)", () => {
+  it("renders the image when the product has a primary image", () => {
+    seedAllSuccess();
+    vi.mocked(productsHooks.useProductQuery).mockReturnValue(
+      asQueryResult<Product>({
+        isLoading: false,
+        isError: false,
+        isSuccess: true,
+        data: makeProduct({ primary_image: makeImage() }),
+        error: null,
+      }),
+    );
+
+    renderAt(`/app/store/products/${PRODUCT_ID}`);
+
+    const section = screen.getByTestId("store-product-image");
+    expect(
+      within(section).getByTestId("product-thumbnail-image"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the placeholder when the product has no image", () => {
+    seedAllSuccess(); // makeProduct() has no primary_image
+
+    renderAt(`/app/store/products/${PRODUCT_ID}`);
+
+    const section = screen.getByTestId("store-product-image");
+    expect(
+      within(section).getByTestId("product-thumbnail-placeholder"),
+    ).toBeInTheDocument();
+  });
+
+  it("exposes no image-management controls (store is read-only)", () => {
+    seedAllSuccess();
+    vi.mocked(productsHooks.useProductQuery).mockReturnValue(
+      asQueryResult<Product>({
+        isLoading: false,
+        isError: false,
+        isSuccess: true,
+        data: makeProduct({ primary_image: makeImage() }),
+        error: null,
+      }),
+    );
+
+    renderAt(`/app/store/products/${PRODUCT_ID}`);
+
+    // No upload panel, no file input, no upload/change/remove buttons.
+    expect(
+      screen.queryByTestId("admin-product-image-panel"),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector("input[type=file]")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /upload/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /(remove|delete|change) image/i }),
+    ).not.toBeInTheDocument();
   });
 });

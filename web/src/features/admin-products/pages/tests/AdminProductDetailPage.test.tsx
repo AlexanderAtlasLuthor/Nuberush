@@ -240,6 +240,22 @@ describe("AdminProductDetailPage — success", () => {
       screen.getByTestId("product-compliance-audit-panel"),
     ).toHaveTextContent(`audit:${PRODUCT_ID}`);
   });
+
+  it("L: renders exactly one image panel and no separate store image section", () => {
+    vi.mocked(productsHooks.useProductQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeProduct() }),
+    );
+    renderAt(`/app/admin/products/${PRODUCT_ID}`);
+
+    // The admin image management surface is the single ProductImagePanel.
+    expect(
+      screen.getAllByTestId("product-image-panel"),
+    ).toHaveLength(1);
+    // No duplicate read-only store image section on the admin detail page.
+    expect(
+      screen.queryByTestId("store-product-image"),
+    ).not.toBeInTheDocument();
+  });
 });
 
 // --------------------------------------------------------------------- //

@@ -29,6 +29,7 @@ import {
 
 import { ProductApprovalBadge } from "@/features/products/components/ProductApprovalBadge";
 import { ProductComplianceBadge } from "@/features/products/components/ProductComplianceBadge";
+import { ProductThumbnail } from "@/features/products/components/ProductThumbnail";
 import type { Product } from "../types";
 
 const EM_DASH = "—";
@@ -53,6 +54,7 @@ export function AdminProductsTable({ products }: AdminProductsTableProps) {
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="w-16">Image</TableHead>
             <TableHead>Product</TableHead>
             <TableHead>Brand</TableHead>
             <TableHead>Category</TableHead>
@@ -72,6 +74,13 @@ export function AdminProductsTable({ products }: AdminProductsTableProps) {
               data-testid="admin-products-row"
               data-product-id={product.id}
             >
+              <TableCell data-testid="admin-products-row-thumbnail">
+                <ProductThumbnail
+                  primaryImage={product.primary_image}
+                  productName={product.name}
+                  size="sm"
+                />
+              </TableCell>
               <TableCell data-testid="admin-products-row-name">
                 <span className="font-medium">{product.name}</span>
               </TableCell>

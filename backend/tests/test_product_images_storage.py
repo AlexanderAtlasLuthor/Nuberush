@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from decimal import Decimal
 from typing import Callable
 
 import httpx
@@ -23,8 +24,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import ComplianceStatus
+from app.db.models import InventoryItem
 from app.db.models import Product
 from app.db.models import ProductImage
+from app.db.models import ProductVariant
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
@@ -209,6 +212,108 @@ class TestStorageServiceHelpers:
         msg = str(excinfo.value)
         assert "fake-key" not in msg
         assert "500" in msg
+        get_supabase_auth_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# Object-delete helper (F2.26.3.D) — direct transport-level coverage.
+#
+# `_request_object_delete` is the storage seam used by the clear/replace
+# lifecycle. Endpoint tests stub it; these tests exercise the helper
+# itself, mirroring the signed-upload helper tests above:
+#   * 404 (object already gone) is treated as success;
+#   * 200 / 204 are success;
+#   * any other non-2xx raises a safe SupabaseStorageError (no secret);
+#   * a transport exception raises a safe SupabaseStorageError (no secret).
+# The helper uses `httpx.request("DELETE", ...)`, so we monkeypatch
+# `storage_svc.httpx.request` (the signed-upload helper uses `.post`).
+# ---------------------------------------------------------------------------
+
+
+class _FakeDeleteResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+class TestObjectDeleteHelper:
+    def _configure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "fake-key")
+        from app.core.config import get_supabase_auth_settings
+
+        get_supabase_auth_settings.cache_clear()
+
+    def test_404_is_treated_as_success(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._configure(monkeypatch)
+        monkeypatch.setattr(
+            storage_svc.httpx,
+            "request",
+            lambda *_a, **_kw: _FakeDeleteResponse(404),
+        )
+        # Must NOT raise — the object being already absent satisfies intent.
+        storage_svc._request_object_delete(
+            "product-images", "products/abc/x.png"
+        )
+        from app.core.config import get_supabase_auth_settings
+
+        get_supabase_auth_settings.cache_clear()
+
+    @pytest.mark.parametrize("status_code", [200, 204])
+    def test_2xx_is_success(
+        self, monkeypatch: pytest.MonkeyPatch, status_code: int
+    ) -> None:
+        self._configure(monkeypatch)
+        monkeypatch.setattr(
+            storage_svc.httpx,
+            "request",
+            lambda *_a, **_kw: _FakeDeleteResponse(status_code),
+        )
+        storage_svc._request_object_delete(
+            "product-images", "products/abc/x.png"
+        )
+        from app.core.config import get_supabase_auth_settings
+
+        get_supabase_auth_settings.cache_clear()
+
+    def test_non_2xx_raises_safe_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._configure(monkeypatch)
+        monkeypatch.setattr(
+            storage_svc.httpx,
+            "request",
+            lambda *_a, **_kw: _FakeDeleteResponse(500),
+        )
+        with pytest.raises(storage_svc.SupabaseStorageError) as excinfo:
+            storage_svc._request_object_delete(
+                "product-images", "products/abc/x.png"
+            )
+        msg = str(excinfo.value)
+        assert "fake-key" not in msg  # service-role key never leaks
+        assert "500" in msg
+        from app.core.config import get_supabase_auth_settings
+
+        get_supabase_auth_settings.cache_clear()
+
+    def test_transport_error_is_wrapped_safely(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._configure(monkeypatch)
+
+        def _raise(*_a, **_kw):
+            raise httpx.ConnectError("boom")
+
+        monkeypatch.setattr(storage_svc.httpx, "request", _raise)
+        with pytest.raises(storage_svc.SupabaseStorageError) as excinfo:
+            storage_svc._request_object_delete(
+                "product-images", "products/abc/x.png"
+            )
+        # The raw transport detail and the service-role key never leak.
+        assert "fake-key" not in str(excinfo.value)
+        from app.core.config import get_supabase_auth_settings
+
         get_supabase_auth_settings.cache_clear()
 
 
@@ -689,3 +794,522 @@ class TestImageConfirmEndpoint:
         assert body["primary_image"]["uploaded_by_user_id"] == str(
             admin.id
         )
+
+
+# ---------------------------------------------------------------------------
+# Image lifecycle — clear/remove + replace cleanup (F2.26.3.A)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def make_image(
+    db_session: Session,
+) -> Callable[..., ProductImage]:
+    """Insert a ProductImage row directly, returning it.
+
+    ``uploader`` must be supplied (the metadata's NOT NULL
+    ``uploaded_by_user_id``). ``object_key`` defaults to a valid
+    per-product key.
+    """
+
+    def _create(
+        product: Product,
+        *,
+        uploader: User,
+        object_key: str | None = None,
+    ) -> ProductImage:
+        image = ProductImage(
+            product_id=product.id,
+            object_key=object_key
+            or f"products/{product.id}/{uuid.uuid4().hex}.jpg",
+            uploaded_by_user_id=uploader.id,
+        )
+        db_session.add(image)
+        db_session.commit()
+        db_session.refresh(image)
+        return image
+
+    return _create
+
+
+@pytest.fixture
+def stub_object_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, list[tuple[str, str]]]:
+    """Replace the Supabase Storage object-delete HTTP call with a stub.
+
+    Records every (bucket, object_key) pair so tests can assert exactly
+    which objects were cleaned up — without touching the network or
+    needing real credentials.
+    """
+    record: dict[str, list[tuple[str, str]]] = {"calls": []}
+
+    def _fake(bucket: str, object_key: str) -> None:
+        record["calls"].append((bucket, object_key))
+
+    monkeypatch.setattr(storage_svc, "_request_object_delete", _fake)
+    return record
+
+
+class TestImageDeleteEndpoint:
+    URL = "/products/{pid}/images"
+
+    def test_anonymous_blocked(
+        self,
+        client: TestClient,
+        make_product: Callable[..., Product],
+    ) -> None:
+        prod = make_product()
+        resp = client.delete(self.URL.format(pid=prod.id))
+        assert resp.status_code == 401
+
+    # ---- A. admin can clear primary image -------------------------- #
+
+    def test_admin_can_clear_primary_image(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_product,
+        make_image,
+        stub_object_delete,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        prod = make_product()
+        img = make_image(prod, uploader=admin)
+        object_key = img.object_key
+
+        resp = client.delete(
+            self.URL.format(pid=prod.id), headers=_auth(admin)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["primary_image"] is None
+
+        # Metadata row removed.
+        rows = list(
+            db_session.scalars(
+                select(ProductImage).where(
+                    ProductImage.product_id == prod.id
+                )
+            )
+        )
+        assert rows == []
+
+        # Storage object deleted with the old key, in the locked bucket.
+        assert stub_object_delete["calls"] == [
+            ("product-images", object_key)
+        ]
+
+    # ---- B. idempotent when no image exists ------------------------ #
+
+    def test_clear_is_idempotent_when_no_image(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_product,
+        stub_object_delete,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        prod = make_product()
+
+        resp = client.delete(
+            self.URL.format(pid=prod.id), headers=_auth(admin)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["primary_image"] is None
+        # No image existed → no storage call.
+        assert stub_object_delete["calls"] == []
+
+    def test_clear_unknown_product_returns_404(
+        self,
+        client: TestClient,
+        make_user,
+        stub_object_delete,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        resp = client.delete(
+            self.URL.format(pid=uuid.uuid4()), headers=_auth(admin)
+        )
+        assert resp.status_code == 404
+        assert stub_object_delete["calls"] == []
+
+    # ---- C. non-admin cannot clear --------------------------------- #
+
+    @pytest.mark.parametrize(
+        "role",
+        [
+            UserRole.owner,
+            UserRole.manager,
+            UserRole.staff,
+            UserRole.driver,
+        ],
+    )
+    def test_non_admin_cannot_clear_image(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_product,
+        make_image,
+        stub_object_delete,
+        role: UserRole,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        actor = make_user(role)
+        prod = make_product()
+        make_image(prod, uploader=admin)
+
+        resp = client.delete(
+            self.URL.format(pid=prod.id), headers=_auth(actor)
+        )
+        assert resp.status_code == 403
+        # Gate fired before any storage call, and the row survives.
+        assert stub_object_delete["calls"] == []
+        rows = list(
+            db_session.scalars(
+                select(ProductImage).where(
+                    ProductImage.product_id == prod.id
+                )
+            )
+        )
+        assert len(rows) == 1
+
+    # ---- F. storage delete failure → fail-hard rollback + 502 ------ #
+
+    def test_clear_storage_failure_rolls_back_and_returns_502(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_product,
+        make_image,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        prod = make_product()
+        img = make_image(prod, uploader=admin)
+
+        def _boom(bucket: str, object_key: str) -> None:
+            raise storage_svc.SupabaseStorageError(
+                "Supabase Storage returned status 500 on object delete"
+            )
+
+        monkeypatch.setattr(
+            storage_svc, "_request_object_delete", _boom
+        )
+
+        resp = client.delete(
+            self.URL.format(pid=prod.id), headers=_auth(admin)
+        )
+        assert resp.status_code == 502
+        # Fail-hard: the metadata row was rolled back and still exists,
+        # so DB and storage remain consistent (both retained).
+        rows = list(
+            db_session.scalars(
+                select(ProductImage).where(
+                    ProductImage.product_id == prod.id
+                )
+            )
+        )
+        assert len(rows) == 1
+        assert rows[0].id == img.id
+
+    # ---- G. no compliance/inventory mutation on clear -------------- #
+
+    def test_clear_does_not_mutate_compliance(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_product,
+        make_image,
+        stub_object_delete,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        prod = make_product()
+        make_image(prod, uploader=admin)
+
+        before = (
+            prod.compliance_status,
+            prod.allowed_for_sale,
+            prod.hold_reason,
+            prod.approval_status,
+            prod.is_active,
+        )
+
+        resp = client.delete(
+            self.URL.format(pid=prod.id), headers=_auth(admin)
+        )
+        assert resp.status_code == 200
+
+        db_session.refresh(prod)
+        after = (
+            prod.compliance_status,
+            prod.allowed_for_sale,
+            prod.hold_reason,
+            prod.approval_status,
+            prod.is_active,
+        )
+        assert before == after
+
+
+class TestImageReplaceCleanup:
+    """F2.26.3.A — confirming a new image cleans up the superseded one."""
+
+    URL = "/products/{pid}/images"
+
+    # ---- D. replace deletes the old object ------------------------- #
+
+    def test_confirm_replacement_cleans_old_object(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_product,
+        make_image,
+        stub_object_delete,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        prod = make_product()
+        old = make_image(
+            prod,
+            uploader=admin,
+            object_key=f"products/{prod.id}/{uuid.uuid4().hex}.jpg",
+        )
+        old_key = old.object_key
+        new_key = f"products/{prod.id}/{uuid.uuid4().hex}.png"
+
+        resp = client.post(
+            self.URL.format(pid=prod.id),
+            json={"bucket": "product-images", "object_key": new_key},
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 201
+        assert resp.json()["object_key"] == new_key
+
+        # Exactly one row remains, pointing at the new key.
+        rows = list(
+            db_session.scalars(
+                select(ProductImage).where(
+                    ProductImage.product_id == prod.id
+                )
+            )
+        )
+        assert len(rows) == 1
+        assert rows[0].object_key == new_key
+
+        # Only the OLD object was cleaned up.
+        assert stub_object_delete["calls"] == [
+            ("product-images", old_key)
+        ]
+
+    # ---- E. first-time confirm does not delete --------------------- #
+
+    def test_confirm_without_previous_image_does_not_delete(
+        self,
+        client: TestClient,
+        make_user,
+        make_product,
+        stub_object_delete,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        prod = make_product()
+        new_key = f"products/{prod.id}/{uuid.uuid4().hex}.png"
+
+        resp = client.post(
+            self.URL.format(pid=prod.id),
+            json={"bucket": "product-images", "object_key": new_key},
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 201
+        assert stub_object_delete["calls"] == []
+
+    def test_confirm_same_key_does_not_delete(
+        self,
+        client: TestClient,
+        make_user,
+        make_product,
+        make_image,
+        stub_object_delete,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        prod = make_product()
+        key = f"products/{prod.id}/{uuid.uuid4().hex}.jpg"
+        make_image(prod, uploader=admin, object_key=key)
+
+        resp = client.post(
+            self.URL.format(pid=prod.id),
+            json={"bucket": "product-images", "object_key": key},
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 201
+        # Re-confirming the identical key must not delete the bytes we keep.
+        assert stub_object_delete["calls"] == []
+
+    def test_replace_cleanup_failure_keeps_new_record(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_product,
+        make_image,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Best-effort: if old-object cleanup fails, the NEW record stands
+        # (a successful replacement is never rolled back over a stale-
+        # object cleanup failure). The old object is left orphaned.
+        admin = make_user(UserRole.admin)
+        prod = make_product()
+        make_image(
+            prod,
+            uploader=admin,
+            object_key=f"products/{prod.id}/{uuid.uuid4().hex}.jpg",
+        )
+        new_key = f"products/{prod.id}/{uuid.uuid4().hex}.png"
+
+        def _boom(bucket: str, object_key: str) -> None:
+            raise storage_svc.SupabaseStorageError(
+                "Supabase Storage returned status 500 on object delete"
+            )
+
+        monkeypatch.setattr(
+            storage_svc, "_request_object_delete", _boom
+        )
+
+        resp = client.post(
+            self.URL.format(pid=prod.id),
+            json={"bucket": "product-images", "object_key": new_key},
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 201
+        rows = list(
+            db_session.scalars(
+                select(ProductImage).where(
+                    ProductImage.product_id == prod.id
+                )
+            )
+        )
+        assert len(rows) == 1
+        assert rows[0].object_key == new_key
+
+    def test_replace_does_not_mutate_compliance(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_product,
+        make_image,
+        stub_object_delete,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        prod = make_product()
+        make_image(
+            prod,
+            uploader=admin,
+            object_key=f"products/{prod.id}/{uuid.uuid4().hex}.jpg",
+        )
+        before = (
+            prod.compliance_status,
+            prod.allowed_for_sale,
+            prod.hold_reason,
+            prod.approval_status,
+            prod.is_active,
+        )
+
+        new_key = f"products/{prod.id}/{uuid.uuid4().hex}.png"
+        resp = client.post(
+            self.URL.format(pid=prod.id),
+            json={"bucket": "product-images", "object_key": new_key},
+            headers=_auth(admin),
+        )
+        assert resp.status_code == 201
+
+        db_session.refresh(prod)
+        after = (
+            prod.compliance_status,
+            prod.allowed_for_sale,
+            prod.hold_reason,
+            prod.approval_status,
+            prod.is_active,
+        )
+        assert before == after
+
+
+# ---------------------------------------------------------------------------
+# No side effects on inventory (F2.26.3.D)
+#
+# The image lifecycle provably references only Product + ProductImage +
+# the storage seam. This asserts that invariant end-to-end: a real
+# InventoryItem tied to the product's variant is untouched by an image
+# clear. Orders are deliberately NOT exercised here — creating a valid
+# order requires idempotency keys, line items and pricing that would add
+# brittle setup for no extra coverage, since the image code references no
+# order model at all (the same structural guarantee that protects
+# inventory). See report §6.
+# ---------------------------------------------------------------------------
+
+
+class TestImageClearNoInventoryMutation:
+    URL = "/products/{pid}/images"
+
+    def test_clear_does_not_mutate_inventory(
+        self,
+        client: TestClient,
+        db_session: Session,
+        make_user,
+        make_store,
+        make_product,
+        make_image,
+        stub_object_delete,
+    ) -> None:
+        admin = make_user(UserRole.admin)
+        store = make_store()
+        prod = make_product()
+
+        variant = ProductVariant(
+            product_id=prod.id,
+            sku=f"SKU-{uuid.uuid4().hex[:8]}",
+            price=Decimal("9.99"),
+        )
+        db_session.add(variant)
+        db_session.commit()
+        db_session.refresh(variant)
+
+        item = InventoryItem(
+            store_id=store.id,
+            variant_id=variant.id,
+            quantity_on_hand=42,
+            quantity_reserved=7,
+            reorder_threshold=5,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+
+        make_image(prod, uploader=admin)
+        before = (
+            item.quantity_on_hand,
+            item.quantity_reserved,
+            item.reorder_threshold,
+            item.status,
+        )
+
+        resp = client.delete(
+            self.URL.format(pid=prod.id), headers=_auth(admin)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["primary_image"] is None
+
+        # Inventory row is byte-for-byte unchanged by the image clear.
+        db_session.refresh(item)
+        after = (
+            item.quantity_on_hand,
+            item.quantity_reserved,
+            item.reorder_threshold,
+            item.status,
+        )
+        assert before == after
+        # And the variant the inventory hangs off is untouched.
+        db_session.refresh(variant)
+        assert variant.is_active is True
