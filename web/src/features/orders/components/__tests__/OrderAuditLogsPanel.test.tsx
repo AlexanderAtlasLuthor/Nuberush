@@ -223,8 +223,8 @@ describe("OrderAuditLogsPanel — success", () => {
     expect(allRows.length).toBe(2);
     const bodyRow = allRows[1];
 
-    expect(within(bodyRow).getByText("pending")).toBeInTheDocument();
-    expect(within(bodyRow).getByText("accepted")).toBeInTheDocument();
+    expect(within(bodyRow).getByText("Pending")).toBeInTheDocument();
+    expect(within(bodyRow).getByText("Accepted")).toBeInTheDocument();
     expect(within(bodyRow).getByText("status_changed")).toBeInTheDocument();
     expect(within(bodyRow).getByText("manager approved")).toBeInTheDocument();
     expect(within(bodyRow).getByText("user-1")).toBeInTheDocument();
@@ -256,8 +256,8 @@ describe("OrderAuditLogsPanel — success", () => {
     const cells = within(bodyRow).getAllByRole("cell");
     // Column 0 = Previous; null → em-dash.
     expect(cells[0]).toHaveTextContent(EM_DASH);
-    // Column 1 = New; never null per the wire contract.
-    expect(cells[1]).toHaveTextContent("pending");
+    // Column 1 = New; never null per the wire contract. Humanized for display.
+    expect(cells[1]).toHaveTextContent("Pending");
   });
 
   it("renders em-dash when reason is null", () => {

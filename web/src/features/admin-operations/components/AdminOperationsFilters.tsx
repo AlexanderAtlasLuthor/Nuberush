@@ -200,7 +200,7 @@ export function AdminOperationsFilters({
         <Input
           id="admin-operations-filter-store-id"
           type="text"
-          placeholder="Store UUID (optional)"
+          placeholder="Filter by store ID (optional)"
           value={filters.store_id ?? ""}
           disabled={disabled}
           onChange={(e) => handleStoreIdChange(e.target.value)}

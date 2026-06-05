@@ -107,6 +107,22 @@ const MOBILE_CATEGORY_LABEL: Record<AdminOperationsAlertCategory, string> = {
   store_no_inventory: "Store has no inventory",
 };
 
+// Human-readable labels for the wire-shape entity type. The operator
+// sees "Inventory item" rather than the raw `inventory_item` token;
+// the underlying value sent to / received from the backend is never
+// altered. Unknown values fall back to the raw token so a future
+// backend addition renders verbatim rather than blank.
+const ENTITY_TYPE_LABEL: Record<AdminOperationsAlert["entity_type"], string> = {
+  store: "Store",
+  inventory_item: "Inventory item",
+  order: "Order",
+  product: "Product",
+};
+
+function entityTypeLabel(value: AdminOperationsAlert["entity_type"]): string {
+  return ENTITY_TYPE_LABEL[value] ?? value;
+}
+
 /**
  * Drill-down route per category (F2.19.6 prompt §F). The link
  * targets the existing admin list/detail page where the operator
@@ -162,7 +178,7 @@ function DesktopAlertsTable({ alerts }: { alerts: AdminOperationsAlert[] }) {
               Store ID
             </TableHead>
             <TableHead className="text-[10px] font-semibold uppercase tracking-wider">
-              Entity Type
+              Entity
             </TableHead>
             <TableHead className="text-[10px] font-semibold uppercase tracking-wider">
               Entity ID
@@ -211,7 +227,7 @@ function DesktopAlertsTable({ alerts }: { alerts: AdminOperationsAlert[] }) {
                 className="text-sm"
                 data-testid="admin-operations-row-entity-type"
               >
-                {alert.entity_type}
+                {entityTypeLabel(alert.entity_type)}
               </TableCell>
               <TableCell data-testid="admin-operations-row-entity-id">
                 <span
@@ -316,7 +332,7 @@ function MobileAlertCardStack({
                   className="truncate"
                   data-testid="admin-operations-card-entity-type"
                 >
-                  {alert.entity_type}
+                  {entityTypeLabel(alert.entity_type)}
                 </span>
                 <span aria-hidden="true">·</span>
                 <span

@@ -63,10 +63,9 @@ function PageHeader() {
         Admin Settings
       </h1>
       <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground leading-relaxed">
-        Platform settings for NubeRush operators. Every value below is
-        computed by the backend on each request from existing data and
-        locked server constants — there is no client-side simulation,
-        no fake row, and no frontend-only policy.
+        Platform settings for NubeRush operators. Every value below
+        reflects the current platform configuration and live operational
+        data.
       </p>
     </header>
   );
@@ -98,7 +97,7 @@ function PlatformCard({ platform }: { platform: AdminPlatformSettings }) {
     <SettingsSection
       testId="settings-platform"
       title="Platform configuration"
-      description="Process-level metadata sourced from the backend AppSettings."
+      description="Core platform configuration for this environment."
       fields={[
         { key: "app_name", label: "App name", value: platform.app_name },
         {
@@ -152,7 +151,7 @@ function BillingCard({ billing }: { billing: AdminBillingSettings }) {
           key: "commission_rate",
           label: "Commission rate",
           value: formatCommissionRate(billing.commission_rate_basis_points),
-          hint: `${billing.commission_rate_basis_points} basis points`,
+          hint: `${(billing.commission_rate_basis_points / 100).toFixed(2)}% platform commission`,
         },
         {
           key: "currency",
@@ -190,7 +189,7 @@ function ComplianceCard({
     <SettingsSection
       testId="settings-compliance"
       title="Compliance policy"
-      description="Compliance defaults and a snapshot of product counts by status. Source of truth for blocked counts is the shared backend predicate."
+      description="Compliance defaults and a snapshot of product counts by status. Blocked counts apply the platform's shared compliance rules."
       fields={[
         {
           key: "default_jurisdiction",
@@ -216,7 +215,7 @@ function ComplianceCard({
           key: "blocked_count",
           label: "Blocked from sale",
           value: compliance.blocked_count.toLocaleString(),
-          hint: "Union of restricted, banned, and allowed_for_sale=false.",
+          hint: "Products that are restricted, banned, or not allowed for sale.",
         },
       ]}
     />
@@ -232,7 +231,7 @@ function OperationsCard({
     <SettingsSection
       testId="settings-operations"
       title="Operational defaults"
-      description="Defaults the operations alert feed applies when callers omit explicit parameters. These mirror the backend Query bounds."
+      description="Defaults the operations alert feed applies when no explicit parameters are provided."
       fields={[
         {
           key: "default_alert_page_size",
@@ -248,7 +247,7 @@ function OperationsCard({
           key: "default_aging_minutes",
           label: "Default aging threshold",
           value: `${operations.default_aging_minutes.toLocaleString()} min`,
-          hint: "Used by the aging_order alert generator when no threshold is supplied.",
+          hint: "Applied to aging-order alerts when no threshold is supplied.",
         },
         {
           key: "open_order_statuses",

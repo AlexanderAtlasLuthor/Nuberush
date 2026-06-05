@@ -117,7 +117,7 @@ export function AdjustStockModal({
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="adjust-delta">
-                Delta <span className="text-destructive">*</span>
+                Adjustment amount <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="adjust-delta"
@@ -135,8 +135,8 @@ export function AdjustStockModal({
                 id="adjust-delta-hint"
                 className="text-xs text-muted-foreground"
               >
-                Signed whole number; positive adds, negative removes. Zero is
-                not allowed.
+                Use a positive number to add stock or a negative number to
+                remove stock. Zero is not allowed.
               </p>
             </div>
 

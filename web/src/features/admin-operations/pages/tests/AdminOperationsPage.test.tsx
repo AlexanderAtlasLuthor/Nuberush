@@ -264,7 +264,7 @@ describe("AdminOperationsPage — success state", () => {
     expect(within(table).getByText("Category")).toBeInTheDocument();
     expect(within(table).getByText("Summary")).toBeInTheDocument();
     expect(within(table).getByText("Store ID")).toBeInTheDocument();
-    expect(within(table).getByText("Entity Type")).toBeInTheDocument();
+    expect(within(table).getByText("Entity")).toBeInTheDocument();
     expect(within(table).getByText("Entity ID")).toBeInTheDocument();
     expect(within(table).getByText("Created At")).toBeInTheDocument();
     expect(within(table).getByText("Drill-down")).toBeInTheDocument();
@@ -278,7 +278,7 @@ describe("AdminOperationsPage — success state", () => {
       within(row1).getByTestId("alert-category-low_stock"),
     ).toBeInTheDocument();
     expect(within(row1).getByText("Low stock: available 0")).toBeInTheDocument();
-    expect(within(row1).getByText("inventory_item")).toBeInTheDocument();
+    expect(within(row1).getByText("Inventory item")).toBeInTheDocument();
   });
 
   it("renders 'Global' when store_id is null", () => {
@@ -755,7 +755,7 @@ describe("AdminOperationsPage — mobile card stack (Phase E)", () => {
     ).toHaveTextContent("Low stock: available 0");
     expect(
       within(card1).getByTestId("admin-operations-card-entity-type"),
-    ).toHaveTextContent("inventory_item");
+    ).toHaveTextContent("Inventory item");
 
     const card2 = cards[1];
     expect(

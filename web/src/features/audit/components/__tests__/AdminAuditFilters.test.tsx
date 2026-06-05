@@ -199,3 +199,19 @@ describe("AdminAuditFilters — render surface", () => {
     ).toHaveValue("2026-12-31");
   });
 });
+
+describe("AdminAuditFilters — copy guardrails (F2.26.4.D)", () => {
+  it("uses operator-friendly ID placeholders, not raw 'UUID' wording", () => {
+    render(<AdminAuditFilters filters={{ limit: 50 }} onChange={vi.fn()} />);
+
+    const storeInput = screen.getByTestId("admin-audit-filter-store-id");
+    expect(storeInput).toHaveAttribute(
+      "placeholder",
+      expect.stringMatching(/filter by store id/i),
+    );
+    expect(storeInput.getAttribute("placeholder")).not.toMatch(/uuid/i);
+
+    const actorInput = screen.getByTestId("admin-audit-filter-actor-id");
+    expect(actorInput.getAttribute("placeholder")).not.toMatch(/uuid/i);
+  });
+});

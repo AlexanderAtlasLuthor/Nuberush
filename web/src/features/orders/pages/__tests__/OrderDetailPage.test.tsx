@@ -216,7 +216,7 @@ describe("OrderDetailPage - route and render branches", () => {
 
     expect(screen.getByText(/order not found/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/no data was returned for this order/i),
+      screen.getByText(/we couldn't find this order/i),
     ).toBeInTheDocument();
   });
 });
@@ -235,7 +235,7 @@ describe("OrderDetailPage - success detail", () => {
     renderAt(`/app/store/orders/${order.id}`);
 
     expect(screen.getByText(order.id)).toBeInTheDocument();
-    expect(screen.getByText("preparing")).toBeInTheDocument();
+    expect(screen.getByText("Preparing")).toBeInTheDocument();
     expect(screen.getByText(order.customer_user_id as string)).toBeInTheDocument();
     expect(screen.getAllByText("28.50").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("1.99")).toBeInTheDocument();
@@ -274,6 +274,23 @@ describe("OrderDetailPage - success detail", () => {
     expect(
       screen.getByText(/this order has no line items/i),
     ).toBeInTheDocument();
+  });
+
+  it("uses operator-friendly summary labels, not debug field names (F2.26.4.D)", () => {
+    mockOrderQuery({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: makeOrder(),
+      error: null,
+    });
+
+    renderAt(`/app/store/orders/${ORDER_ID}`);
+
+    expect(screen.getByText("Customer")).toBeInTheDocument();
+    expect(screen.queryByText(/customer user id/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Order reference")).toBeInTheDocument();
+    expect(screen.queryByText(/idempotency key/i)).not.toBeInTheDocument();
   });
 
   it("renders populated item rows using backend line item fields", () => {

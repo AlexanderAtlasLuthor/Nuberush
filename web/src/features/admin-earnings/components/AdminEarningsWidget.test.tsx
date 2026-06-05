@@ -156,4 +156,24 @@ describe("AdminEarningsWidget", () => {
     const link = screen.getByTestId("admin-earnings-widget-link");
     expect(link).toHaveAttribute("href", "/app/admin/earnings");
   });
+
+  it("renders the projected / Stripe-pending disclaimer", () => {
+    vi.mocked(adminEarningsHooks.useAdminEarningsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+    renderWidget();
+    const disclaimer = screen.getByTestId("admin-earnings-widget-disclaimer");
+    expect(disclaimer).toHaveTextContent(/projected internal accounting/i);
+    expect(disclaimer).toHaveTextContent(/stripe/i);
+    expect(disclaimer).toHaveTextContent(/no funds.*charged or paid out/i);
+  });
+
+  it("does not present real-money labels as user-facing copy", () => {
+    vi.mocked(adminEarningsHooks.useAdminEarningsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+    renderWidget();
+    expect(screen.queryByText("Customer paid")).not.toBeInTheDocument();
+    expect(screen.queryByText("Commission earned")).not.toBeInTheDocument();
+  });
 });

@@ -83,9 +83,9 @@ export function RecentComplianceReviews({
                     status={review.new_compliance_status}
                   />
                   <span className="text-xs text-muted-foreground">
-                    allowed_for_sale:{" "}
-                    {review.previous_allowed_for_sale ? "yes" : "no"} →{" "}
-                    {review.new_allowed_for_sale ? "yes" : "no"}
+                    Allowed for sale:{" "}
+                    {review.previous_allowed_for_sale ? "Yes" : "No"} →{" "}
+                    {review.new_allowed_for_sale ? "Yes" : "No"}
                   </span>
                 </div>
                 <p

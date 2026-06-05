@@ -7,6 +7,7 @@ import { AlertCircle, Package, ShoppingBag, Wallet } from "lucide-react";
 import { useStoreContext } from "@/auth";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { EarningsDisclaimer } from "@/features/admin-earnings/components/EarningsDisclaimer";
 import { EarningsHeroCard } from "@/features/admin-earnings/components/EarningsHeroCard";
 import { MoneyTile } from "@/features/admin-earnings/components/MoneyTile";
 import { formatUsd } from "@/features/admin-earnings/components/format";
@@ -20,12 +21,13 @@ function PageHeader() {
         Store · Earnings
       </p>
       <h1 className="mt-1.5 text-2xl font-semibold tracking-tight md:text-[28px]">
-        Earnings
+        Projected store earnings
       </h1>
       <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground leading-relaxed">
-        Revenue your store has generated from delivered orders. Read-only —
-        every value is computed by the backend from existing data on each
-        request. Delivery, tips, taxes and platform commission are excluded.
+        Projected store revenue from products in delivered orders — a recorded
+        order-value estimate, not processed payments. Read-only; the backend
+        computes every value from recorded data. Delivery, tips, taxes and
+        platform commission are excluded.
       </p>
     </header>
   );
@@ -112,6 +114,8 @@ export default function StoreEarningsPage() {
     >
       <PageHeader />
 
+      <EarningsDisclaimer data-testid="store-earnings-disclaimer" />
+
       {!currentStoreId ? (
         <p
           className="text-sm text-muted-foreground"
@@ -136,7 +140,7 @@ export default function StoreEarningsPage() {
         <>
           <section className="grid gap-3 md:gap-4 grid-cols-1 lg:grid-cols-[2fr_1fr]">
             <EarningsHeroCard
-              eyebrow="Product revenue"
+              eyebrow="Projected product revenue"
               value={query.data.product_revenue}
               description={`From ${query.data.delivered_orders} delivered orders · ${query.data.total_items_sold} units sold`}
               icon={ShoppingBag}

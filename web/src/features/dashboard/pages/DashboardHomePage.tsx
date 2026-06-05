@@ -60,6 +60,7 @@ import type { StoreInventoryLogEntry } from "@/features/audit/types";
 import { useInventoryList } from "@/features/inventory/hooks";
 import type { InventoryItem } from "@/features/inventory/types";
 import { useOrdersList } from "@/features/orders/hooks";
+import { orderStatusLabel } from "@/features/orders/labels";
 import type { OrderRead, OrderStatus } from "@/features/orders/types";
 import { ProductComplianceBadge } from "@/features/products/components/ProductComplianceBadge";
 import { ProductStatusBadge } from "@/features/products/components/ProductStatusBadge";
@@ -607,7 +608,7 @@ function OrdersToReviewList({ orders }: { orders: OrderRead[] }) {
                     pillClass,
                   )}
                 >
-                  {order.status}
+                  {orderStatusLabel(order.status)}
                 </span>
                 <span className="tabular-nums text-muted-foreground">
                   {order.items.length}{" "}

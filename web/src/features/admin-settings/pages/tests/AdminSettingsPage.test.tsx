@@ -160,7 +160,9 @@ describe("AdminSettingsPage", () => {
     expect(
       within(section).getByTestId("settings-billing-value-commission_rate"),
     ).toHaveTextContent("5.00 %");
-    expect(within(section).getByText("500 basis points")).toBeInTheDocument();
+    expect(
+      within(section).getByText("5.00% platform commission"),
+    ).toBeInTheDocument();
     expect(
       within(section).getByTestId(
         "settings-billing-value-delivered_orders_count",

@@ -283,7 +283,7 @@ describe("OrdersPage - render states", () => {
     expect(rows).toHaveLength(2);
 
     expect(within(rows[0]).getByText(first.id)).toBeInTheDocument();
-    expect(within(rows[0]).getByText("accepted")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("Accepted")).toBeInTheDocument();
     expect(within(rows[0]).getByText("26.75")).toBeInTheDocument();
     expect(within(rows[0]).getByText("1")).toBeInTheDocument();
     expect(within(rows[0]).getByText("Cosmic Gummies")).toBeInTheDocument();
@@ -297,7 +297,7 @@ describe("OrdersPage - render states", () => {
     );
 
     expect(within(rows[1]).getByText(second.id)).toBeInTheDocument();
-    expect(within(rows[1]).getByText("ready")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("Ready")).toBeInTheDocument();
     expect(within(rows[1]).getByText("0.00")).toBeInTheDocument();
     expect(within(rows[1]).getByText("0")).toBeInTheDocument();
     expect(within(rows[1]).getByText(/no items/i)).toBeInTheDocument();

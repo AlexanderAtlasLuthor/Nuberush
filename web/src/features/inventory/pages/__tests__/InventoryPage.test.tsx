@@ -282,14 +282,14 @@ describe("InventoryPage - render states", () => {
     expect(within(rows[0]).getByText("41")).toBeInTheDocument();
     expect(within(rows[0]).getByText("7")).toBeInTheDocument();
     expect(within(rows[0]).getByText("12")).toBeInTheDocument();
-    expect(within(rows[0]).getByText("available")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("Available")).toBeInTheDocument();
 
     expect(within(rows[1]).getByText("Nebula Vape")).toBeInTheDocument();
     expect(within(rows[1]).getByText("VAPE-BERRY-1G")).toBeInTheDocument();
     expect(within(rows[1]).getByText("3")).toBeInTheDocument();
     expect(within(rows[1]).getByText("1")).toBeInTheDocument();
     expect(within(rows[1]).getByText("9")).toBeInTheDocument();
-    expect(within(rows[1]).getByText("flagged")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("Flagged")).toBeInTheDocument();
 
     const actions = screen.getAllByTestId("mock-inventory-actions");
     expect(actions).toHaveLength(2);

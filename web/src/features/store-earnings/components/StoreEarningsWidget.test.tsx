@@ -178,4 +178,25 @@ describe("StoreEarningsWidget", () => {
     const link = screen.getByTestId("store-earnings-widget-link");
     expect(link).toHaveAttribute("href", "/app/store/earnings");
   });
+
+  it("renders the projected / Stripe-pending disclaimer", () => {
+    mockStoreContext(STORE_ID);
+    vi.mocked(storeEarningsHooks.useStoreEarningsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+    renderWidget();
+    const disclaimer = screen.getByTestId("store-earnings-widget-disclaimer");
+    expect(disclaimer).toHaveTextContent(/projected internal accounting/i);
+    expect(disclaimer).toHaveTextContent(/stripe/i);
+    expect(disclaimer).toHaveTextContent(/no funds.*charged or paid out/i);
+  });
+
+  it("does not tell the store it has already earned funds", () => {
+    mockStoreContext(STORE_ID);
+    vi.mocked(storeEarningsHooks.useStoreEarningsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+    renderWidget();
+    expect(screen.queryByText(/has earned/i)).not.toBeInTheDocument();
+  });
 });

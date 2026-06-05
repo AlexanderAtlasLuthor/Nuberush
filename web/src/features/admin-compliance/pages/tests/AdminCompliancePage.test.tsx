@@ -547,6 +547,11 @@ describe("AdminCompliancePage — recent reviews", () => {
     expect(
       screen.getAllByTestId("recent-compliance-reviews-row"),
     ).toHaveLength(2);
+    // Compliance copy is humanized — operators see "Allowed for sale",
+    // never the raw `allowed_for_sale` field name.
+    const rows = screen.getAllByTestId("recent-compliance-reviews-row");
+    expect(rows[0]).toHaveTextContent(/Allowed for sale:/);
+    expect(rows[0]).not.toHaveTextContent(/allowed_for_sale/);
   });
 
   it("renders an empty-reviews state when the backend tail is empty", () => {

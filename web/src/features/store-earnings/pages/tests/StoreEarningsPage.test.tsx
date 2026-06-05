@@ -226,3 +226,34 @@ describe("StoreEarningsPage — populated state", () => {
     expect(plain).toHaveTextContent("—");
   });
 });
+
+describe("StoreEarningsPage — pre-Stripe framing (F2.26.4.A)", () => {
+  it("renders the projected / Stripe-pending disclaimer with all three facts", () => {
+    mockStoreContext(STORE_ID);
+    vi.mocked(storeEarningsHooks.useStoreEarningsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+    renderPage();
+    const disclaimer = screen.getByTestId("store-earnings-disclaimer");
+    expect(disclaimer).toHaveTextContent(/projected internal accounting/i);
+    expect(disclaimer).toHaveTextContent(/stripe/i);
+    expect(disclaimer).toHaveTextContent(/no funds.*charged or paid out/i);
+  });
+
+  it("does not tell the store it has already earned or generated funds", () => {
+    mockStoreContext(STORE_ID);
+    vi.mocked(storeEarningsHooks.useStoreEarningsQuery).mockReturnValue(
+      asQueryResult({
+        isSuccess: true,
+        data: makeSummary({ delivered_orders: 2, product_revenue: "50.00" }),
+      }),
+    );
+    renderPage();
+    expect(screen.queryByText(/has generated/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/has earned/i)).not.toBeInTheDocument();
+    // Data still renders under the projected framing.
+    expect(screen.getByTestId("store-earnings-revenue")).toHaveTextContent(
+      /50\.00/,
+    );
+  });
+});

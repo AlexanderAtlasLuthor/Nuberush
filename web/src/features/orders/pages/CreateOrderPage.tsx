@@ -65,6 +65,10 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 
 import { useInventoryList } from "@/features/inventory/hooks";
+import {
+  complianceStatusLabel,
+  inventoryStatusLabel,
+} from "@/features/inventory/labels";
 import type { InventoryItem } from "@/features/inventory/types";
 
 import { useCreateOrderMutation } from "../hooks";
@@ -362,7 +366,7 @@ function VariantPicker({ disabled, onAdd }: VariantPickerProps) {
                     </TableCell>
                     <TableCell>
                       <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                        {item.status}
+                        {inventoryStatusLabel(item.status)}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -371,8 +375,8 @@ function VariantPicker({ disabled, onAdd }: VariantPickerProps) {
                           compliance,
                         )}`}
                       >
-                        {compliance}
-                        {!sellable ? " · not sellable" : ""}
+                        {complianceStatusLabel(compliance)}
+                        {!sellable ? " · not available for sale" : ""}
                       </span>
                     </TableCell>
                     <TableCell className="text-right">

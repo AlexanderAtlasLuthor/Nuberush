@@ -15,6 +15,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
+import { EarningsDisclaimer } from "../components/EarningsDisclaimer";
 import { EarningsHeroCard } from "../components/EarningsHeroCard";
 import { MoneyTile } from "../components/MoneyTile";
 import { formatUsd } from "../components/format";
@@ -27,13 +28,13 @@ function PageHeader() {
         Admin · Earnings
       </p>
       <h1 className="mt-1.5 text-2xl font-semibold tracking-tight md:text-[28px]">
-        Platform earnings
+        Projected platform earnings
       </h1>
       <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground leading-relaxed">
-        20% commission on every delivered order. Pricing breakdown per
-        order: product subtotal + $10 delivery + tip (if any) + taxes +
-        20% platform commission. Read-only — every value is computed by
-        the backend from existing orders on each request.
+        Projected 20% platform commission on each delivered order, with the
+        projected order-value breakdown (product subtotal + $10 delivery +
+        tips + taxes). Read-only — every value is a projected internal
+        accounting estimate the backend computes from recorded orders.
       </p>
     </header>
   );
@@ -119,6 +120,8 @@ export default function AdminEarningsPage() {
     >
       <PageHeader />
 
+      <EarningsDisclaimer data-testid="admin-earnings-disclaimer" />
+
       {query.isPending ? <LoadingState /> : null}
 
       {query.isError ? (
@@ -134,9 +137,9 @@ export default function AdminEarningsPage() {
         <>
           <section className="grid gap-3 md:gap-4 grid-cols-1 lg:grid-cols-[2fr_1fr]">
             <EarningsHeroCard
-              eyebrow="Commission earned"
+              eyebrow="Projected platform commission"
               value={query.data.commission_total}
-              description={`${query.data.delivered_orders} delivered orders · 20% of gross base across all stores`}
+              description={`${query.data.delivered_orders} delivered orders · projected 20% of order value across all stores`}
               composition={[
                 {
                   label: "Product subtotal",
@@ -160,16 +163,16 @@ export default function AdminEarningsPage() {
             />
             <div className="grid grid-cols-1 gap-3 md:gap-4">
               <MoneyTile
-                title="Gross base"
+                title="Projected order value"
                 value={query.data.gross_base_total}
                 description="Subtotal + delivery + tip + tax"
                 icon={Wallet}
                 data-testid="admin-earnings-gross-base"
               />
               <MoneyTile
-                title="Customer paid"
+                title="Projected customer total"
                 value={query.data.customer_paid_total}
-                description="What customers were charged total"
+                description="Projected order total — no funds charged yet"
                 icon={Coins}
                 data-testid="admin-earnings-customer-paid"
               />
@@ -178,28 +181,28 @@ export default function AdminEarningsPage() {
 
           <section className="grid gap-3 md:gap-4 grid-cols-2 lg:grid-cols-4">
             <MoneyTile
-              title="Subtotal (products)"
+              title="Product subtotal"
               value={query.data.subtotal_total}
               description="Sum of all product subtotals"
               icon={Receipt}
               data-testid="admin-earnings-subtotal"
             />
             <MoneyTile
-              title="Delivery collected"
+              title="Projected delivery fees"
               value={query.data.delivery_total}
               description={`${formatUsd(query.data.delivery_fee)} per order`}
               icon={Truck}
               data-testid="admin-earnings-delivery"
             />
             <MoneyTile
-              title="Taxes collected"
+              title="Projected taxes"
               value={query.data.tax_total}
               description="Pass-through taxes"
               icon={Wallet}
               data-testid="admin-earnings-tax"
             />
             <MoneyTile
-              title="Tips collected"
+              title="Projected tips"
               value={query.data.tip_total}
               description="Currently $0 — tips not tracked yet"
               icon={Coins}
@@ -213,10 +216,13 @@ export default function AdminEarningsPage() {
             aria-label="Earnings by store"
           >
             <div className="p-5 md:p-6 border-b border-border">
-              <h2 className="text-base font-semibold">Earnings by store</h2>
+              <h2 className="text-base font-semibold">
+                Projected earnings by store
+              </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Top {query.data.by_store.length} stores by commission.
-                Commission = 20% of (subtotal + delivery + tip + tax).
+                Top {query.data.by_store.length} stores by projected
+                commission. Projected commission = 20% of (subtotal +
+                delivery + tip + tax).
               </p>
             </div>
             {query.data.by_store.length === 0 ? (
@@ -233,9 +239,9 @@ export default function AdminEarningsPage() {
                     <tr>
                       <th className="px-5 py-3 text-left">Store</th>
                       <th className="px-5 py-3 text-right">Delivered orders</th>
-                      <th className="px-5 py-3 text-right">Gross base</th>
+                      <th className="px-5 py-3 text-right">Order value</th>
                       <th className="px-5 py-3 text-right">Share</th>
-                      <th className="px-5 py-3 text-right">Commission</th>
+                      <th className="px-5 py-3 text-right">Projected commission</th>
                     </tr>
                   </thead>
                   <tbody>

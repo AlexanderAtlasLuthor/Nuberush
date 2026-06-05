@@ -6,6 +6,7 @@ import { ArrowRight, Package, ShoppingBag } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useStoreContext } from "@/auth";
+import { EarningsDisclaimer } from "@/features/admin-earnings/components/EarningsDisclaimer";
 import { EarningsHeroCard } from "@/features/admin-earnings/components/EarningsHeroCard";
 import { MoneyTile } from "@/features/admin-earnings/components/MoneyTile";
 import { formatUsd } from "@/features/admin-earnings/components/format";
@@ -24,9 +25,9 @@ export function StoreEarningsWidget() {
     >
       <div className="flex flex-col gap-1 mb-4 md:flex-row md:items-end md:justify-between">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold">Earnings from products sold</h2>
+          <h2 className="text-base font-semibold">Projected product earnings</h2>
           <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
-            Revenue your store has earned from delivered orders.
+            Projected store revenue from delivered orders. Stripe pending.
           </p>
         </div>
         <Link
@@ -37,6 +38,10 @@ export function StoreEarningsWidget() {
           View details
           <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
         </Link>
+      </div>
+
+      <div className="mb-4">
+        <EarningsDisclaimer data-testid="store-earnings-widget-disclaimer" />
       </div>
 
       {query.isPending ? (
@@ -60,7 +65,7 @@ export function StoreEarningsWidget() {
       {query.isSuccess && query.data ? (
         <div className="grid gap-3 md:gap-4 grid-cols-1 lg:grid-cols-[1.6fr_1fr_1fr]">
           <EarningsHeroCard
-            eyebrow="Product revenue"
+            eyebrow="Projected product revenue"
             value={query.data.product_revenue}
             description={`From ${query.data.delivered_orders} delivered orders · ${query.data.total_items_sold} units sold`}
             composition={

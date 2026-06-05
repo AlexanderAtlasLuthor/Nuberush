@@ -36,6 +36,7 @@ import { getApiErrorMessage } from "@/api";
 
 import { useInventoryList } from "../hooks";
 import { InventoryActions } from "../components/InventoryActions";
+import { inventoryStatusLabel } from "../labels";
 import type { InventoryItem } from "../types";
 
 const DEFAULT_LIMIT = 20;
@@ -49,7 +50,8 @@ function PageHeader() {
     <header>
       <h1 className="text-xl font-semibold">Inventory</h1>
       <p className="text-sm text-muted-foreground">
-        Stock levels per store. Receive and adjust ship in the next subphase.
+        Track stock levels and manage available, reserved, and low-stock
+        inventory for this store.
       </p>
     </header>
   );
@@ -91,7 +93,7 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
             <TableHead>SKU</TableHead>
             <TableHead className="text-right">Stock</TableHead>
             <TableHead className="text-right">Reserved</TableHead>
-            <TableHead className="text-right">Threshold</TableHead>
+            <TableHead className="text-right">Low-stock threshold</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="w-12 text-right">
               <span className="sr-only">Actions</span>
@@ -118,7 +120,7 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
               </TableCell>
               <TableCell>
                 <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                  {item.status}
+                  {inventoryStatusLabel(item.status)}
                 </span>
               </TableCell>
               <TableCell className="text-right">

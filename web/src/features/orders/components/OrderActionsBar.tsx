@@ -27,6 +27,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { CancelOrderModal } from "./CancelOrderModal";
 import { ReturnOrderModal } from "./ReturnOrderModal";
 import { TransitionStatusDialog } from "./TransitionStatusDialog";
+import { orderStatusLabel } from "../labels";
 import type { OrderRead, OrderStatus } from "../types";
 
 // --------------------------------------------------------------------- //
@@ -147,7 +148,7 @@ export function OrderActionsBar({ order }: OrderActionsBarProps) {
             className="text-sm font-medium uppercase tracking-wide"
             data-testid="order-actions-current-status"
           >
-            {order.status}
+            {orderStatusLabel(order.status)}
           </span>
         </div>
 
@@ -192,7 +193,7 @@ export function OrderActionsBar({ order }: OrderActionsBarProps) {
             className="ml-auto text-sm text-muted-foreground"
             data-testid="order-actions-terminal"
           >
-            No actions available for terminal status.
+            This order is complete. No further actions are available.
           </span>
         )}
         </CardContent>

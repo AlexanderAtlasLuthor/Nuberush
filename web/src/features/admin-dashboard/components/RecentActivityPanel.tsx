@@ -45,6 +45,36 @@ function dotClassFor(source: string): string {
   return SOURCE_DOT_CLASS[source] ?? "bg-muted-foreground/80";
 }
 
+// Human-readable labels for the wire-shape `source` / `entity_type`
+// tokens so the activity tail reads as operational language instead of
+// raw backend enums. Unknown values fall back to the raw token (a
+// future backend addition renders verbatim rather than blank). The
+// underlying values are never altered — this is presentation only.
+const SOURCE_LABEL: Record<string, string> = {
+  inventory: "Inventory",
+  order: "Order",
+  orders: "Order",
+  product_compliance: "Compliance",
+  compliance: "Compliance",
+  auth: "Authentication",
+  stores: "Stores",
+};
+
+const ENTITY_LABEL: Record<string, string> = {
+  inventory_item: "Inventory item",
+  order: "Order",
+  product: "Product",
+  store: "Store",
+};
+
+function sourceLabelFor(source: string): string {
+  return SOURCE_LABEL[source] ?? source;
+}
+
+function entityLabelFor(entityType: string): string {
+  return ENTITY_LABEL[entityType] ?? entityType;
+}
+
 function formatTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -60,13 +90,15 @@ export function RecentActivityPanel({ events }: RecentActivityPanelProps) {
     <section
       className="rounded-xl border border-border bg-card flex flex-col"
       data-testid="admin-dashboard-recent-activity"
-      aria-label="Recent activity"
+      aria-label="Latest operational activity"
     >
       <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-4 md:px-6">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold">Recent activity</h2>
+          <h2 className="text-base font-semibold">
+            Latest operational activity
+          </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Audit tail — bounded to 5 by the backend.
+            Most recent activity across the platform.
           </p>
         </div>
         <Link
@@ -123,7 +155,7 @@ function RenderTimeline({ events }: { events: ReadonlyArray<AuditEvent> }) {
               className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground bg-secondary/60 rounded px-1.5 py-0.5"
               data-testid={`recent-activity-source-${event.id}`}
             >
-              {event.source} · {event.entity_type}
+              {sourceLabelFor(event.source)} · {entityLabelFor(event.entity_type)}
             </span>
             <span
               className="text-[11px] text-muted-foreground tabular-nums"

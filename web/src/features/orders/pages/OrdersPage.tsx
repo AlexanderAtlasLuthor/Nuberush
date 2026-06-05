@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/table";
 
 import { useOrdersList } from "../hooks";
+import { orderStatusLabel } from "../labels";
 import type { OrderRead, OrderStatus } from "../types";
 
 const DEFAULT_LIMIT = 20;
@@ -101,7 +102,7 @@ function FilterBar({
             <SelectItem value={ALL_STATUSES}>All statuses</SelectItem>
             {ORDER_STATUSES.map((option) => (
               <SelectItem key={option} value={option}>
-                {option}
+                {orderStatusLabel(option)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -161,7 +162,7 @@ function OrdersTable({ orders }: { orders: OrderRead[] }) {
                 </TableCell>
                 <TableCell>
                   <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                    {order.status}
+                    {orderStatusLabel(order.status)}
                   </span>
                 </TableCell>
                 <TableCell className="tabular-nums">

@@ -6,6 +6,7 @@ import { ArrowRight, Receipt, Truck } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { useAdminEarningsQuery } from "../hooks";
+import { EarningsDisclaimer } from "./EarningsDisclaimer";
 import { EarningsHeroCard } from "./EarningsHeroCard";
 import { MoneyTile } from "./MoneyTile";
 import { formatUsd } from "./format";
@@ -21,9 +22,9 @@ export function AdminEarningsWidget() {
     >
       <div className="flex flex-col gap-1 mb-4 md:flex-row md:items-end md:justify-between">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold">Platform earnings</h2>
+          <h2 className="text-base font-semibold">Projected platform earnings</h2>
           <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
-            20% commission on every delivered order across all stores.
+            Projected 20% platform commission across all stores. Stripe pending.
           </p>
         </div>
         <Link
@@ -34,6 +35,10 @@ export function AdminEarningsWidget() {
           View details
           <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
         </Link>
+      </div>
+
+      <div className="mb-4">
+        <EarningsDisclaimer data-testid="admin-earnings-widget-disclaimer" />
       </div>
 
       {query.isPending ? (
@@ -57,9 +62,9 @@ export function AdminEarningsWidget() {
       {query.isSuccess && query.data ? (
         <div className="grid gap-3 md:gap-4 grid-cols-1 lg:grid-cols-[1.6fr_1fr_1fr]">
           <EarningsHeroCard
-            eyebrow="Commission earned"
+            eyebrow="Projected platform commission"
             value={query.data.commission_total}
-            description={`${query.data.delivered_orders} delivered orders · 20% of gross base`}
+            description={`${query.data.delivered_orders} delivered orders · projected 20% of order value`}
             composition={[
               {
                 label: "Subtotal",
@@ -83,14 +88,14 @@ export function AdminEarningsWidget() {
             data-testid="admin-earnings-widget-commission"
           />
           <MoneyTile
-            title="Gross base"
+            title="Projected order value"
             value={query.data.gross_base_total}
             description="Subtotal + delivery + tip + tax"
             icon={Receipt}
             data-testid="admin-earnings-widget-gross-base"
           />
           <MoneyTile
-            title="Customer paid"
+            title="Projected customer total"
             value={query.data.customer_paid_total}
             description={`Avg ${
               query.data.delivered_orders > 0
@@ -101,7 +106,7 @@ export function AdminEarningsWidget() {
                     ),
                   )
                 : formatUsd("0")
-            } per order`}
+            } per order (projected)`}
             icon={Truck}
             data-testid="admin-earnings-widget-customer-paid"
           />

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
 import { OrderActionsBar } from "../OrderActionsBar";
+import { orderStatusLabel } from "../../labels";
 import type { OrderRead, OrderStatus } from "../../types";
 
 vi.mock("../TransitionStatusDialog", () => ({
@@ -189,7 +190,7 @@ describe("OrderActionsBar - UI affordances", () => {
       render(<OrderActionsBar order={makeOrder({ status })} />);
 
       expect(screen.getByTestId("order-actions-current-status")).toHaveTextContent(
-        status,
+        orderStatusLabel(status),
       );
 
       for (const target of expected.transitions) {
@@ -221,7 +222,7 @@ describe("OrderActionsBar - UI affordances", () => {
 
       if (expected.terminal) {
         expect(screen.getByTestId("order-actions-terminal")).toHaveTextContent(
-          /no actions available/i,
+          /no further actions are available/i,
         );
       } else {
         expect(screen.queryByTestId("order-actions-terminal")).toBeNull();

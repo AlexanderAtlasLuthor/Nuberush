@@ -136,7 +136,7 @@ export function ProductImagePanel({ product }: ProductImagePanelProps) {
       <CardHeader>
         <CardTitle>Product image</CardTitle>
         <CardDescription>
-          Primary image shown to the storefront. JPEG, PNG or WebP up to{" "}
+          Shown wherever this product is listed. JPEG, PNG or WebP up to{" "}
           {Math.floor(MAX_IMAGE_SIZE_BYTES / (1024 * 1024))}&nbsp;MB.
         </CardDescription>
       </CardHeader>

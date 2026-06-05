@@ -120,7 +120,7 @@ export default function ProductDetailPage() {
         <EmptyState
           icon={ShoppingBag}
           title="Product not found"
-          message="No data was returned for this product."
+          message="We couldn't find this product. It may have been removed."
         />
       </div>
     );

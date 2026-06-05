@@ -44,6 +44,8 @@ import {
 } from "@/components/ui/table";
 
 import { useOrderAuditLogs } from "../hooks";
+import { orderStatusLabel } from "../labels";
+import type { OrderStatus } from "../types";
 
 const EM_DASH = "—";
 
@@ -51,6 +53,13 @@ function nullableText(value: string | null | undefined): string {
   return value === null || value === undefined || value === ""
     ? EM_DASH
     : value;
+}
+
+// Humanize an order-status token for display, preserving the em-dash
+// fallback for the nullable `previous_status` on the first transition.
+function statusText(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return EM_DASH;
+  return orderStatusLabel(value as OrderStatus);
 }
 
 interface OrderAuditLogsPanelProps {
@@ -102,12 +111,12 @@ export function OrderAuditLogsPanel({ orderId }: OrderAuditLogsPanelProps) {
                   <TableRow key={log.id}>
                     <TableCell>
                       <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                        {nullableText(log.previous_status)}
+                        {statusText(log.previous_status)}
                       </span>
                     </TableCell>
                     <TableCell>
                       <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                        {log.new_status}
+                        {statusText(log.new_status)}
                       </span>
                     </TableCell>
                     <TableCell className="text-sm">{log.action}</TableCell>

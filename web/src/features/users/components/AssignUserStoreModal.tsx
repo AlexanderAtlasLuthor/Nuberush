@@ -83,9 +83,9 @@ export function AssignUserStoreModal({
         <DialogHeader>
           <DialogTitle>Assign store</DialogTitle>
           <DialogDescription>
-            Enter a store UUID, or leave blank only for global admin
-            users. The backend rejects mismatches between role and
-            store assignment.
+            Enter a store ID, or leave blank only for global admin
+            users. Mismatches between role and store assignment are
+            rejected.
           </DialogDescription>
         </DialogHeader>
 
@@ -131,12 +131,12 @@ export function AssignUserStoreModal({
                   value={storeId}
                   onChange={(e) => setStoreId(e.target.value)}
                   disabled={mutation.isPending}
-                  placeholder="Store UUID, or blank for admin"
+                  placeholder="Store ID, or blank for admin"
                   data-testid="assign-user-store-input"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Empty value sends <code className="font-mono">null</code>{" "}
-                  to the server.
+                  Leave blank to make this a global admin user with no
+                  store assignment.
                 </p>
               </div>
 

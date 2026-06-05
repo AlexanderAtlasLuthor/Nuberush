@@ -239,7 +239,7 @@ describe("AssignUserStoreModal", () => {
     );
     // No combobox / select trigger — just a text input.
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-    // Copy makes the UUID-or-blank rule explicit.
-    expect(screen.getByText(/store uuid/i)).toBeInTheDocument();
+    // Copy makes the store-ID-or-blank rule explicit.
+    expect(screen.getByText(/store id, or leave blank/i)).toBeInTheDocument();
   });
 });

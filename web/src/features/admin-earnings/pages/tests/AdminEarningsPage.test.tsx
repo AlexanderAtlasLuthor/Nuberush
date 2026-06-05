@@ -227,3 +227,50 @@ describe("AdminEarningsPage — populated state", () => {
     expect(small).toHaveTextContent(/4\.00/);
   });
 });
+
+describe("AdminEarningsPage — pre-Stripe framing (F2.26.4.A)", () => {
+  it("renders the projected / Stripe-pending disclaimer with all three facts", () => {
+    vi.mocked(adminEarningsHooks.useAdminEarningsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+    renderPage();
+    const disclaimer = screen.getByTestId("admin-earnings-disclaimer");
+    // (1) projected/internal accounting, (2) Stripe not enabled,
+    // (3) no funds charged or paid out.
+    expect(disclaimer).toHaveTextContent(/projected internal accounting/i);
+    expect(disclaimer).toHaveTextContent(/stripe/i);
+    expect(disclaimer).toHaveTextContent(/no funds.*charged or paid out/i);
+  });
+
+  it("frames the commission headline as projected, not earned", () => {
+    vi.mocked(adminEarningsHooks.useAdminEarningsQuery).mockReturnValue(
+      asQueryResult({
+        isSuccess: true,
+        data: makeSummary({ delivered_orders: 1, commission_total: "20.00" }),
+      }),
+    );
+    renderPage();
+    // Same data still renders; only the framing changed.
+    expect(screen.getByTestId("admin-earnings-commission")).toHaveTextContent(
+      /projected platform commission/i,
+    );
+    expect(screen.getByTestId("admin-earnings-commission")).toHaveTextContent(
+      /20\.00/,
+    );
+  });
+
+  it("does not present real-money labels as user-facing copy", () => {
+    vi.mocked(adminEarningsHooks.useAdminEarningsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+    renderPage();
+    expect(screen.queryByText("Customer paid")).not.toBeInTheDocument();
+    expect(screen.queryByText("Commission earned")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/customers were charged/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Delivery collected")).not.toBeInTheDocument();
+    expect(screen.queryByText("Taxes collected")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tips collected")).not.toBeInTheDocument();
+  });
+});

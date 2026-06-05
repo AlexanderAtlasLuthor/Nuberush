@@ -48,6 +48,7 @@ import {
 import { OrderActionsBar } from "../components/OrderActionsBar";
 import { OrderAuditLogsPanel } from "../components/OrderAuditLogsPanel";
 import { useOrder } from "../hooks";
+import { orderStatusLabel } from "../labels";
 import type { OrderItemRead, OrderRead } from "../types";
 
 const EM_DASH = "—";
@@ -86,16 +87,16 @@ function SummaryCard({ order }: { order: OrderRead }) {
     <Card>
       <CardHeader>
         <CardTitle>Summary</CardTitle>
-        <CardDescription>Server-managed order metadata.</CardDescription>
+        <CardDescription>Order summary and totals.</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-2">
           <SummaryField label="Status">
             <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              {order.status}
+              {orderStatusLabel(order.status)}
             </span>
           </SummaryField>
-          <SummaryField label="Customer user id">
+          <SummaryField label="Customer">
             <span className="font-mono text-xs">
               {nullableText(order.customer_user_id)}
             </span>
@@ -111,7 +112,7 @@ function SummaryCard({ order }: { order: OrderRead }) {
               {order.total_amount}
             </span>
           </SummaryField>
-          <SummaryField label="Idempotency key">
+          <SummaryField label="Order reference">
             <span className="font-mono text-xs break-all">
               {order.idempotency_key}
             </span>
@@ -283,7 +284,7 @@ export default function OrderDetailPage() {
         <EmptyState
           icon={ClipboardList}
           title="Order not found"
-          message="No data was returned for this order."
+          message="We couldn't find this order. It may have been removed."
         />
       </div>
     );

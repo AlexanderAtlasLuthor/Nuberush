@@ -1071,6 +1071,31 @@ describe("DashboardHomePage - Orders to review widget", () => {
     expect(link.tagName).toBe("A");
     expect(link).toHaveAttribute("href", "/app/store/orders");
   });
+
+  it("humanizes recent order status pills, never the raw enum (F2.26.4.D)", () => {
+    const orders: OrderRead[] = [
+      makeOrder({
+        id: "00000000-0000-0000-0000-0000000000b1",
+        status: "out_for_delivery",
+        items: [makeOrderItem()],
+      }),
+    ];
+
+    mockOrdersQuery({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: makeOrdersListResponse({ items: orders, total: orders.length }),
+      error: null,
+      refetch: vi.fn() as never,
+    });
+
+    renderPage();
+
+    const card = screen.getByTestId("dashboard-orders-to-review");
+    expect(within(card).getByText("Out for delivery")).toBeInTheDocument();
+    expect((card.textContent ?? "")).not.toContain("out_for_delivery");
+  });
 });
 
 describe("DashboardHomePage - Product review widget", () => {

@@ -161,6 +161,20 @@ describe("ProductImagePanel — current image / placeholder", () => {
 });
 
 // --------------------------------------------------------------------- //
+// Copy guardrail (F2.26.4.D)
+// --------------------------------------------------------------------- //
+
+describe("ProductImagePanel — copy guardrails (F2.26.4.D)", () => {
+  it("uses listing-neutral image copy, not a live 'storefront' promise", () => {
+    render(<ProductImagePanel product={makeProduct()} />);
+    expect(
+      screen.getByText(/shown wherever this product is listed/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/storefront/i)).not.toBeInTheDocument();
+  });
+});
+
+// --------------------------------------------------------------------- //
 // C / D — preview-before-save + object-URL revocation
 // --------------------------------------------------------------------- //
 

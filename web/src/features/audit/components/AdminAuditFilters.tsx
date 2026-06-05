@@ -184,7 +184,7 @@ export function AdminAuditFilters({
         <Input
           id="admin-audit-filter-store-id"
           type="text"
-          placeholder="Store UUID (optional)"
+          placeholder="Filter by store ID (optional)"
           value={filters.store_id ?? ""}
           disabled={disabled}
           onChange={(e) => handleStoreIdChange(e.target.value)}
@@ -258,7 +258,7 @@ export function AdminAuditFilters({
         <Input
           id="admin-audit-filter-actor-id"
           type="text"
-          placeholder="Actor UUID"
+          placeholder="Actor ID"
           value={filters.actor_id ?? ""}
           disabled={disabled}
           onChange={(e) => handleActorIdChange(e.target.value)}

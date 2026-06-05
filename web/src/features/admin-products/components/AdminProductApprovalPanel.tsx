@@ -109,8 +109,9 @@ export function AdminProductApprovalPanel({
         <div>
           <h2 className="text-base font-semibold">Approval</h2>
           <p className="text-sm text-muted-foreground">
-            Curate the catalog: approve a store proposal to publish it,
-            or reject it with a reason that the proposing store can see.
+            Curate the catalog: approve a store proposal to make it
+            available for sale, or reject it with a reason that the
+            proposing store can see.
           </p>
         </div>
         <ProductApprovalBadge status={product.approval_status} />
@@ -159,7 +160,7 @@ export function AdminProductApprovalPanel({
         <span className="text-xs text-muted-foreground">
           {product.approval_status === "approved"
             ? "Already approved. Re-approving updates the reviewer and timestamp."
-            : "Approving publishes this product to every store."}
+            : "Approving makes this product available for sale in all stores."}
         </span>
       </div>
 

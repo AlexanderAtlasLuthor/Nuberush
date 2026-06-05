@@ -193,7 +193,7 @@ export function UsersFilters({
           <Input
             id="users-filter-store-id"
             type="text"
-            placeholder="Store UUID"
+            placeholder="Filter by store ID"
             value={filters.store_id ?? ""}
             disabled={disabled}
             onChange={(e) => handleStoreIdChange(e.target.value)}

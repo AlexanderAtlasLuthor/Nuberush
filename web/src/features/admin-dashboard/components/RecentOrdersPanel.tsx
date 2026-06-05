@@ -45,6 +45,22 @@ const STATUS_PILL_CLASS: Record<OrderStatus, string> = {
   returned: "bg-muted text-muted-foreground",
 };
 
+// Human-readable order-status labels. The displayed text is humanized
+// (no raw snake_case enum on the operator's screen); the underlying
+// `OrderStatus` value is never altered and the link target still
+// carries the full id. Mirrors the locked label set in
+// OrdersByStatusPanel so the dashboard reads consistently.
+const STATUS_LABEL: Record<OrderStatus, string> = {
+  pending: "Pending",
+  accepted: "Accepted",
+  preparing: "Preparing",
+  ready: "Ready",
+  out_for_delivery: "Out for delivery",
+  delivered: "Delivered",
+  canceled: "Canceled",
+  returned: "Returned",
+};
+
 export interface RecentOrdersPanelProps {
   orders: AdminDashboardSummary["orders"]["recent"];
 }
@@ -76,7 +92,7 @@ export function RecentOrdersPanel({ orders }: RecentOrdersPanelProps) {
         <div className="min-w-0">
           <h2 className="text-base font-semibold">Recent orders</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Last 5 — bounded by the backend.
+            Latest 5 orders across the platform.
           </p>
         </div>
         <Link
@@ -120,7 +136,7 @@ export function RecentOrdersPanel({ orders }: RecentOrdersPanelProps) {
                       )}
                       data-testid={`recent-order-status-${order.id}`}
                     >
-                      {order.status}
+                      {STATUS_LABEL[order.status] ?? order.status}
                     </span>
                   </div>
                   <p

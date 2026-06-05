@@ -490,11 +490,25 @@ describe("AdminDashboardPage — recent orders panel", () => {
     expect(within(panel).getByTestId(`recent-order-${ORDER_ID_2}`)).toBeInTheDocument();
     expect(
       within(panel).getByTestId(`recent-order-status-${ORDER_ID_1}`),
-    ).toHaveTextContent("pending");
+    ).toHaveTextContent("Pending");
     expect(
       within(panel).getByTestId(`recent-order-total-${ORDER_ID_1}`),
     ).toHaveTextContent("19.99");
     expect(within(panel).queryByTestId("recent-orders-empty")).not.toBeInTheDocument();
+  });
+
+  it("humanizes recent order statuses, never the raw enum (F2.26.4.D)", () => {
+    const summary = makeSummary();
+    summary.orders.recent[0].status = "out_for_delivery";
+    vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: summary }),
+    );
+
+    renderPage();
+
+    const pill = screen.getByTestId(`recent-order-status-${ORDER_ID_1}`);
+    expect(pill).toHaveTextContent("Out for delivery");
+    expect(pill.textContent ?? "").not.toContain("out_for_delivery");
   });
 
   it("renders an empty state when recent is empty", () => {
@@ -548,6 +562,14 @@ describe("AdminDashboardPage — recent activity panel", () => {
     expect(
       within(panel).getByTestId(`recent-activity-summary-${AUDIT_ID_2}`),
     ).toHaveTextContent("Order order_canceled: pending → canceled");
+    // Source / entity tokens are humanized — the operator sees
+    // "Inventory · Inventory item", never the raw `inventory_item`
+    // enum token.
+    const sourceChip = within(panel).getByTestId(
+      `recent-activity-source-${AUDIT_ID_1}`,
+    );
+    expect(sourceChip).toHaveTextContent("Inventory · Inventory item");
+    expect(sourceChip).not.toHaveTextContent("inventory_item");
   });
 
   it("renders an empty state when recent_audit is empty", () => {
@@ -677,14 +699,14 @@ describe("AdminDashboardPage — bento layout (Phase C)", () => {
     renderPage();
 
     // The status pill is the same element carrying the existing
-    // `recent-order-status-{id}` test id — the visual upgrade only
-    // wraps the text in a colored span without touching the value.
+    // `recent-order-status-{id}` test id — the value is humanized for
+    // display (the underlying OrderStatus enum is unchanged).
     expect(
       screen.getByTestId(`recent-order-status-${ORDER_ID_1}`),
-    ).toHaveTextContent("pending");
+    ).toHaveTextContent("Pending");
     expect(
       screen.getByTestId(`recent-order-status-${ORDER_ID_2}`),
-    ).toHaveTextContent("accepted");
+    ).toHaveTextContent("Accepted");
   });
 });
 

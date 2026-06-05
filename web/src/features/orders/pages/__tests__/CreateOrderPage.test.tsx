@@ -10,6 +10,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   MemoryRouter,
@@ -371,8 +372,13 @@ describe("CreateOrderPage - variant picker states", () => {
     expect(screen.getByText("GUM-MIX-10")).toBeInTheDocument();
     expect(screen.getByText(/mixed berry/i)).toBeInTheDocument();
     expect(screen.getByText(/10 pack/i)).toBeInTheDocument();
-    expect(screen.getByText("available")).toBeInTheDocument();
-    expect(screen.getByText("allowed")).toBeInTheDocument();
+    // Status / compliance are humanized for display. Scope to the data
+    // row so the inventory-status "Available" pill is not confused with
+    // the "Available" quantity column header.
+    const pickerRow = screen.getByText("GUM-MIX-10").closest("tr");
+    expect(pickerRow).not.toBeNull();
+    expect(within(pickerRow as HTMLElement).getByText("Available")).toBeInTheDocument();
+    expect(within(pickerRow as HTMLElement).getByText("Allowed")).toBeInTheDocument();
     expect(screen.getByTestId("create-order-picker-total")).toHaveTextContent(
       /1 variants/i,
     );

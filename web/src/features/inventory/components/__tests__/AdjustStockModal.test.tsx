@@ -107,9 +107,16 @@ describe("AdjustStockModal — render gating", () => {
       <AdjustStockModal open={true} onOpenChange={vi.fn()} item={makeItem()} />,
     );
 
-    expect(screen.getByLabelText(/^delta/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^adjustment amount/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^reason/i)).toBeInTheDocument();
     expect(screen.getByTestId("adjust-stock-submit")).toBeInTheDocument();
+    // Helper copy is operator-friendly, not the old "signed whole number"
+    // backend phrasing.
+    expect(
+      screen.getByText(
+        /use a positive number to add stock or a negative number to remove stock/i,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("does not render when open=false", () => {
@@ -117,7 +124,7 @@ describe("AdjustStockModal — render gating", () => {
       <AdjustStockModal open={false} onOpenChange={vi.fn()} item={makeItem()} />,
     );
 
-    expect(screen.queryByLabelText(/^delta/i)).toBeNull();
+    expect(screen.queryByLabelText(/^adjustment amount/i)).toBeNull();
     expect(screen.queryByTestId("adjust-stock-submit")).toBeNull();
   });
 });
@@ -141,7 +148,7 @@ describe("AdjustStockModal — validation", () => {
     render(
       <AdjustStockModal open={true} onOpenChange={vi.fn()} item={makeItem()} />,
     );
-    fireEvent.change(screen.getByLabelText(/^delta/i), {
+    fireEvent.change(screen.getByLabelText(/^adjustment amount/i), {
       target: { value: "0" },
     });
     fireEvent.change(screen.getByLabelText(/^reason/i), {
@@ -154,7 +161,7 @@ describe("AdjustStockModal — validation", () => {
     render(
       <AdjustStockModal open={true} onOpenChange={vi.fn()} item={makeItem()} />,
     );
-    fireEvent.change(screen.getByLabelText(/^delta/i), {
+    fireEvent.change(screen.getByLabelText(/^adjustment amount/i), {
       target: { value: "1.5" },
     });
     fireEvent.change(screen.getByLabelText(/^reason/i), {
@@ -167,7 +174,7 @@ describe("AdjustStockModal — validation", () => {
     render(
       <AdjustStockModal open={true} onOpenChange={vi.fn()} item={makeItem()} />,
     );
-    fireEvent.change(screen.getByLabelText(/^delta/i), {
+    fireEvent.change(screen.getByLabelText(/^adjustment amount/i), {
       target: { value: "5" },
     });
     fireEvent.change(screen.getByLabelText(/^reason/i), {
@@ -180,7 +187,7 @@ describe("AdjustStockModal — validation", () => {
     render(
       <AdjustStockModal open={true} onOpenChange={vi.fn()} item={makeItem()} />,
     );
-    fireEvent.change(screen.getByLabelText(/^delta/i), {
+    fireEvent.change(screen.getByLabelText(/^adjustment amount/i), {
       target: { value: "5" },
     });
     fireEvent.change(screen.getByLabelText(/^reason/i), {
@@ -193,7 +200,7 @@ describe("AdjustStockModal — validation", () => {
     render(
       <AdjustStockModal open={true} onOpenChange={vi.fn()} item={makeItem()} />,
     );
-    fireEvent.change(screen.getByLabelText(/^delta/i), {
+    fireEvent.change(screen.getByLabelText(/^adjustment amount/i), {
       target: { value: "-3" },
     });
     fireEvent.change(screen.getByLabelText(/^reason/i), {
@@ -215,7 +222,7 @@ describe("AdjustStockModal — submit payload", () => {
     render(
       <AdjustStockModal open={true} onOpenChange={vi.fn()} item={makeItem()} />,
     );
-    fireEvent.change(screen.getByLabelText(/^delta/i), {
+    fireEvent.change(screen.getByLabelText(/^adjustment amount/i), {
       target: { value: "7" },
     });
     fireEvent.change(screen.getByLabelText(/^reason/i), {
@@ -240,7 +247,7 @@ describe("AdjustStockModal — submit payload", () => {
     render(
       <AdjustStockModal open={true} onOpenChange={vi.fn()} item={makeItem()} />,
     );
-    fireEvent.change(screen.getByLabelText(/^delta/i), {
+    fireEvent.change(screen.getByLabelText(/^adjustment amount/i), {
       target: { value: "-12" },
     });
     fireEvent.change(screen.getByLabelText(/^reason/i), {
@@ -272,7 +279,7 @@ describe("AdjustStockModal — server feedback", () => {
       <AdjustStockModal open={true} onOpenChange={vi.fn()} item={makeItem()} />,
     );
 
-    expect(screen.getByLabelText(/^delta/i)).toBeDisabled();
+    expect(screen.getByLabelText(/^adjustment amount/i)).toBeDisabled();
     expect(screen.getByLabelText(/^reason/i)).toBeDisabled();
     const submit = screen.getByTestId("adjust-stock-submit");
     expect(submit).toBeDisabled();
