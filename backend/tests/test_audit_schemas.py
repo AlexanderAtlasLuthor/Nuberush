@@ -58,7 +58,7 @@ def _valid_event_payload(**overrides) -> dict:
 
 
 @pytest.mark.parametrize(
-    "value", ["inventory", "order", "product_compliance"]
+    "value", ["inventory", "order", "product_compliance", "operational"]
 )
 def test_audit_source_accepts_valid_values(value: str):
     assert AuditSource(value).value == value
@@ -80,7 +80,7 @@ def test_audit_source_rejects_empty_value():
 
 
 @pytest.mark.parametrize(
-    "value", ["inventory_item", "order", "product"]
+    "value", ["inventory_item", "order", "product", "user", "store"]
 )
 def test_audit_entity_type_accepts_valid_values(value: str):
     assert AuditEntityType(value).value == value
@@ -88,7 +88,9 @@ def test_audit_entity_type_accepts_valid_values(value: str):
 
 def test_audit_entity_type_rejects_unknown_value():
     with pytest.raises(ValueError):
-        AuditEntityType("user")
+        # `user` and `store` are now valid entity types (F2.26.2.A), so
+        # use a value that is genuinely not a member.
+        AuditEntityType("product_variant")
 
 
 def test_audit_entity_type_rejects_empty_value():
@@ -151,6 +153,45 @@ def test_audit_event_accepts_product_compliance_event():
     assert event.entity_type is AuditEntityType.product
     assert event.action == "compliance_changed"
     assert event.metadata["new_compliance_status"] == "banned"
+
+
+def test_audit_event_accepts_operational_user_event():
+    payload = _valid_event_payload(
+        source=AuditSource.operational,
+        action="user_updated",
+        entity_type=AuditEntityType.user,
+        summary="User updated",
+        metadata={
+            "before": {"full_name": "Old Name"},
+            "after": {"full_name": "New Name"},
+            "source": "users.update_user",
+        },
+    )
+    event = AuditEventRead.model_validate(payload)
+    assert event.source is AuditSource.operational
+    assert event.entity_type is AuditEntityType.user
+    assert event.action == "user_updated"
+    assert event.summary == "User updated"
+    assert event.metadata["after"]["full_name"] == "New Name"
+
+
+def test_audit_event_accepts_operational_store_event():
+    payload = _valid_event_payload(
+        source=AuditSource.operational,
+        action="store_updated",
+        entity_type=AuditEntityType.store,
+        summary="Store updated",
+        metadata={
+            "before": {"name": "Old Store"},
+            "after": {"name": "New Store"},
+            "source": "stores.update_store",
+        },
+    )
+    event = AuditEventRead.model_validate(payload)
+    assert event.source is AuditSource.operational
+    assert event.entity_type is AuditEntityType.store
+    assert event.action == "store_updated"
+    assert event.summary == "Store updated"
 
 
 # --------------------------------------------------------------------- #
@@ -267,7 +308,9 @@ def test_audit_event_rejects_invalid_source():
 
 def test_audit_event_rejects_invalid_entity_type():
     payload = _valid_event_payload()
-    payload["entity_type"] = "user"
+    # `user`/`store` are valid entity types since F2.26.2.A; use a value
+    # that is genuinely not a member to exercise rejection.
+    payload["entity_type"] = "product_variant"
     with pytest.raises(ValidationError):
         AuditEventRead.model_validate(payload)
 

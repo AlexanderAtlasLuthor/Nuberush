@@ -42,6 +42,7 @@ from app.db.models import InventoryItem
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
+from app.db.models import OperationalAuditLog
 from app.db.models import Order
 from app.db.models import OrderAuditLog
 from app.db.models import OrderStatus
@@ -350,7 +351,7 @@ class TestQueryParamValidation:
         resp = client.get(
             AUDIT_URL.format(store_id=store.id),
             headers=_auth(admin),
-            params={"entity_type": "user"},
+            params={"entity_type": "product_variant"},
         )
         assert resp.status_code == 422
 
@@ -1351,7 +1352,7 @@ class TestAdminAuditQueryValidation:
         resp = client.get(
             ADMIN_AUDIT_URL,
             headers=_auth(admin),
-            params={"entity_type": "user"},
+            params={"entity_type": "product_variant"},
         )
         assert resp.status_code == 422, resp.text
 
@@ -1777,3 +1778,198 @@ class TestAdminAuditRouteCollision:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert set(body.keys()) == AUDIT_LIST_KEYS
+
+
+# ===================================================================== #
+# F2.26.2.D — Operational events through the HTTP audit endpoints.
+# ===================================================================== #
+
+
+def _seed_op(
+    db: Session,
+    *,
+    target_type: str,
+    action: str,
+    store_id=None,
+    actor_user_id=None,
+    before=None,
+    after=None,
+    event_metadata=None,
+) -> OperationalAuditLog:
+    log = OperationalAuditLog(
+        actor_user_id=actor_user_id,
+        target_type=target_type,
+        target_id=uuid.uuid4(),
+        action=action,
+        store_id=store_id,
+        before=before,
+        after=after,
+        event_metadata=event_metadata,
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+class TestOperationalFeedAPI:
+    # A. admin audit returns operational events
+    def test_admin_returns_operational(
+        self, client: TestClient, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        _seed_op(db_session, target_type="store", action="store_updated",
+                 store_id=store.id, actor_user_id=admin.id,
+                 before={"name": "Old"}, after={"name": "New"},
+                 event_metadata={"source": "stores.update_store"})
+        resp = client.get(ADMIN_AUDIT_URL, headers=_auth(admin))
+        assert resp.status_code == 200
+        ops = [
+            it for it in resp.json()["items"]
+            if it["source"] == "operational"
+        ]
+        assert len(ops) == 1
+        ev = ops[0]
+        assert ev["entity_type"] == "store"
+        assert ev["summary"] == "Store updated"
+        assert ev["metadata"]["before"] == {"name": "Old"}
+        assert ev["metadata"]["after"] == {"name": "New"}
+
+    # B. admin store-filter excludes global NULL
+    def test_admin_store_filter_excludes_global(
+        self, client: TestClient, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        _seed_op(db_session, target_type="store", action="store_updated",
+                 store_id=store.id, actor_user_id=admin.id)
+        _seed_op(db_session, target_type="user", action="user_role_changed",
+                 store_id=None, actor_user_id=admin.id)  # global
+        resp = client.get(
+            ADMIN_AUDIT_URL, headers=_auth(admin),
+            params={"store_id": str(store.id)},
+        )
+        assert resp.status_code == 200
+        ops = [it for it in resp.json()["items"] if it["source"] == "operational"]
+        assert len(ops) == 1
+        assert ops[0]["store_id"] == str(store.id)
+
+    # C / D. store feed returns only same-store, excludes NULL + other store
+    def test_store_feed_scoped_excludes_null_and_other(
+        self, client: TestClient, db_session, make_store, make_user
+    ):
+        sa = make_store()
+        sb = make_store()
+        owner = make_user(role=UserRole.owner, store_id=sa.id)
+        admin = make_user(role=UserRole.admin)
+        _seed_op(db_session, target_type="store", action="store_updated",
+                 store_id=sa.id, actor_user_id=admin.id)
+        _seed_op(db_session, target_type="store", action="store_updated",
+                 store_id=sb.id, actor_user_id=admin.id)
+        _seed_op(db_session, target_type="user", action="user_role_changed",
+                 store_id=None, actor_user_id=admin.id)
+        resp = client.get(
+            AUDIT_URL.format(store_id=sa.id), headers=_auth(owner)
+        )
+        assert resp.status_code == 200
+        ops = [it for it in resp.json()["items"] if it["source"] == "operational"]
+        assert len(ops) == 1 and ops[0]["store_id"] == str(sa.id)
+
+    # E. source=operational filter
+    def test_source_operational_filter(
+        self, client: TestClient, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        _seed_op(db_session, target_type="store", action="store_updated",
+                 store_id=store.id, actor_user_id=admin.id)
+        resp = client.get(
+            AUDIT_URL.format(store_id=store.id), headers=_auth(admin),
+            params={"source": "operational"},
+        )
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert items and all(it["source"] == "operational" for it in items)
+
+    # F. entity_type=user filter
+    def test_entity_user_filter(
+        self, client: TestClient, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        _seed_op(db_session, target_type="user", action="user_updated",
+                 store_id=store.id, actor_user_id=admin.id)
+        _seed_op(db_session, target_type="store", action="store_updated",
+                 store_id=store.id, actor_user_id=admin.id)
+        resp = client.get(
+            AUDIT_URL.format(store_id=store.id), headers=_auth(admin),
+            params={"entity_type": "user"},
+        )
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert items and all(it["entity_type"] == "user" for it in items)
+
+    # G. entity_type=store filter
+    def test_entity_store_filter(
+        self, client: TestClient, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        _seed_op(db_session, target_type="user", action="user_updated",
+                 store_id=store.id, actor_user_id=admin.id)
+        _seed_op(db_session, target_type="store", action="store_updated",
+                 store_id=store.id, actor_user_id=admin.id)
+        resp = client.get(
+            AUDIT_URL.format(store_id=store.id), headers=_auth(admin),
+            params={"entity_type": "store"},
+        )
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert items and all(it["entity_type"] == "store" for it in items)
+
+    # H. combined source + entity filters
+    def test_combined_source_entity(
+        self, client: TestClient, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        _seed_op(db_session, target_type="user", action="user_updated",
+                 store_id=store.id, actor_user_id=admin.id)
+        _seed_op(db_session, target_type="store", action="store_updated",
+                 store_id=store.id, actor_user_id=admin.id)
+        resp = client.get(
+            AUDIT_URL.format(store_id=store.id), headers=_auth(admin),
+            params={"source": "operational", "entity_type": "user"},
+        )
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert items and all(
+            it["source"] == "operational" and it["entity_type"] == "user"
+            for it in items
+        )
+
+    # I. invalid filters still 422
+    def test_invalid_entity_still_422(
+        self, client: TestClient, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        store = make_store()
+        resp = client.get(
+            AUDIT_URL.format(store_id=store.id), headers=_auth(admin),
+            params={"entity_type": "product_variant"},
+        )
+        assert resp.status_code == 422
+
+    # J. permissions unchanged: driver still 403 on store feed
+    def test_driver_still_forbidden(
+        self, client: TestClient, db_session, make_store, make_user
+    ):
+        store = make_store()
+        driver = make_user(role=UserRole.driver, store_id=store.id)
+        _seed_op(db_session, target_type="store", action="store_updated",
+                 store_id=store.id, actor_user_id=driver.id)
+        resp = client.get(
+            AUDIT_URL.format(store_id=store.id), headers=_auth(driver)
+        )
+        assert resp.status_code == 403

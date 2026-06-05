@@ -45,6 +45,7 @@ from app.db.models import InventoryItem
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
+from app.db.models import OperationalAuditLog
 from app.db.models import Order
 from app.db.models import OrderAuditLog
 from app.db.models import OrderStatus
@@ -2080,3 +2081,656 @@ class TestAdminAuditComplianceFanOut:
         compliance_events = [e for e in result.items if e.id == log.id]
         assert len(compliance_events) == 1
         assert compliance_events[0].store_id == store_a.id
+
+
+# ===================================================================== #
+# F2.26.2.B — Source binding generalization (`_SOURCE_ENTITY_BINDING`
+# now maps a source to a SET of entity types; `_source_applies` honors it
+# by membership). The operational normalizer is NOT wired yet, so a
+# `source=operational` service query yields an empty page (200, not 500).
+# ===================================================================== #
+
+
+class TestSourceBindingGeneralization:
+    def test_binding_shape_is_sets(self):
+        # Every binding value is now a set/frozenset of entity types.
+        for source, entities in svc._SOURCE_ENTITY_BINDING.items():
+            assert isinstance(entities, (set, frozenset)), source
+            assert all(
+                isinstance(e, AuditEntityType) for e in entities
+            ), source
+
+    def test_existing_sources_keep_singleton_entities(self):
+        assert svc._SOURCE_ENTITY_BINDING[AuditSource.inventory] == frozenset(
+            {AuditEntityType.inventory_item}
+        )
+        assert svc._SOURCE_ENTITY_BINDING[AuditSource.order] == frozenset(
+            {AuditEntityType.order}
+        )
+        assert svc._SOURCE_ENTITY_BINDING[
+            AuditSource.product_compliance
+        ] == frozenset({AuditEntityType.product})
+
+    def test_operational_binds_user_and_store(self):
+        assert svc._SOURCE_ENTITY_BINDING[AuditSource.operational] == frozenset(
+            {AuditEntityType.user, AuditEntityType.store}
+        )
+
+    # ---- A. existing singleton behavior via _source_applies ---------- #
+
+    def test_inventory_applies_to_inventory_item(self):
+        assert svc._source_applies(
+            AuditSource.inventory,
+            source=AuditSource.inventory,
+            entity_type=AuditEntityType.inventory_item,
+        )
+
+    def test_inventory_does_not_apply_to_user(self):
+        assert not svc._source_applies(
+            AuditSource.inventory,
+            source=AuditSource.inventory,
+            entity_type=AuditEntityType.user,
+        )
+
+    def test_order_applies_to_order(self):
+        assert svc._source_applies(
+            AuditSource.order,
+            source=AuditSource.order,
+            entity_type=AuditEntityType.order,
+        )
+
+    def test_product_compliance_applies_to_product(self):
+        assert svc._source_applies(
+            AuditSource.product_compliance,
+            source=AuditSource.product_compliance,
+            entity_type=AuditEntityType.product,
+        )
+
+    def test_source_mismatch_short_circuits(self):
+        # candidate inventory, but caller asked for operational → skip.
+        assert not svc._source_applies(
+            AuditSource.inventory,
+            source=AuditSource.operational,
+            entity_type=None,
+        )
+
+    # ---- B. operational binding behavior ----------------------------- #
+
+    def test_operational_applies_with_no_entity_filter(self):
+        assert svc._source_applies(
+            AuditSource.operational, source=AuditSource.operational,
+            entity_type=None,
+        )
+
+    def test_operational_applies_to_user(self):
+        assert svc._source_applies(
+            AuditSource.operational, source=AuditSource.operational,
+            entity_type=AuditEntityType.user,
+        )
+
+    def test_operational_applies_to_store(self):
+        assert svc._source_applies(
+            AuditSource.operational, source=AuditSource.operational,
+            entity_type=AuditEntityType.store,
+        )
+
+    def test_operational_does_not_apply_to_order(self):
+        assert not svc._source_applies(
+            AuditSource.operational, source=AuditSource.operational,
+            entity_type=AuditEntityType.order,
+        )
+
+    def test_operational_does_not_apply_to_product(self):
+        assert not svc._source_applies(
+            AuditSource.operational, source=AuditSource.operational,
+            entity_type=AuditEntityType.product,
+        )
+
+    def test_no_filters_admits_every_source(self):
+        # source=None, entity_type=None → every source applies conceptually.
+        for candidate in svc._SOURCE_ENTITY_BINDING:
+            assert svc._source_applies(
+                candidate, source=None, entity_type=None
+            )
+
+
+class TestOperationalFeedEmptyWhenNoRows:
+    """With NO operational rows present, a `source=operational` query (or
+    a `user`-entity query) must return an empty page — 200, never 500 —
+    on both the store and admin feeds. (Pre-F2.26.2.D this also proved the
+    source was unwired; post-wiring it proves the empty-DB invariant.)"""
+
+    def test_store_feed_operational_source_returns_empty(
+        self, db_session, make_store, make_user
+    ):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        result = svc.list_store_audit(
+            db_session,
+            store_id=store.id,
+            actor=actor,
+            source=AuditSource.operational,
+        )
+        assert result.items == []
+        assert result.total == 0
+
+    def test_admin_feed_operational_source_returns_empty(
+        self, db_session, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        result = svc.list_admin_audit(
+            db_session, actor=admin, source=AuditSource.operational
+        )
+        assert result.items == []
+        assert result.total == 0
+
+    def test_store_feed_entity_user_returns_empty(
+        self, db_session, make_store, make_user
+    ):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        result = svc.list_store_audit(
+            db_session,
+            store_id=store.id,
+            actor=actor,
+            entity_type=AuditEntityType.user,
+        )
+        assert result.items == []
+        assert result.total == 0
+
+
+# ===================================================================== #
+# F2.26.2.C — Operational audit normalizer (`_query_operational_events`).
+# Tested directly (the normalizer is NOT yet wired into list_*_audit).
+# Operational rows are created directly via the committed model for
+# focused coverage.
+# ===================================================================== #
+
+
+def _make_op_log(
+    db: Session,
+    *,
+    target_type: str,
+    action: str,
+    store_id=None,
+    actor_user_id=None,
+    before=None,
+    after=None,
+    event_metadata=None,
+    created_at=None,
+) -> OperationalAuditLog:
+    log = OperationalAuditLog(
+        actor_user_id=actor_user_id,
+        target_type=target_type,
+        target_id=uuid.uuid4(),
+        action=action,
+        store_id=store_id,
+        before=before,
+        after=after,
+        event_metadata=event_metadata,
+    )
+    if created_at is not None:
+        log.created_at = created_at
+    db.add(log)
+    db.flush()
+    return log
+
+
+def _op(db, **kw):
+    return svc._query_operational_events(
+        db,
+        store_id=kw.get("store_id"),
+        action=kw.get("action"),
+        actor_id=kw.get("actor_id"),
+        date_from=kw.get("date_from"),
+        date_to=kw.get("date_to"),
+        entity_type=kw.get("entity_type"),
+    )
+
+
+class TestOperationalNormalizer:
+    # A. user event
+    def test_normalizes_user_event(self, db_session, make_store, make_user):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        row = _make_op_log(
+            db_session,
+            target_type="user",
+            action="user_updated",
+            store_id=store.id,
+            actor_user_id=actor.id,
+            before={"full_name": "Old"},
+            after={"full_name": "New"},
+            event_metadata={"source": "users.update_user"},
+        )
+        events = _op(db_session, store_id=store.id)
+        assert len(events) == 1
+        ev = events[0]
+        assert ev.id == row.id
+        assert ev.source == AuditSource.operational
+        assert ev.entity_type == AuditEntityType.user
+        assert ev.entity_id == row.target_id
+        assert ev.actor_id == actor.id
+        assert ev.action == "user_updated"
+        assert ev.summary == "User updated"
+        assert ev.metadata["before"] == {"full_name": "Old"}
+        assert ev.metadata["after"] == {"full_name": "New"}
+        assert ev.metadata["source"] == "users.update_user"
+
+    # B. store event
+    def test_normalizes_store_event(self, db_session, make_store, make_user):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        _make_op_log(
+            db_session,
+            target_type="store",
+            action="store_updated",
+            store_id=store.id,
+            actor_user_id=actor.id,
+        )
+        events = _op(db_session, store_id=store.id)
+        assert len(events) == 1
+        assert events[0].entity_type == AuditEntityType.store
+        assert events[0].summary == "Store updated"
+
+    # C. concrete store_id excludes NULL global and other store
+    def test_store_filter_excludes_null_and_other_store(
+        self, db_session, make_store, make_user
+    ):
+        store_a = make_store()
+        store_b = make_store()
+        actor = make_user(role=UserRole.admin)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store_a.id, actor_user_id=actor.id)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store_b.id, actor_user_id=actor.id)
+        _make_op_log(db_session, target_type="user", action="user_role_changed",
+                     store_id=None, actor_user_id=actor.id)  # global
+        events = _op(db_session, store_id=store_a.id)
+        assert len(events) == 1
+        assert all(ev.store_id == store_a.id for ev in events)
+
+    # D. admin/global no store filter -> global NULL + store-scoped
+    def test_global_includes_null_and_scoped(
+        self, db_session, make_store, make_user
+    ):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store.id, actor_user_id=actor.id)
+        _make_op_log(db_session, target_type="user", action="user_role_changed",
+                     store_id=None, actor_user_id=actor.id)
+        events = _op(db_session, store_id=None)
+        assert len(events) == 2
+        scopes = {ev.store_id for ev in events}
+        assert store.id in scopes and None in scopes
+
+    # E. filter by action
+    def test_filter_by_action(self, db_session, make_store, make_user):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store.id, actor_user_id=actor.id)
+        _make_op_log(db_session, target_type="store", action="store_deactivated",
+                     store_id=store.id, actor_user_id=actor.id)
+        events = _op(db_session, store_id=store.id, action="store_deactivated")
+        assert len(events) == 1
+        assert events[0].action == "store_deactivated"
+
+    # F. filter by actor_id
+    def test_filter_by_actor_id(self, db_session, make_store, make_user):
+        store = make_store()
+        a1 = make_user(role=UserRole.admin)
+        a2 = make_user(role=UserRole.owner, store_id=store.id)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store.id, actor_user_id=a1.id)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store.id, actor_user_id=a2.id)
+        events = _op(db_session, store_id=store.id, actor_id=a1.id)
+        assert len(events) == 1
+        assert events[0].actor_id == a1.id
+
+    # G. filter by date_from / date_to
+    def test_filter_by_date_range(self, db_session, make_store, make_user):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        old = datetime(2020, 1, 1, tzinfo=UTC)
+        new = datetime(2026, 1, 1, tzinfo=UTC)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store.id, actor_user_id=actor.id, created_at=old)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store.id, actor_user_id=actor.id, created_at=new)
+        cutoff = datetime(2023, 1, 1, tzinfo=UTC)
+        after_events = _op(db_session, store_id=store.id, date_from=cutoff)
+        before_events = _op(db_session, store_id=store.id, date_to=cutoff)
+        assert len(after_events) == 1 and after_events[0].created_at == new
+        assert len(before_events) == 1 and before_events[0].created_at == old
+
+    # H. entity_type row-level filter
+    def test_entity_type_user_and_store_rowlevel(
+        self, db_session, make_store, make_user
+    ):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        _make_op_log(db_session, target_type="user", action="user_updated",
+                     store_id=store.id, actor_user_id=actor.id)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store.id, actor_user_id=actor.id)
+        users = _op(db_session, store_id=store.id, entity_type=AuditEntityType.user)
+        stores = _op(db_session, store_id=store.id, entity_type=AuditEntityType.store)
+        assert len(users) == 1 and users[0].entity_type == AuditEntityType.user
+        assert len(stores) == 1 and stores[0].entity_type == AuditEntityType.store
+
+    # I. entity_type incompatible with operational -> []
+    def test_entity_type_incompatible_returns_empty(
+        self, db_session, make_store, make_user
+    ):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        _make_op_log(db_session, target_type="user", action="user_updated",
+                     store_id=store.id, actor_user_id=actor.id)
+        assert _op(db_session, store_id=store.id,
+                   entity_type=AuditEntityType.order) == []
+
+    # J. unknown target_type row is skipped, not raised
+    def test_unknown_target_type_is_skipped(
+        self, db_session, make_store, make_user
+    ):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        # A valid row plus a malformed one (bypasses the writer's taxonomy).
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=store.id, actor_user_id=actor.id)
+        _make_op_log(db_session, target_type="spaceship", action="store_updated",
+                     store_id=store.id, actor_user_id=actor.id)
+        events = _op(db_session, store_id=store.id)
+        assert len(events) == 1
+        assert events[0].entity_type == AuditEntityType.store
+
+    # K. metadata safety: before/after present (even None), no mutation
+    def test_metadata_includes_before_after_safely(
+        self, db_session, make_store, make_user
+    ):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        meta = {"source": "users.deactivate_user"}
+        _make_op_log(db_session, target_type="user", action="user_deactivated",
+                     store_id=store.id, actor_user_id=actor.id,
+                     before={"is_active": True}, after={"is_active": False},
+                     event_metadata=meta)
+        events = _op(db_session, store_id=store.id)
+        md = events[0].metadata
+        assert md["before"] == {"is_active": True}
+        assert md["after"] == {"is_active": False}
+        assert md["source"] == "users.deactivate_user"
+        # original event_metadata dict not mutated with before/after keys
+        assert "before" not in meta and "after" not in meta
+
+    def test_metadata_includes_before_after_when_none(
+        self, db_session, make_store, make_user
+    ):
+        store = make_store()
+        actor = make_user(role=UserRole.admin)
+        _make_op_log(db_session, target_type="store", action="store_created",
+                     store_id=store.id, actor_user_id=actor.id,
+                     before=None, after={"name": "X"})
+        ev = _op(db_session, store_id=store.id)[0]
+        assert ev.metadata["before"] is None
+        assert ev.metadata["after"] == {"name": "X"}
+
+
+# ===================================================================== #
+# F2.26.2.D — Operational events WIRED into the unified feed
+# (`list_store_audit` / `list_admin_audit`). Visibility, filters,
+# mixed-source sort/pagination, and metadata are exercised end-to-end
+# through the public service entry points.
+# ===================================================================== #
+
+
+class TestOperationalFeedWiring:
+    # A. admin global sees operational global (NULL) + all store-scoped
+    def test_admin_global_includes_null_and_all_stores(
+        self, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        sb = make_store()
+        _make_op_log(db_session, target_type="user",
+                     action="user_role_changed", store_id=None,
+                     actor_user_id=admin.id)  # global
+        _make_op_log(db_session, target_type="store",
+                     action="store_updated", store_id=sa.id,
+                     actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="store",
+                     action="store_updated", store_id=sb.id,
+                     actor_user_id=admin.id)
+        res = svc.list_admin_audit(db_session, actor=admin)
+        ops = [e for e in res.items if e.source == AuditSource.operational]
+        scopes = {e.store_id for e in ops}
+        assert len(ops) == 3
+        assert None in scopes and sa.id in scopes and sb.id in scopes
+
+    # B. admin store-filtered excludes global NULL and other store
+    def test_admin_store_filter_excludes_global_and_other(
+        self, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        sb = make_store()
+        _make_op_log(db_session, target_type="user",
+                     action="user_role_changed", store_id=None,
+                     actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="store",
+                     action="store_updated", store_id=sa.id,
+                     actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="store",
+                     action="store_updated", store_id=sb.id,
+                     actor_user_id=admin.id)
+        res = svc.list_admin_audit(db_session, actor=admin, store_id=sa.id)
+        ops = [e for e in res.items if e.source == AuditSource.operational]
+        assert len(ops) == 1 and ops[0].store_id == sa.id
+
+    # C. store feed scoped: only this store, no global, no other store
+    def test_store_feed_scoped(
+        self, db_session, make_store, make_user
+    ):
+        sa = make_store()
+        sb = make_store()
+        actor = make_user(role=UserRole.owner, store_id=sa.id)
+        admin = make_user(role=UserRole.admin)
+        _make_op_log(db_session, target_type="user",
+                     action="user_role_changed", store_id=None,
+                     actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="store",
+                     action="store_updated", store_id=sa.id,
+                     actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="store",
+                     action="store_updated", store_id=sb.id,
+                     actor_user_id=admin.id)
+        res = svc.list_store_audit(db_session, store_id=sa.id, actor=actor)
+        ops = [e for e in res.items if e.source == AuditSource.operational]
+        assert len(ops) == 1 and ops[0].store_id == sa.id
+
+    # D. source=operational returns only operational rows (a non-op row
+    # in the same store must be excluded by the filter).
+    def test_source_operational_only(
+        self, db_session, make_store, make_user, make_order,
+        make_order_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=sa.id, actor_user_id=admin.id)
+        make_order_audit_log(order=make_order(store=sa))  # non-operational
+        # Sanity: with no source filter, both sources are present.
+        unfiltered = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin
+        )
+        assert {e.source for e in unfiltered.items} == {
+            AuditSource.operational, AuditSource.order
+        }
+        res = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin,
+            source=AuditSource.operational,
+        )
+        assert res.items, "expected at least one operational event"
+        assert all(e.source == AuditSource.operational for e in res.items)
+
+    # E / F. entity filters
+    def test_entity_user_returns_only_user_ops(
+        self, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        _make_op_log(db_session, target_type="user", action="user_updated",
+                     store_id=sa.id, actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=sa.id, actor_user_id=admin.id)
+        res = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin,
+            entity_type=AuditEntityType.user,
+        )
+        assert res.items
+        assert all(e.entity_type == AuditEntityType.user for e in res.items)
+
+    def test_entity_store_returns_only_store_ops(
+        self, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        _make_op_log(db_session, target_type="user", action="user_updated",
+                     store_id=sa.id, actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=sa.id, actor_user_id=admin.id)
+        res = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin,
+            entity_type=AuditEntityType.store,
+        )
+        assert res.items
+        assert all(e.entity_type == AuditEntityType.store for e in res.items)
+
+    # G. combined source/entity filters
+    def test_combined_source_entity_filters(
+        self, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        _make_op_log(db_session, target_type="user", action="user_updated",
+                     store_id=sa.id, actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=sa.id, actor_user_id=admin.id)
+
+        def feed(**kw):
+            return svc.list_store_audit(
+                db_session, store_id=sa.id, actor=admin, **kw
+            ).items
+
+        op_user = feed(source=AuditSource.operational,
+                       entity_type=AuditEntityType.user)
+        op_store = feed(source=AuditSource.operational,
+                        entity_type=AuditEntityType.store)
+        op_order = feed(source=AuditSource.operational,
+                        entity_type=AuditEntityType.order)
+        inv_user = feed(source=AuditSource.inventory,
+                        entity_type=AuditEntityType.user)
+        assert all(e.entity_type == AuditEntityType.user for e in op_user) and op_user
+        assert all(e.entity_type == AuditEntityType.store for e in op_store) and op_store
+        assert op_order == []
+        assert inv_user == []
+
+    # H. action filter
+    def test_action_filter(self, db_session, make_store, make_user):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        _make_op_log(db_session, target_type="user", action="user_updated",
+                     store_id=sa.id, actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="user", action="user_deactivated",
+                     store_id=sa.id, actor_user_id=admin.id)
+        res = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin, action="user_updated"
+        )
+        ops = [e for e in res.items if e.source == AuditSource.operational]
+        assert len(ops) == 1 and ops[0].action == "user_updated"
+
+    # I. actor filter
+    def test_actor_filter(self, db_session, make_store, make_user):
+        admin = make_user(role=UserRole.admin)
+        owner = make_user(role=UserRole.owner, store_id=None)
+        sa = make_store()
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=sa.id, actor_user_id=admin.id)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=sa.id, actor_user_id=owner.id)
+        res = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin, actor_id=owner.id
+        )
+        ops = [e for e in res.items if e.source == AuditSource.operational]
+        assert len(ops) == 1 and ops[0].actor_id == owner.id
+
+    # J. date filters
+    def test_date_filters(self, db_session, make_store, make_user):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        old = datetime(2020, 1, 1, tzinfo=UTC)
+        new = datetime(2026, 1, 1, tzinfo=UTC)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=sa.id, actor_user_id=admin.id, created_at=old)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=sa.id, actor_user_id=admin.id, created_at=new)
+        cutoff = datetime(2023, 1, 1, tzinfo=UTC)
+        recent = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin, date_from=cutoff
+        ).items
+        older = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin, date_to=cutoff
+        ).items
+        assert len(recent) == 1 and recent[0].created_at == new
+        assert len(older) == 1 and older[0].created_at == old
+
+    # K. mixed-source sort + pagination determinism + pre-pagination total
+    def test_mixed_source_sort_and_pagination(
+        self, db_session, make_store, make_user, make_order,
+        make_order_audit_log,
+    ):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        same = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        # An order-source row and an operational row at the SAME instant.
+        # Within a created_at tie the feed sorts by source.value ASC, and
+        # "operational" < "order" (the 2nd char 'p' < 'r'), so operational
+        # comes first — deterministically.
+        make_order_audit_log(order=make_order(store=sa), created_at=same)
+        _make_op_log(db_session, target_type="store", action="store_updated",
+                     store_id=sa.id, actor_user_id=admin.id, created_at=same)
+        res = svc.list_store_audit(db_session, store_id=sa.id, actor=admin)
+        assert res.total == 2  # pre-pagination
+        assert [e.source.value for e in res.items] == ["operational", "order"]
+        # pagination: limit 1 → first (operational); offset 1 → second (order)
+        page1 = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin, limit=1, offset=0
+        )
+        page2 = svc.list_store_audit(
+            db_session, store_id=sa.id, actor=admin, limit=1, offset=1
+        )
+        assert page1.total == 2 and page2.total == 2
+        assert page1.items[0].source.value == "operational"
+        assert page2.items[0].source.value == "order"
+
+    # M. metadata mapping in the feed
+    def test_feed_operational_metadata_includes_before_after(
+        self, db_session, make_store, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        sa = make_store()
+        _make_op_log(
+            db_session, target_type="user", action="user_deactivated",
+            store_id=sa.id, actor_user_id=admin.id,
+            before={"is_active": True}, after={"is_active": False},
+            event_metadata={"source": "users.deactivate_user"},
+        )
+        res = svc.list_store_audit(db_session, store_id=sa.id, actor=admin)
+        ev = [e for e in res.items if e.source == AuditSource.operational][0]
+        assert ev.metadata["before"] == {"is_active": True}
+        assert ev.metadata["after"] == {"is_active": False}
+        assert ev.metadata["source"] == "users.deactivate_user"
+        assert ev.summary == "User deactivated"

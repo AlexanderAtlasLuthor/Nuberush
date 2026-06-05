@@ -69,13 +69,16 @@ from pydantic import field_validator
 class AuditSource(str, enum.Enum):
     """Source table that produced an audit event.
 
-    Locked set — adding a new source means extending the aggregator
-    service AND this enum in lockstep.
+    Adding a new source means extending the aggregator service AND this
+    enum in lockstep. F2.26.2.A adds `operational` (the
+    `operational_audit_logs` table); the aggregator wiring that reads it
+    into the feed lands in a later F2.26.2 subphase.
     """
 
     inventory = "inventory"
     order = "order"
     product_compliance = "product_compliance"
+    operational = "operational"
 
 
 class AuditEntityType(str, enum.Enum):
@@ -85,12 +88,15 @@ class AuditEntityType(str, enum.Enum):
     underlying log table while the entity identifies what the operator
     is reasoning about. An inventory event targets an `inventory_item`;
     an order event targets an `order`; a compliance event targets a
-    `product`.
+    `product`. An operational event (F2.26.2.A) targets a `user` or a
+    `store` — the first source to span more than one entity type.
     """
 
     inventory_item = "inventory_item"
     order = "order"
     product = "product"
+    user = "user"
+    store = "store"
 
 
 def _strip_required(value: str) -> str:

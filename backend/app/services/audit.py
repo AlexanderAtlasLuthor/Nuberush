@@ -68,6 +68,7 @@ from sqlalchemy.orm import Session
 from app.db.models import InventoryItem
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
+from app.db.models import OperationalAuditLog
 from app.db.models import OrderAuditLog
 from app.db.models import ProductComplianceAuditLog
 from app.db.models import ProductVariant
@@ -463,19 +464,175 @@ def _query_compliance_events(
 
 
 # --------------------------------------------------------------------- #
+# Operational source normalizer (F2.26.2.C)
+# --------------------------------------------------------------------- #
+
+
+# Stable action → summary map. Summaries are constant strings only — no
+# names, emails, store names, or any PII is ever interpolated (the row's
+# before/after already carry the allow-listed detail, surfaced via
+# metadata). Mirrors the literal style of `_inventory_summary` etc. but
+# is a pure lookup so it cannot leak.
+_OPERATIONAL_SUMMARY: dict[str, str] = {
+    "user_created": "User created",
+    "user_updated": "User updated",
+    "user_role_changed": "User role changed",
+    "user_store_assigned": "User assigned to store",
+    "user_store_removed": "User removed from store",
+    "user_activated": "User activated",
+    "user_deactivated": "User deactivated",
+    "store_created": "Store created",
+    "store_updated": "Store updated",
+    "store_activated": "Store activated",
+    "store_deactivated": "Store deactivated",
+}
+
+
+# operational `target_type` (a varchar on the row) → the feed entity type.
+# Rows whose target_type is not in this map are skipped by the normalizer
+# rather than raising, so one unrecognized row can never break the feed.
+_OPERATIONAL_TARGET_ENTITY: dict[str, AuditEntityType] = {
+    "user": AuditEntityType.user,
+    "store": AuditEntityType.store,
+}
+
+
+def _operational_summary(log: OperationalAuditLog) -> str:
+    """Stable, PII-free summary for an operational event.
+
+    Falls back to a humanized action (e.g. `user_frobnicated` →
+    `User frobnicated`) so the value is always non-empty even if an
+    action lands here without a mapped summary — `AuditEventRead`
+    rejects an empty summary, so a useful fallback beats a 500.
+    """
+    mapped = _OPERATIONAL_SUMMARY.get(log.action)
+    if mapped is not None:
+        return mapped
+    humanized = log.action.replace("_", " ").strip()
+    return humanized.capitalize() if humanized else log.action
+
+
+def _entity_type_to_target_type(entity_type: AuditEntityType) -> str | None:
+    """Reverse-map a requested entity_type to an operational target_type
+    string, or None when the entity_type is not one operational emits."""
+    for target_type, mapped in _OPERATIONAL_TARGET_ENTITY.items():
+        if mapped == entity_type:
+            return target_type
+    return None
+
+
+def _query_operational_events(
+    db: Session,
+    *,
+    store_id: UUID | None,
+    action: str | None,
+    actor_id: UUID | None,
+    date_from: datetime | None,
+    date_to: datetime | None,
+    entity_type: AuditEntityType | None = None,
+) -> list[AuditEventRead]:
+    """Normalize `operational_audit_logs` rows into `AuditEventRead`.
+
+    `store_id=None` means "no store filter" (admin global path). A
+    concrete `store_id` filters `OperationalAuditLog.store_id == store_id`
+    — because `NULL == <uuid>` is false in SQL, this naturally EXCLUDES
+    global (NULL-store) events and other stores' events, which is exactly
+    the store-feed visibility rule (a store user never sees global
+    operational events).
+
+    `entity_type` is honored at the ROW level: this source spans both
+    `user` and `store` targets, so an `entity_type` filter must keep only
+    the matching `target_type` rows (the source-level gate in
+    `_source_applies` cannot split a multi-entity source). An
+    `entity_type` that operational does not emit (e.g. `order`) yields an
+    empty list.
+
+    Rows whose `target_type` is unrecognized are skipped — one bad row
+    never breaks the whole feed.
+    """
+    if entity_type is not None:
+        target_type_filter = _entity_type_to_target_type(entity_type)
+        if target_type_filter is None:
+            # Requested entity is not one operational emits → no rows.
+            return []
+    else:
+        target_type_filter = None
+
+    stmt = select(OperationalAuditLog)
+    if store_id is not None:
+        stmt = stmt.where(OperationalAuditLog.store_id == store_id)
+    if target_type_filter is not None:
+        stmt = stmt.where(
+            OperationalAuditLog.target_type == target_type_filter
+        )
+    if action is not None:
+        stmt = stmt.where(OperationalAuditLog.action == action)
+    if actor_id is not None:
+        stmt = stmt.where(OperationalAuditLog.actor_user_id == actor_id)
+    if date_from is not None:
+        stmt = stmt.where(OperationalAuditLog.created_at >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(OperationalAuditLog.created_at <= date_to)
+
+    rows = list(db.scalars(stmt).all())
+    events: list[AuditEventRead] = []
+    for log in rows:
+        mapped_entity = _OPERATIONAL_TARGET_ENTITY.get(log.target_type)
+        if mapped_entity is None:
+            # Unknown target_type — skip defensively rather than raise.
+            continue
+        # Build metadata without mutating the row's stored dict. before/
+        # after are already allow-listed + redacted by the writer, so they
+        # are safe to surface; they are included even when None so the UI
+        # can distinguish "no snapshot" from "absent key".
+        metadata: dict[str, Any] = {
+            **(log.event_metadata or {}),
+            "before": log.before,
+            "after": log.after,
+        }
+        events.append(
+            AuditEventRead(
+                id=log.id,
+                source=AuditSource.operational,
+                store_id=log.store_id,
+                actor_id=log.actor_user_id,
+                action=log.action,
+                entity_type=mapped_entity,
+                entity_id=log.target_id,
+                summary=_operational_summary(log),
+                metadata=metadata,
+                created_at=log.created_at,
+            )
+        )
+    return events
+
+
+# --------------------------------------------------------------------- #
 # Source-applicability gate
 # --------------------------------------------------------------------- #
 
 
-# Each source emits events for exactly one entity_type. If both
-# `source` and `entity_type` are set and they disagree with the
-# binding here, the source must contribute zero rows — applying that
-# rule centrally is cleaner than threading two flags into each
-# query helper.
-_SOURCE_ENTITY_BINDING: dict[AuditSource, AuditEntityType] = {
-    AuditSource.inventory: AuditEntityType.inventory_item,
-    AuditSource.order: AuditEntityType.order,
-    AuditSource.product_compliance: AuditEntityType.product,
+# Which entity types each source may emit. Most sources map to exactly
+# one entity type, but `operational` spans two (`user` and `store`) — the
+# first multi-entity source (F2.26.2.B). Modeling every binding as a SET
+# keeps the gate uniform: an `entity_type` filter is honored by set
+# membership rather than scalar equality. If both `source` and
+# `entity_type` are set and the entity is not in the source's set, that
+# source contributes zero rows — applying that rule centrally is cleaner
+# than threading two flags into each query helper.
+#
+# Note (F2.26.2.B): `operational` is listed here so the gate admits it,
+# but its normalizer (`_query_operational_events`) is NOT wired yet — so
+# a `source=operational` query still yields an empty page until
+# F2.26.2.C/D. The binding change is intentionally decoupled from the
+# query wiring.
+_SOURCE_ENTITY_BINDING: dict[AuditSource, frozenset[AuditEntityType]] = {
+    AuditSource.inventory: frozenset({AuditEntityType.inventory_item}),
+    AuditSource.order: frozenset({AuditEntityType.order}),
+    AuditSource.product_compliance: frozenset({AuditEntityType.product}),
+    AuditSource.operational: frozenset(
+        {AuditEntityType.user, AuditEntityType.store}
+    ),
 }
 
 
@@ -489,7 +646,7 @@ def _source_applies(
         return False
     if (
         entity_type is not None
-        and entity_type != _SOURCE_ENTITY_BINDING[candidate]
+        and entity_type not in _SOURCE_ENTITY_BINDING[candidate]
     ):
         return False
     return True
@@ -572,6 +729,27 @@ def list_store_audit(
                 actor_id=actor_id,
                 date_from=date_from,
                 date_to=date_to,
+            )
+        )
+
+    if _source_applies(
+        AuditSource.operational, source=source, entity_type=entity_type
+    ):
+        # Store-scoped: a concrete `store_id` filters
+        # `OperationalAuditLog.store_id == store_id`, which (since
+        # `NULL == uuid` is false) naturally excludes global (NULL-store)
+        # events and other stores' events. `entity_type` is threaded so a
+        # user/store entity filter narrows at the row level (this source
+        # spans both). See F2.26.2.C/D.
+        events.extend(
+            _query_operational_events(
+                db,
+                store_id=store_id,
+                action=action,
+                actor_id=actor_id,
+                date_from=date_from,
+                date_to=date_to,
+                entity_type=entity_type,
             )
         )
 
@@ -691,6 +869,27 @@ def list_admin_audit(
                 actor_id=actor_id,
                 date_from=date_from,
                 date_to=date_to,
+            )
+        )
+
+    if _source_applies(
+        AuditSource.operational, source=source, entity_type=entity_type
+    ):
+        # Admin global (`store_id is None`): no store filter → returns
+        # global (NULL-store) operational events AND store-scoped events
+        # from every store. Admin store-filtered (`store_id` concrete):
+        # `store_id == store_id` filters to that store and excludes NULL
+        # globals (consistent with how the other sources scope when a
+        # store is given). `entity_type` narrows at the row level.
+        events.extend(
+            _query_operational_events(
+                db,
+                store_id=store_id,
+                action=action,
+                actor_id=actor_id,
+                date_from=date_from,
+                date_to=date_to,
+                entity_type=entity_type,
             )
         )
 
