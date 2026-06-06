@@ -24,7 +24,6 @@ import { StoreLayout } from "./StoreLayout";
 import { PublicLayout } from "./PublicLayout";
 import { ADMIN_NAV_ITEMS, NAV_ITEMS, STORE_NAV_ITEMS } from "./navigation";
 import { AppTopbar } from "./components/AppTopbar";
-import { FeaturePlaceholder } from "./components/FeaturePlaceholder";
 import { UserMenu } from "./components/UserMenu";
 import type { AuthContextValue } from "@/auth";
 import type { AuthUser, StoreContextState } from "@/auth";
@@ -452,33 +451,6 @@ describe("navigation active states", () => {
       within(getSidebar()).getByRole("link", { name: "Products" }),
     ).toHaveAttribute("href", "/app/admin/products");
     expectNoNavLinks(/^\/app\/store/);
-  });
-});
-
-describe("FeaturePlaceholder", () => {
-  it("renders product-facing placeholder sections without internal milestones", () => {
-    render(
-      <FeaturePlaceholder
-        title="Store Dashboard"
-        description="Store operations dashboard"
-        status="Planned"
-        requiredBackend={["Store dashboard summary endpoint"]}
-        nonGoals={["No fake metrics"]}
-        futureCapabilities={["Daily order activity"]}
-      />,
-    );
-
-    expect(screen.getByRole("heading", { name: "Store Dashboard" }))
-      .toBeInTheDocument();
-    expect(screen.getByText("Planned")).toBeInTheDocument();
-    expect(
-      screen.getByText("Store dashboard summary endpoint"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("No fake metrics")).toBeInTheDocument();
-    expect(screen.getByText("Daily order activity")).toBeInTheDocument();
-    expect(screen.queryByText(/F2\.7/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/F2\.12/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
   });
 });
 

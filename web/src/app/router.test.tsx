@@ -785,3 +785,27 @@ describe("public auth-link routes", () => {
     );
   });
 });
+
+// F2.27.0: dead placeholders were removed. This guard fails if any of the
+// removed placeholder symbols are reintroduced into the routing layer.
+describe("F2.27.0 placeholder cleanup guard", () => {
+  it("route-components.tsx no longer references AdminPlaceholderPage or Admin*Placeholder exports", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const here = path.resolve(__dirname, "route-components.tsx");
+    const source = fs.readFileSync(here, "utf-8");
+
+    expect(source).not.toMatch(/AdminPlaceholderPage/);
+    expect(source).not.toMatch(/Admin\w*Placeholder/);
+  });
+
+  it("router.tsx does not reference removed placeholder components", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const here = path.resolve(__dirname, "router.tsx");
+    const source = fs.readFileSync(here, "utf-8");
+
+    expect(source).not.toMatch(/SettingsPlaceholderPage/);
+    expect(source).not.toMatch(/FeaturePlaceholder/);
+  });
+});
