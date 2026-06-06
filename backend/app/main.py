@@ -6,6 +6,7 @@ from app.api.routes.admin_dashboard import router as admin_dashboard_router
 from app.api.routes.admin_earnings import router as admin_earnings_router
 from app.api.routes.admin_operations import router as admin_operations_router
 from app.api.routes.admin_products import router as admin_products_router
+from app.api.routes.admin_regulatory import router as admin_regulatory_router
 from app.api.routes.admin_settings import router as admin_settings_router
 from app.api.routes.admin_store_applications import (
     router as admin_store_applications_router,
@@ -55,6 +56,7 @@ app.include_router(admin_dashboard_router)
 app.include_router(admin_earnings_router)
 app.include_router(admin_operations_router)
 app.include_router(admin_products_router)
+app.include_router(admin_regulatory_router)
 app.include_router(admin_compliance_router)
 app.include_router(admin_settings_router)
 app.include_router(admin_store_applications_router)

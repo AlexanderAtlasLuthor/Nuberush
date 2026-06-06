@@ -1115,3 +1115,495 @@ class OperationalAuditLog(Base):
 
     actor_user: Mapped[User | None] = relationship()
     store: Mapped[Store | None] = relationship()
+
+
+# ===================================================================== #
+# F2.26.5.A — Regulatory Intelligence Foundation (data model only).
+#
+# Backend-first foundation for vape/ENDS compliance signals. This subphase
+# introduces storage ONLY: regulatory sources, imported notices/snapshots,
+# best-effort product matches, human-reviewable compliance alerts, and an
+# append-only audit trail for admin decisions on those alerts.
+#
+# Architectural guardrails baked in here (see the F2.26.5 scope lock):
+#   - No automatic product blocking / hold / ban. A ComplianceAlert is an
+#     advisory record reviewed by a human; nothing in this layer mutates a
+#     Product. Real compliance mutation later must go through
+#     `set_product_compliance()`, never a direct Product write.
+#   - Regulatory decisions are audited in the DEDICATED
+#     `regulatory_decision_audit_logs` table, NOT by extending
+#     `operational_audit_logs` (whose taxonomy stays user/store-only).
+#   - The constrained domain state columns (source kind, notice type, match
+#     strategy, alert severity/status/recommended_action) are PostgreSQL
+#     enums, matching `UserRole` / `OrderStatus` / `InventoryStatus`. The
+#     decision-audit `action` is a `varchar` discriminator, matching every
+#     other append-only audit table in this repo (`OrderAuditLog.action`,
+#     `OperationalAuditLog.action`): new verbs never need an
+#     `ALTER TYPE ... ADD VALUE`, and the closed set is enforced in the
+#     (future) service/schema layer.
+# ===================================================================== #
+
+
+class RegulatorySourceKind(str, enum.Enum):
+    """Origin/category of a regulatory source."""
+
+    fda_pmta = "fda_pmta"
+    fda_enforcement = "fda_enforcement"
+    fda_advisory = "fda_advisory"
+    retailer_guidance = "retailer_guidance"
+    manual = "manual"
+
+
+class RegulatoryNoticeType(str, enum.Enum):
+    """Kind of imported regulatory notice/snapshot."""
+
+    authorized_product_list = "authorized_product_list"
+    enforcement_notice = "enforcement_notice"
+    advisory = "advisory"
+    retailer_guidance = "retailer_guidance"
+    manual_snapshot = "manual_snapshot"
+
+
+class RegulatoryMatchStrategy(str, enum.Enum):
+    """How a notice was best-effort matched to an internal product/variant."""
+
+    name = "name"
+    brand = "brand"
+    category = "category"
+    sku = "sku"
+    barcode = "barcode"
+    flavor = "flavor"
+    manual = "manual"
+
+
+class ComplianceAlertSeverity(str, enum.Enum):
+    """Operator-facing urgency of a compliance alert."""
+
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
+
+
+class ComplianceAlertStatus(str, enum.Enum):
+    """Human-review lifecycle of a compliance alert.
+
+    open          → newly raised, awaiting review.
+    acknowledged  → an admin has seen it but not yet acted.
+    actioned      → an admin took the recommended (or another) action.
+    dismissed     → an admin judged it not actionable.
+
+    No status here implies an automatic Product mutation; transitions are
+    recorded in `regulatory_decision_audit_logs` by a later subphase.
+    """
+
+    open = "open"
+    acknowledged = "acknowledged"
+    actioned = "actioned"
+    dismissed = "dismissed"
+
+
+class ComplianceRecommendedAction(str, enum.Enum):
+    """Advisory action a compliance alert suggests — never auto-applied.
+
+    `none` → informational only. `hold` / `ban` are the human-reviewable
+    recommendations; applying either later goes through
+    `set_product_compliance()`, not this table.
+    """
+
+    none = "none"
+    hold = "hold"
+    ban = "ban"
+
+
+class RegulatorySource(Base):
+    """An external or internal regulatory source feeding compliance signals.
+
+    `last_synced_at` is a bookkeeping timestamp updated by a future ingestion
+    service (F2.26.5.B); this subphase neither fetches nor schedules anything.
+    """
+
+    __tablename__ = "regulatory_sources"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_regulatory_sources_name"),
+        CheckConstraint(
+            "name <> ''", name="ck_regulatory_sources_name_non_empty"
+        ),
+        Index("ix_regulatory_sources_kind", "kind"),
+        Index("ix_regulatory_sources_is_active", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    kind: Mapped[RegulatorySourceKind] = mapped_column(
+        Enum(RegulatorySourceKind, name="regulatory_source_kind"),
+        nullable=False,
+    )
+    reference_url: Mapped[str | None] = mapped_column(String(500))
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("true"), nullable=False
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+    notices: Mapped[list[RegulatoryNotice]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+
+
+class RegulatoryNotice(Base):
+    """An imported regulatory notice/snapshot belonging to a source.
+
+    Append-only by design (only `created_at`, no `updated_at`): a notice is
+    an immutable import. `content_hash` supports dedupe — the
+    `(source_id, content_hash)` uniqueness lets a later ingestion service
+    skip re-importing an unchanged snapshot. `payload` is the raw structured
+    body the import carried.
+    """
+
+    __tablename__ = "regulatory_notices"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "content_hash",
+            name="uq_regulatory_notices_source_content_hash",
+        ),
+        CheckConstraint(
+            "title <> ''", name="ck_regulatory_notices_title_non_empty"
+        ),
+        CheckConstraint(
+            "content_hash <> ''",
+            name="ck_regulatory_notices_content_hash_non_empty",
+        ),
+        Index("ix_regulatory_notices_source_id", "source_id"),
+        Index("ix_regulatory_notices_notice_type", "notice_type"),
+        Index("ix_regulatory_notices_published_at", "published_at"),
+        Index("ix_regulatory_notices_content_hash", "content_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "regulatory_sources.id",
+            name="fk_regulatory_notices_source_id_regulatory_sources",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    external_ref: Mapped[str | None] = mapped_column(String(255))
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    notice_type: Mapped[RegulatoryNoticeType] = mapped_column(
+        Enum(RegulatoryNoticeType, name="regulatory_notice_type"),
+        nullable=False,
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    source: Mapped[RegulatorySource] = relationship(
+        back_populates="notices"
+    )
+    matches: Mapped[list[RegulatoryProductMatch]] = relationship(
+        back_populates="notice", cascade="all, delete-orphan"
+    )
+    alerts: Mapped[list[ComplianceAlert]] = relationship(
+        back_populates="notice", cascade="all, delete-orphan"
+    )
+
+
+class RegulatoryProductMatch(Base):
+    """A best-effort match between a notice and an internal product/variant.
+
+    A match is a CANDIDATE, not a verdict — `confidence` (0.00–1.00) and
+    `match_strategy` describe how it was derived. `matched_fields` records
+    which fields lined up. A match never mutates the product; at most it
+    seeds a `ComplianceAlert` for human review in a later subphase.
+    """
+
+    __tablename__ = "regulatory_product_matches"
+    __table_args__ = (
+        UniqueConstraint(
+            "notice_id",
+            "product_id",
+            "variant_id",
+            "match_strategy",
+            name="uq_regulatory_product_matches_dedupe",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_regulatory_product_matches_confidence_range",
+        ),
+        Index("ix_regulatory_product_matches_notice_id", "notice_id"),
+        Index("ix_regulatory_product_matches_product_id", "product_id"),
+        Index("ix_regulatory_product_matches_variant_id", "variant_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    notice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "regulatory_notices.id",
+            name="fk_regulatory_product_matches_notice_id_regulatory_notices",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "products.id",
+            name="fk_regulatory_product_matches_product_id_products",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "product_variants.id",
+            name="fk_regulatory_product_matches_variant_id_product_variants",
+            ondelete="SET NULL",
+        ),
+    )
+    match_strategy: Mapped[RegulatoryMatchStrategy] = mapped_column(
+        Enum(RegulatoryMatchStrategy, name="regulatory_match_strategy"),
+        nullable=False,
+    )
+    confidence: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False)
+    matched_fields: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    notice: Mapped[RegulatoryNotice] = relationship(back_populates="matches")
+    product: Mapped[Product] = relationship()
+    variant: Mapped[ProductVariant | None] = relationship()
+    alerts: Mapped[list[ComplianceAlert]] = relationship(
+        back_populates="match"
+    )
+
+
+class ComplianceAlert(Base):
+    """A human-reviewable regulatory compliance alert.
+
+    Advisory only: raising an alert NEVER blocks, holds or bans a product.
+    `recommended_action` is a suggestion an admin may follow; applying it
+    later routes through `set_product_compliance()`, not this table. The
+    review lifecycle is `status`; the `resolved_*` columns capture who/when
+    closed it (kept consistent by a CHECK so a row is either fully resolved
+    or not at all).
+    """
+
+    __tablename__ = "compliance_alerts"
+    __table_args__ = (
+        # A row is either unresolved (both NULL) or resolved (both set).
+        CheckConstraint(
+            "(resolved_at IS NULL) = (resolved_by_user_id IS NULL)",
+            name="ck_compliance_alerts_resolution_pair_consistent",
+        ),
+        Index("ix_compliance_alerts_status", "status"),
+        Index("ix_compliance_alerts_severity", "severity"),
+        Index("ix_compliance_alerts_created_at", "created_at"),
+        Index("ix_compliance_alerts_notice_id", "notice_id"),
+        Index("ix_compliance_alerts_product_id", "product_id"),
+        Index("ix_compliance_alerts_match_id", "match_id"),
+        Index(
+            "ix_compliance_alerts_resolved_by_user_id",
+            "resolved_by_user_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    notice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "regulatory_notices.id",
+            name="fk_compliance_alerts_notice_id_regulatory_notices",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    # Nullable: most alerts are product-specific, but the architecture allows
+    # a notice-level alert with no single product. SET NULL preserves the
+    # alert's history if the product row is later removed.
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "products.id",
+            name="fk_compliance_alerts_product_id_products",
+            ondelete="SET NULL",
+        ),
+    )
+    # Set only when the alert was generated from a specific match. SET NULL so
+    # pruning a match never deletes the human-reviewable alert.
+    match_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "regulatory_product_matches.id",
+            name="fk_compliance_alerts_match_id_regulatory_product_matches",
+            ondelete="SET NULL",
+        ),
+    )
+    severity: Mapped[ComplianceAlertSeverity] = mapped_column(
+        Enum(ComplianceAlertSeverity, name="compliance_alert_severity"),
+        nullable=False,
+    )
+    status: Mapped[ComplianceAlertStatus] = mapped_column(
+        Enum(ComplianceAlertStatus, name="compliance_alert_status"),
+        server_default=text("'open'"),
+        nullable=False,
+    )
+    recommended_action: Mapped[ComplianceRecommendedAction] = mapped_column(
+        Enum(
+            ComplianceRecommendedAction, name="compliance_recommended_action"
+        ),
+        server_default=text("'none'"),
+        nullable=False,
+    )
+    resolution_note: Mapped[str | None] = mapped_column(Text)
+    resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_compliance_alerts_resolved_by_user_id_users",
+            ondelete="SET NULL",
+        ),
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+    notice: Mapped[RegulatoryNotice] = relationship(back_populates="alerts")
+    match: Mapped[RegulatoryProductMatch | None] = relationship(
+        back_populates="alerts"
+    )
+    product: Mapped[Product | None] = relationship()
+    resolved_by_user: Mapped[User | None] = relationship()
+    decision_audits: Mapped[list[RegulatoryDecisionAuditLog]] = relationship(
+        back_populates="alert", cascade="all, delete-orphan"
+    )
+
+
+class RegulatoryDecisionAuditLog(Base):
+    """Append-only audit for admin decisions on regulatory alerts.
+
+    Dedicated to regulatory decisions — deliberately NOT
+    `operational_audit_logs`, whose taxonomy stays user/store-only. Mirrors
+    the repo's other append-only audit tables: a `varchar` `action`
+    discriminator (no PG enum, so new verbs never need an `ALTER TYPE`), a
+    required `reason`, JSON `before`/`after`/`metadata` snapshots, and only
+    `created_at` (no `updated_at`).
+
+    `actor_user_id` is REQUIRED (NOT NULL) and uses ON DELETE RESTRICT:
+    every regulatory decision is accountable to a real admin, and that admin
+    cannot be deleted while their decisions stand. The JSONB attribute is
+    `event_metadata` (column name `metadata`) because SQLAlchemy reserves
+    `Base.metadata`.
+    """
+
+    __tablename__ = "regulatory_decision_audit_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "action <> ''",
+            name="ck_regulatory_decision_audit_logs_action_non_empty",
+        ),
+        CheckConstraint(
+            "reason <> ''",
+            name="ck_regulatory_decision_audit_logs_reason_non_empty",
+        ),
+        Index("ix_regulatory_decision_audit_logs_alert_id", "alert_id"),
+        Index("ix_regulatory_decision_audit_logs_notice_id", "notice_id"),
+        Index("ix_regulatory_decision_audit_logs_product_id", "product_id"),
+        Index(
+            "ix_regulatory_decision_audit_logs_actor_user_id",
+            "actor_user_id",
+        ),
+        Index(
+            "ix_regulatory_decision_audit_logs_created_at", "created_at"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "compliance_alerts.id",
+            name="fk_regulatory_decision_audit_logs_alert_id_compliance_alerts",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    notice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "regulatory_notices.id",
+            name="fk_regulatory_decision_audit_logs_notice_id_regulatory_notices",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    # Nullable: the alert may be notice-level (no single product). SET NULL
+    # preserves the append-only decision row if a product is later removed.
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "products.id",
+            name="fk_regulatory_decision_audit_logs_product_id_products",
+            ondelete="SET NULL",
+        ),
+    )
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_regulatory_decision_audit_logs_actor_user_id_users",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Column name is "metadata"; the attribute is renamed to avoid the
+    # reserved `Base.metadata`.
+    event_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSONB
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    alert: Mapped[ComplianceAlert] = relationship(
+        back_populates="decision_audits"
+    )
+    notice: Mapped[RegulatoryNotice] = relationship()
+    product: Mapped[Product | None] = relationship()
+    actor_user: Mapped[User] = relationship()
