@@ -35,6 +35,8 @@ test here.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -43,6 +45,13 @@ from sqlalchemy.orm import Session
 from app.db.models import UserRole
 from tests.helpers.auth import auth_headers_for
 from tests.helpers.auth import make_user as central_make_user
+
+
+# F2.27.1: the rls-active CI job sets RLS_ACTIVE_CI=1. In that mode the RLS
+# baseline and helpers MUST be applied and the runtime role MUST be the
+# non-superuser nuberush_app BYPASSRLS role — so the environment-aware SKIPs
+# below become hard FAILs and a misconfigured gate can never pass silently.
+RLS_ACTIVE_CI = os.environ.get("RLS_ACTIVE_CI") == "1"
 
 
 # Kept in sync with supabase/migrations/20260526142048_rls_baseline.sql.
@@ -99,6 +108,20 @@ def _current_role(db: Session) -> str:
     return str(db.execute(text("SELECT current_user")).scalar_one())
 
 
+def _table_rls_enabled(db: Session, table: str) -> bool:
+    """True iff public.<table> currently has relrowsecurity=true."""
+    return bool(
+        db.execute(
+            text(
+                "SELECT relrowsecurity FROM pg_class "
+                "WHERE relnamespace = 'public'::regnamespace "
+                "AND relkind = 'r' AND relname = :name"
+            ),
+            {"name": table},
+        ).scalar_one_or_none()
+    )
+
+
 # ---------------------------------------------------------------------------
 # Detection — runs in every environment; SKIPs when RLS is not active.
 # ---------------------------------------------------------------------------
@@ -115,6 +138,13 @@ def test_db_role_bypasses_rls_when_baseline_is_applied(
     enabled = _rls_enabled_count(db_session)
 
     if enabled == 0:
+        if RLS_ACTIVE_CI:
+            pytest.fail(
+                "RLS_ACTIVE_CI=1 but the F2.22.3 RLS baseline is not active "
+                "(0/10 public.* tables have relrowsecurity=true). The "
+                "rls-active CI gate must apply supabase/migrations/*.sql "
+                "before this check runs."
+            )
         pytest.skip(
             "F2.22.3 RLS baseline not active in this database "
             "(0/10 public.* tables have relrowsecurity=true). "
@@ -179,12 +209,20 @@ def test_fastapi_request_succeeds_under_actively_enforced_rls(
     # Apply the same ALTER TABLE pair the F2.22.3.D migration applies.
     # FORCE is the load-bearing flag: ENABLE alone exempts table owners,
     # which would mask a missing BYPASSRLS on an owner-equivalent role.
-    db_session.execute(
-        text("ALTER TABLE public.users ENABLE ROW LEVEL SECURITY")
-    )
-    db_session.execute(
-        text("ALTER TABLE public.users FORCE  ROW LEVEL SECURITY")
-    )
+    #
+    # F2.27.1: when the baseline migration is already applied (the rls-active
+    # CI gate), public.users is already ENABLE+FORCE RLS and the runtime role
+    # (nuberush_app) is a non-owner — re-issuing ALTER TABLE would raise "must
+    # be owner of table users". Only force RLS in the alembic-only state, where
+    # the connecting role still owns the table; the assertions below then run
+    # against the already-enforced baseline.
+    if not _table_rls_enabled(db_session, "users"):
+        db_session.execute(
+            text("ALTER TABLE public.users ENABLE ROW LEVEL SECURITY")
+        )
+        db_session.execute(
+            text("ALTER TABLE public.users FORCE  ROW LEVEL SECURITY")
+        )
 
     response = client.get("/auth/me", headers=auth_headers_for(user))
 
@@ -243,6 +281,12 @@ def test_rls_helpers_present_when_helpers_migration_is_applied(
     )
 
     if not existing:
+        if RLS_ACTIVE_CI:
+            pytest.fail(
+                "RLS_ACTIVE_CI=1 but the F2.22.3.E RLS helpers are not "
+                "installed. The rls-active CI gate must apply "
+                "supabase/migrations/20260526144321_rls_helpers.sql."
+            )
         pytest.skip(
             "F2.22.3.E RLS helpers not installed in this database. "
             "Apply supabase/migrations/20260526144321_rls_helpers.sql."
@@ -254,3 +298,46 @@ def test_rls_helpers_present_when_helpers_migration_is_applied(
             f"F2.22.3.E helper functions partially applied — missing: {missing}. "
             "Re-apply supabase/migrations/20260526144321_rls_helpers.sql."
         )
+
+
+# ---------------------------------------------------------------------------
+# F2.27.1 — runtime-role identity gate. Runs only under RLS_ACTIVE_CI=1.
+# ---------------------------------------------------------------------------
+
+
+def test_rls_active_ci_runtime_role_is_nonsuperuser_bypass(
+    db_session: Session,
+) -> None:
+    """In the rls-active CI gate the connection MUST be the dedicated
+    nuberush_app role: BYPASSRLS, but NOT a superuser.
+
+    This proves the bypass is the fine-grained application strategy locked
+    in docs/f2.22.3-rls-bypass-role.md §1 — not a superuser shortcut that
+    would bypass RLS unconditionally and mask a missing BYPASSRLS on a real
+    deploy. SKIPs cleanly outside the CI gate (RLS_ACTIVE_CI unset).
+    """
+    if not RLS_ACTIVE_CI:
+        pytest.skip(
+            "Runtime-role identity gate only runs under RLS_ACTIVE_CI=1."
+        )
+
+    role, is_super, bypasses = db_session.execute(
+        text(
+            "SELECT current_user, rolsuper, rolbypassrls "
+            "FROM pg_roles WHERE rolname = current_user"
+        )
+    ).one()
+
+    assert role == "nuberush_app", (
+        f"rls-active gate must connect as nuberush_app, got {role!r}. "
+        "Point DATABASE_URL at the nuberush_app role per "
+        "docs/f2.22.3-rls-bypass-role.md."
+    )
+    assert is_super is False, (
+        "nuberush_app must be NOSUPERUSER — a superuser bypasses RLS "
+        "unconditionally and would mask a missing BYPASSRLS."
+    )
+    assert bypasses is True, (
+        "nuberush_app must have BYPASSRLS so FastAPI works under the "
+        "deny-all baseline."
+    )

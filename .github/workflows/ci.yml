@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Frontend validation — lint, typecheck, unit/component tests. No backend,
+  # no database, no feature-code changes.
+  # ---------------------------------------------------------------------------
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc -b
+      - run: npm run test
+
+  # ---------------------------------------------------------------------------
+  # Backend unit suite — Postgres + Alembic + full pytest. Connects as the
+  # postgres superuser; this is NOT the RLS gate, so RLS migrations are not
+  # applied here and the RLS-aware tests behave exactly as in the default
+  # local "alembic only" state (detection + helper checks SKIP).
+  # ---------------------------------------------------------------------------
+  backend-unit:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nuberush_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/nuberush_test
+      DATABASE_URL_TEST: postgresql+psycopg://postgres:postgres@localhost:5432/nuberush_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Alembic upgrade head
+        working-directory: backend
+        run: python -m alembic upgrade head
+      - name: Backend full test suite
+        working-directory: backend
+        run: python -m pytest
+
+  # ---------------------------------------------------------------------------
+  # RLS active gate — the real defense-in-depth check. Applies Alembic + the
+  # vanilla-compatible Supabase RLS migration tree, runs the SQL RLS tests,
+  # then runs test_rls_bypass.py as the non-superuser BYPASSRLS runtime role
+  # (nuberush_app) with RLS_ACTIVE_CI=1 so the bypass strategy is proven and
+  # the environment-aware SKIPs become hard FAILs.
+  #
+  # storage_buckets.sql is intentionally NOT applied: it requires the Supabase
+  # `storage` schema and is out of scope for F2.27.1.
+  # ---------------------------------------------------------------------------
+  rls-active:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nuberush_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Admin (superuser) connections, used for Alembic and all psql setup /
+      # SQL-test steps. The pytest step below overrides these with nuberush_app.
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/nuberush_test
+      DATABASE_URL_PSQL: postgresql://postgres:postgres@localhost:5432/nuberush_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Verify psql is available
+        run: psql --version
+
+      # A. Schema authority: Alembic runs as the superuser that owns the tables.
+      - name: Alembic upgrade head
+        working-directory: backend
+        run: python -m alembic upgrade head
+
+      # B. CI-only bootstrap: nuberush_app + authenticated/anon + auth.uid() shim
+      #    + grants. NOT a migration; CI scaffolding only.
+      - name: Bootstrap RLS roles and auth.uid() shim
+        run: psql "$DATABASE_URL_PSQL" -v ON_ERROR_STOP=1 -f supabase/ci/bootstrap_rls.sql
+
+      # C. Apply the vanilla-compatible RLS migrations in filename order.
+      #    storage_buckets.sql is deliberately excluded (needs Supabase Storage).
+      - name: Apply RLS migrations
+        run: |
+          psql "$DATABASE_URL_PSQL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260526142048_rls_baseline.sql
+          psql "$DATABASE_URL_PSQL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260526144321_rls_helpers.sql
+          psql "$DATABASE_URL_PSQL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260527142744_product_images_rls.sql
+          psql "$DATABASE_URL_PSQL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260530120000_store_applications_rls.sql
+          psql "$DATABASE_URL_PSQL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260529115507_realtime_orders_inventory.sql
+
+      # D. SQL RLS tests — abort on the first RAISE EXCEPTION (ON_ERROR_STOP=1).
+      - name: SQL RLS tests
+        run: |
+          psql "$DATABASE_URL_PSQL" -v ON_ERROR_STOP=1 -f supabase/tests/rls_baseline.sql
+          psql "$DATABASE_URL_PSQL" -v ON_ERROR_STOP=1 -f supabase/tests/rls_helpers.sql
+          psql "$DATABASE_URL_PSQL" -v ON_ERROR_STOP=1 -f supabase/tests/realtime_orders_inventory.sql
+
+      # E. Active bypass regression — MUST connect as nuberush_app (non-superuser,
+      #    BYPASSRLS). RLS_ACTIVE_CI=1 turns the environment-aware SKIPs into FAILs.
+      - name: RLS bypass regression as nuberush_app
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+psycopg://nuberush_app:nuberush_app@localhost:5432/nuberush_test
+          DATABASE_URL_TEST: postgresql+psycopg://nuberush_app:nuberush_app@localhost:5432/nuberush_test
+          RLS_ACTIVE_CI: "1"
+        run: python -m pytest tests/test_rls_bypass.py -q
