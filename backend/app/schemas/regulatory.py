@@ -432,7 +432,7 @@ class RegulatoryDecisionAuditLogRead(BaseModel):
     after: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = Field(
         default=None,
-        validation_alias=AliasChoices("metadata", "event_metadata"),
+        validation_alias=AliasChoices("event_metadata", "metadata"),
         serialization_alias="metadata",
     )
     reason: str

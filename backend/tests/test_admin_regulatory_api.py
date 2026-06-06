@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryStatus
+from app.db.models import OperationalAuditLog
 from app.db.models import Product
 from app.db.models import ProductComplianceAuditLog
 from app.db.models import ProductVariant
@@ -580,3 +581,234 @@ def test_acknowledge_blank_reason_422(
         f"{BASE}/alerts/{alert_id}/acknowledge", headers=_auth(admin),
         json={"reason": ""},
     ).status_code == 422
+
+
+# ===================================================================== #
+# Decision trail — GET /alerts/{alert_id}/decisions
+# ===================================================================== #
+
+
+_DECISIONS = "{base}/alerts/{aid}/decisions"
+
+
+def test_decisions_rbac_anonymous_401(
+    client: TestClient, db_session, admin, make_product
+):
+    _, alert_id = _open_alert_id(client, admin, db_session, make_product)
+    resp = client.get(_DECISIONS.format(base=BASE, aid=alert_id))
+    assert resp.status_code == 401
+
+
+@pytest.mark.parametrize("role", _NON_ADMIN_ROLES)
+def test_decisions_rbac_non_admin_403(
+    client: TestClient, db_session, admin, make_product, role: UserRole
+):
+    _, alert_id = _open_alert_id(client, admin, db_session, make_product)
+    user = central_make_user(db_session, role=role, store_id=None)
+    resp = client.get(
+        _DECISIONS.format(base=BASE, aid=alert_id), headers=_auth(user)
+    )
+    assert resp.status_code == 403
+
+
+def test_decisions_missing_alert_404(client: TestClient, admin: User):
+    resp = client.get(
+        _DECISIONS.format(base=BASE, aid=uuid.uuid4()), headers=_auth(admin)
+    )
+    assert resp.status_code == 404
+
+
+def test_decisions_empty_for_untouched_alert(
+    client: TestClient, db_session, admin, make_product
+):
+    # A freshly created alert has no lifecycle decisions yet.
+    _, alert_id = _open_alert_id(client, admin, db_session, make_product)
+    resp = client.get(
+        _DECISIONS.format(base=BASE, aid=alert_id), headers=_auth(admin)
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {"items", "total", "limit", "offset"} <= body.keys()
+    assert body["total"] == 0
+    assert body["items"] == []
+    assert body["limit"] == 25
+    assert body["offset"] == 0
+
+
+def test_decisions_shape_and_admin_can_list(
+    client: TestClient, db_session, admin, make_product
+):
+    _, alert_id = _open_alert_id(client, admin, db_session, make_product)
+    ack = client.post(
+        f"{BASE}/alerts/{alert_id}/acknowledge", headers=_auth(admin),
+        json={"reason": "reviewing"},
+    )
+    assert ack.status_code == 200
+
+    resp = client.get(
+        _DECISIONS.format(base=BASE, aid=alert_id), headers=_auth(admin)
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    row = body["items"][0]
+    assert {
+        "id", "alert_id", "notice_id", "product_id", "actor_user_id",
+        "action", "before", "after", "metadata", "reason", "created_at",
+    } <= row.keys()
+    assert row["alert_id"] == str(alert_id)
+    assert row["action"] == "alert_acknowledged"
+    assert row["actor_user_id"] == str(admin.id)
+    assert row["reason"] == "reviewing"
+
+
+def _assert_contract_ordering(items: list[dict]) -> None:
+    """Documented order: created_at DESC, then id ASC as a stable tie-break.
+
+    The test harness runs each test in one DB transaction, so `func.now()`
+    (created_at) is identical for rows written in the same test; the id ASC
+    tie-break is what makes the order deterministic. This asserts the contract
+    directly rather than assuming wall-clock separation between decisions.
+    """
+    for prev, cur in zip(items, items[1:]):
+        assert prev["created_at"] >= cur["created_at"]
+        if prev["created_at"] == cur["created_at"]:
+            assert prev["id"] < cur["id"]
+
+
+def test_decisions_stable_documented_ordering(
+    client: TestClient, db_session, admin, make_product
+):
+    # Two sequential decisions: acknowledge then resolve(no_action).
+    _, alert_id = _open_alert_id(client, admin, db_session, make_product)
+    client.post(
+        f"{BASE}/alerts/{alert_id}/acknowledge", headers=_auth(admin),
+        json={"reason": "first"},
+    )
+    client.post(
+        f"{BASE}/alerts/{alert_id}/resolve", headers=_auth(admin),
+        json={"action": "no_action", "resolution_note": "second"},
+    )
+
+    url = _DECISIONS.format(base=BASE, aid=alert_id)
+    first = client.get(url, headers=_auth(admin))
+    assert first.status_code == 200
+    items = first.json()["items"]
+    assert len(items) == 2
+    assert {i["action"] for i in items} == {
+        "alert_acknowledged", "alert_resolved_no_action",
+    }
+    # Documented ordering contract holds.
+    _assert_contract_ordering(items)
+    # Stable: a second identical request returns the same order.
+    second = client.get(url, headers=_auth(admin)).json()["items"]
+    assert [i["id"] for i in second] == [i["id"] for i in items]
+
+
+def test_decisions_only_for_requested_alert(
+    client: TestClient, db_session, admin, make_product
+):
+    # Two distinct alerts, each with one decision; the endpoint must scope.
+    _, alert_a = _open_alert_id(
+        client, admin, db_session, make_product, name="Vape A"
+    )
+    _, alert_b = _open_alert_id(
+        client, admin, db_session, make_product, name="Vape B"
+    )
+    client.post(
+        f"{BASE}/alerts/{alert_a}/acknowledge", headers=_auth(admin),
+        json={"reason": "a-only"},
+    )
+    client.post(
+        f"{BASE}/alerts/{alert_b}/dismiss", headers=_auth(admin),
+        json={"reason": "b-only"},
+    )
+
+    body = client.get(
+        _DECISIONS.format(base=BASE, aid=alert_a), headers=_auth(admin)
+    ).json()
+    assert body["total"] == 1
+    assert all(r["alert_id"] == str(alert_a) for r in body["items"])
+    assert body["items"][0]["reason"] == "a-only"
+
+
+def test_decisions_pagination(
+    client: TestClient, db_session, admin, make_product
+):
+    _, alert_id = _open_alert_id(client, admin, db_session, make_product)
+    # Produce two decisions (acknowledge, then resolve).
+    client.post(
+        f"{BASE}/alerts/{alert_id}/acknowledge", headers=_auth(admin),
+        json={"reason": "first"},
+    )
+    client.post(
+        f"{BASE}/alerts/{alert_id}/resolve", headers=_auth(admin),
+        json={"action": "no_action", "resolution_note": "second"},
+    )
+
+    url = _DECISIONS.format(base=BASE, aid=alert_id)
+    full = client.get(url, headers=_auth(admin)).json()["items"]
+    page1 = client.get(
+        url, headers=_auth(admin), params={"limit": 1, "offset": 0}
+    ).json()
+    page2 = client.get(
+        url, headers=_auth(admin), params={"limit": 1, "offset": 1}
+    ).json()
+
+    assert page1["total"] == 2 and page2["total"] == 2
+    assert page1["limit"] == 1 and page1["offset"] == 0
+    assert page2["offset"] == 1
+    assert len(page1["items"]) == 1 and len(page2["items"]) == 1
+    # Pages slice the same documented order, no overlap.
+    assert page1["items"][0]["id"] == full[0]["id"]
+    assert page2["items"][0]["id"] == full[1]["id"]
+    assert page1["items"][0]["id"] != page2["items"][0]["id"]
+
+
+def test_decisions_read_only_no_mutation_and_no_operational_audit(
+    client: TestClient, db_session, admin, make_product
+):
+    product, alert_id = _open_alert_id(
+        client, admin, db_session, make_product
+    )
+    # One decision so there is something to read back.
+    client.post(
+        f"{BASE}/alerts/{alert_id}/acknowledge", headers=_auth(admin),
+        json={"reason": "reviewing"},
+    )
+
+    from app.db.models import ComplianceAlert
+
+    before_alert = db_session.get(ComplianceAlert, uuid.UUID(str(alert_id)))
+    db_session.refresh(before_alert)
+    status_before = before_alert.status
+    updated_before = before_alert.updated_at
+    compliance_before = product.compliance_status
+    allowed_before = product.allowed_for_sale
+    op_audit_before = db_session.scalar(
+        select(func.count()).select_from(OperationalAuditLog)
+    )
+
+    resp = client.get(
+        _DECISIONS.format(base=BASE, aid=alert_id), headers=_auth(admin)
+    )
+    assert resp.status_code == 200
+
+    # Alert unchanged.
+    db_session.expire_all()
+    after_alert = db_session.get(ComplianceAlert, uuid.UUID(str(alert_id)))
+    assert after_alert.status == status_before
+    assert after_alert.updated_at == updated_before
+    # Product unchanged.
+    db_session.refresh(product)
+    assert product.compliance_status == compliance_before
+    assert product.allowed_for_sale == allowed_before
+    # No operational audit rows created by a read.
+    assert db_session.scalar(
+        select(func.count()).select_from(OperationalAuditLog)
+    ) == op_audit_before
+    # No product compliance audit rows created by a read.
+    assert db_session.scalar(
+        select(func.count()).select_from(ProductComplianceAuditLog)
+    ) == 0

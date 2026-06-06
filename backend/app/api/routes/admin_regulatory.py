@@ -41,6 +41,7 @@ from app.schemas.regulatory import ComplianceAlertActionRequest
 from app.schemas.regulatory import ComplianceAlertListResponse
 from app.schemas.regulatory import ComplianceAlertRead
 from app.schemas.regulatory import ComplianceAlertResolveRequest
+from app.schemas.regulatory import RegulatoryDecisionAuditLogListResponse
 from app.schemas.regulatory import RegulatoryNoticeIngestRequest
 from app.schemas.regulatory import RegulatoryNoticeListResponse
 from app.schemas.regulatory import RegulatoryNoticeRead
@@ -183,6 +184,22 @@ def get_alert_endpoint(
     db: Session = Depends(get_db),
 ) -> ComplianceAlertRead:
     return svc.get_compliance_alert(db, alert_id)
+
+
+@router.get(
+    "/alerts/{alert_id}/decisions",
+    response_model=RegulatoryDecisionAuditLogListResponse,
+)
+def list_alert_decisions_endpoint(
+    alert_id: UUID,
+    actor: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> RegulatoryDecisionAuditLogListResponse:
+    return svc.list_regulatory_decisions_for_alert(
+        db, alert_id, limit=limit, offset=offset
+    )
 
 
 @router.post(

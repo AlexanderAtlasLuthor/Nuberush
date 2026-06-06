@@ -85,6 +85,8 @@ from app.schemas.regulatory import ComplianceAlertRead
 from app.schemas.regulatory import ComplianceAlertResolutionAction
 from app.schemas.regulatory import ComplianceAlertResolveRequest
 from app.schemas.regulatory import RegulatoryDecisionAction
+from app.schemas.regulatory import RegulatoryDecisionAuditLogListResponse
+from app.schemas.regulatory import RegulatoryDecisionAuditLogRead
 from app.schemas.regulatory import RegulatoryNoticeIngestRequest
 from app.schemas.regulatory import RegulatoryNoticeListResponse
 from app.schemas.regulatory import RegulatoryNoticeRead
@@ -1124,3 +1126,49 @@ def get_compliance_alert(
 ) -> ComplianceAlertRead:
     """Fetch a single compliance alert (404 if missing)."""
     return ComplianceAlertRead.model_validate(_get_alert(db, alert_id))
+
+
+def list_regulatory_decisions_for_alert(
+    db: Session,
+    alert_id: UUID,
+    *,
+    limit: int = 25,
+    offset: int = 0,
+) -> RegulatoryDecisionAuditLogListResponse:
+    """Paginated decision trail for one compliance alert, newest first.
+
+    Reads append-only `regulatory_decision_audit_logs` scoped to `alert_id`.
+    Raises 404 (via `_get_alert`) if the alert does not exist. `total` is the
+    decision count for the alert, computed before pagination. Strictly
+    read-only: never mutates the alert, product, inventory, or any audit row.
+    """
+    _assert_list_pagination(limit, offset)
+
+    # 404 if the alert is missing, matching the other alert-scoped helpers.
+    _get_alert(db, alert_id)
+
+    stmt = (
+        select(RegulatoryDecisionAuditLog)
+        .where(RegulatoryDecisionAuditLog.alert_id == alert_id)
+        .order_by(
+            RegulatoryDecisionAuditLog.created_at.desc(),
+            RegulatoryDecisionAuditLog.id.asc(),
+        )
+        .limit(limit)
+        .offset(offset)
+    )
+    count_stmt = (
+        select(func.count())
+        .select_from(RegulatoryDecisionAuditLog)
+        .where(RegulatoryDecisionAuditLog.alert_id == alert_id)
+    )
+
+    rows = list(db.scalars(stmt).all())
+    total = db.scalar(count_stmt) or 0
+
+    return RegulatoryDecisionAuditLogListResponse(
+        items=[RegulatoryDecisionAuditLogRead.model_validate(r) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
