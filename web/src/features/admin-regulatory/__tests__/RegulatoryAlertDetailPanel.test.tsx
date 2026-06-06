@@ -17,6 +17,7 @@ import type { ComplianceAlert } from "../types";
 
 vi.mock("../hooks", () => ({
   useAdminRegulatoryAlert: vi.fn(),
+  useAdminRegulatoryAlertDecisions: vi.fn(),
   useAcknowledgeAdminRegulatoryAlert: vi.fn(),
   useDismissAdminRegulatoryAlert: vi.fn(),
   useResolveAdminRegulatoryAlert: vi.fn(),
@@ -97,6 +98,16 @@ function setResolve(m: ReturnType<typeof makeMutation>) {
 beforeEach(() => {
   vi.clearAllMocks();
   setDetail({ isSuccess: true, data: makeAlert() });
+  // The embedded decision trail queries this hook; default to an empty list
+  // so detail/action tests render without touching the trail's own states.
+  vi.mocked(hooks.useAdminRegulatoryAlertDecisions).mockReturnValue({
+    refetch: vi.fn(),
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    data: { items: [], total: 0, limit: 25, offset: 0 },
+    error: null,
+  } as never);
   setAck(makeMutation());
   setDismiss(makeMutation());
   setResolve(makeMutation());
@@ -227,6 +238,20 @@ const ALL_ACTION_IDS = [
   "regulatory-action-resolve-hold",
   "regulatory-action-resolve-ban",
 ];
+
+describe("RegulatoryAlertDetailPanel — decision trail integration", () => {
+  it("renders the decision trail section on success", () => {
+    setDetail({ isSuccess: true, data: makeAlert() });
+    renderPanel();
+    expect(
+      screen.getByTestId("regulatory-decision-trail"),
+    ).toBeInTheDocument();
+    // Default mock = empty list → the trail's empty copy is shown.
+    expect(
+      screen.getByText("No decisions have been recorded for this alert yet."),
+    ).toBeInTheDocument();
+  });
+});
 
 describe("RegulatoryAlertDetailPanel — action visibility", () => {
   it("open alerts show all five lifecycle actions", () => {

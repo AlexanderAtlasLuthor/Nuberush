@@ -1,12 +1,9 @@
-// F2.26.6.D: alert detail review panel (inline region, not a modal).
+// F2.26.6.D/E: alert detail review panel (inline region, not a modal).
 //
 // Reads a single alert via useAdminRegulatoryAlert(alertId) and renders
 // loading / error / not-found / success states. On success it shows the full
-// alert record plus the lifecycle action controls (RegulatoryAlertActions).
-//
-// Read scope for this subphase: the single-alert detail ONLY. It does NOT
-// query the decision trail (no useAdminRegulatoryAlertDecisions) and renders
-// no decision-history panel.
+// alert record, the lifecycle action controls (RegulatoryAlertActions), and
+// the read-only decision trail (RegulatoryDecisionTrail, F2.26.6.E).
 
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
@@ -25,6 +22,7 @@ import {
   RegulatoryStatusBadge,
 } from "./RegulatoryAlertBadges";
 import { RegulatoryAlertActions } from "./RegulatoryAlertActions";
+import { RegulatoryDecisionTrail } from "./RegulatoryDecisionTrail";
 
 export interface RegulatoryAlertDetailPanelProps {
   alertId: string;
@@ -141,6 +139,8 @@ function DetailBody({ alert }: { alert: ComplianceAlert }) {
       </div>
 
       <RegulatoryAlertActions alert={alert} />
+
+      <RegulatoryDecisionTrail alertId={alert.id} />
     </div>
   );
 }

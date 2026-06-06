@@ -20,6 +20,7 @@ import type {
 vi.mock("../hooks", () => ({
   useAdminRegulatoryAlerts: vi.fn(),
   useAdminRegulatoryAlert: vi.fn(),
+  useAdminRegulatoryAlertDecisions: vi.fn(),
   useAcknowledgeAdminRegulatoryAlert: vi.fn(),
   useDismissAdminRegulatoryAlert: vi.fn(),
   useResolveAdminRegulatoryAlert: vi.fn(),
@@ -128,6 +129,15 @@ beforeEach(() => {
   // Detail + mutation hooks: only exercised when a Review opens the panel.
   vi.mocked(hooks.useAdminRegulatoryAlert).mockReset();
   setDetail({ isLoading: true });
+  // Embedded decision trail (only mounts when the panel opens): empty list.
+  vi.mocked(hooks.useAdminRegulatoryAlertDecisions).mockReturnValue({
+    refetch: vi.fn(),
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    data: { items: [], total: 0, limit: 25, offset: 0 },
+    error: null,
+  } as never);
   vi.mocked(hooks.useAcknowledgeAdminRegulatoryAlert).mockReturnValue(
     makeMutation() as never,
   );
