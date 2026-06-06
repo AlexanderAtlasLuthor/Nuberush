@@ -18,6 +18,7 @@ import AdminOperationsPage from "@/features/admin-operations/pages/AdminOperatio
 import AdminProductsPage from "@/features/admin-products/pages/AdminProductsPage";
 import AdminProductDetailPage from "@/features/admin-products/pages/AdminProductDetailPage";
 import AdminCompliancePage from "@/features/admin-compliance/pages/AdminCompliancePage";
+import AdminRegulatoryPage from "@/features/admin-regulatory/pages/AdminRegulatoryPage";
 import AdminSettingsPage from "@/features/admin-settings/pages/AdminSettingsPage";
 import AdminInventoryPage from "@/features/inventory/pages/AdminInventoryPage";
 import AdminOrdersPage from "@/features/orders/pages/AdminOrdersPage";
@@ -182,6 +183,10 @@ export const appRoutes: RouteObject[] = [
           // used in F2.15.7, F2.18.3, F2.18.4, F2.18.5, F2.19.5,
           // F2.19.6, F2.20.5.
           { path: "compliance", element: <AdminCompliancePage /> },
+          // F2.26.6.F: admin Regulatory Intelligence surface (alerts list,
+          // detail review, lifecycle actions, decision trail). Placed next to
+          // Compliance to mirror the nav ordering.
+          { path: "regulatory", element: <AdminRegulatoryPage /> },
           // F2.19.6: real admin operations alerts page replaces the
           // placeholder. The placeholder component remains defined in
           // route-components.tsx (unused) so the deletion footprint is

@@ -182,6 +182,7 @@ describe("navigation config", () => {
       ["Earnings", "/app/admin/earnings"],
       ["Audit", "/app/admin/audit"],
       ["Compliance", "/app/admin/compliance"],
+      ["Regulatory", "/app/admin/regulatory"],
       ["Operations", "/app/admin/operations"],
       ["Settings", "/app/admin/settings"],
     ]);

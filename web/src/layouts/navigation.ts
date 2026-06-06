@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   RadioTower,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   ShoppingBag,
   Users,
@@ -152,6 +153,12 @@ export const ADMIN_NAV_ITEMS: ReadonlyArray<NavItemConfig> = [
     href: "/app/admin/compliance",
     icon: FileWarning,
     description: "Platform compliance review",
+  },
+  {
+    label: "Regulatory",
+    href: "/app/admin/regulatory",
+    icon: ShieldAlert,
+    description: "Regulatory alerts and compliance recommendations",
   },
   {
     label: "Operations",

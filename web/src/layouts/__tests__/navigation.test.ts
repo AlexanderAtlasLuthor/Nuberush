@@ -27,3 +27,41 @@ describe("store navigation — Applications", () => {
     ).toBe(false);
   });
 });
+
+// F2.26.6.F: admin Regulatory nav item is global-admin only and sits
+// alongside Compliance; the store nav never receives it.
+describe("admin navigation — Regulatory", () => {
+  it("includes a Regulatory item pointing at /app/admin/regulatory", () => {
+    const item = ADMIN_NAV_ITEMS.find((i) => i.label === "Regulatory");
+    expect(item).toBeDefined();
+    expect(item?.href).toBe("/app/admin/regulatory");
+  });
+
+  it("keeps the existing Compliance item present", () => {
+    const compliance = ADMIN_NAV_ITEMS.find((i) => i.label === "Compliance");
+    expect(compliance).toBeDefined();
+    expect(compliance?.href).toBe("/app/admin/compliance");
+  });
+
+  it("places Regulatory immediately after Compliance", () => {
+    const complianceIdx = ADMIN_NAV_ITEMS.findIndex(
+      (i) => i.label === "Compliance",
+    );
+    const regulatoryIdx = ADMIN_NAV_ITEMS.findIndex(
+      (i) => i.label === "Regulatory",
+    );
+    expect(complianceIdx).toBeGreaterThanOrEqual(0);
+    expect(regulatoryIdx).toBe(complianceIdx + 1);
+  });
+});
+
+describe("store navigation — Regulatory", () => {
+  it("does NOT include a Regulatory item", () => {
+    expect(
+      STORE_NAV_ITEMS.some((i) => i.label === "Regulatory"),
+    ).toBe(false);
+    expect(
+      STORE_NAV_ITEMS.some((i) => i.href.includes("/regulatory")),
+    ).toBe(false);
+  });
+});

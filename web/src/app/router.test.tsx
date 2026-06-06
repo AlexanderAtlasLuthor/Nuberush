@@ -196,6 +196,16 @@ vi.mock(
   }),
 );
 
+// F2.26.6.F: /app/admin/regulatory mounts the real AdminRegulatoryPage.
+// Mock it like the other admin pages so router tests stay independent of
+// its internals.
+vi.mock(
+  "@/features/admin-regulatory/pages/AdminRegulatoryPage",
+  () => ({
+    default: () => <div>Admin regulatory page</div>,
+  }),
+);
+
 // /app/admin/settings now mounts the real AdminSettingsPage. Same
 // mock convention.
 vi.mock(
@@ -584,6 +594,26 @@ describe("app route split", () => {
     expect(
       screen.queryByText("No fake compliance queue"),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders the real AdminRegulatoryPage at /app/admin/regulatory (F2.26.6.F)", async () => {
+    renderRoute(
+      "/app/admin/regulatory",
+      makeUser({ role: "admin", store_id: null }),
+      {
+        currentStoreId: null,
+        hasStoreContext: false,
+        isStoreRequired: false,
+      },
+    );
+    expect(
+      await screen.findByText("Admin regulatory page"),
+    ).toBeInTheDocument();
+    // Nav exposes Regulatory alongside the existing Compliance item; the
+    // store surface is never reachable from here.
+    expectSidebarLink("Regulatory", "/app/admin/regulatory");
+    expectSidebarLink("Compliance", "/app/admin/compliance");
+    expectNoSidebarLinks(/^\/app\/store/);
   });
 
   it("renders the real AdminProductDetailPage at /app/admin/products/:productId (new route in F2.20.5)", async () => {
