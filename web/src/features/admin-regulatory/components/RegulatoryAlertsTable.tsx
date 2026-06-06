@@ -1,9 +1,9 @@
-// F2.26.6.C: desktop table for the regulatory alerts read surface.
+// F2.26.6.C/D: desktop table for the regulatory alerts read surface.
 //
 // Pure presentational, desktop-only (`hidden md:block`). Renders one row per
-// alert. The "Review" column is a static, disabled affordance for this
-// subphase — it opens no detail panel and performs no mutation (lifecycle
-// actions and the detail/decision-trail panels arrive in a later subphase).
+// alert. The "Review" button opens the detail panel for ANY alert (including
+// terminal ones — they can still be reviewed) via the `onReview` callback; it
+// performs no mutation itself.
 //
 // Missing product_id / notice_id / resolved_at render the EM_DASH placeholder.
 
@@ -29,9 +29,13 @@ const HEAD_CLASS = "text-[10px] font-semibold uppercase tracking-wider";
 
 export interface RegulatoryAlertsTableProps {
   alerts: ComplianceAlert[];
+  onReview: (alertId: string) => void;
 }
 
-export function RegulatoryAlertsTable({ alerts }: RegulatoryAlertsTableProps) {
+export function RegulatoryAlertsTable({
+  alerts,
+  onReview,
+}: RegulatoryAlertsTableProps) {
   return (
     <div
       className="hidden md:block rounded-xl border border-border bg-card overflow-hidden"
@@ -101,9 +105,7 @@ export function RegulatoryAlertsTable({ alerts }: RegulatoryAlertsTableProps) {
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled
-                  aria-disabled="true"
-                  title="Alert review opens in a later update"
+                  onClick={() => onReview(alert.id)}
                   data-testid="regulatory-row-review"
                 >
                   Review

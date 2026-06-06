@@ -1,19 +1,18 @@
-// F2.26.6.C: read-only Admin Regulatory alerts surface over the
+// F2.26.6.C/D: Admin Regulatory alerts surface over the
 // GET /admin/regulatory/alerts backend (F2.26.5) via the F2.26.6.B hooks.
 //
-// READ-ONLY by design for this subphase:
-//   - useAdminRegulatoryAlerts(filters) only — no detail query, no mutations.
-//   - No alert selection, no detail panel, no decision-trail panel.
-//   - The "Review" affordance is a static disabled button (see the table /
-//     mobile-card components); it opens nothing and mutates nothing.
+// The list itself stays read-only here (useAdminRegulatoryAlerts only). The
+// page owns `selectedAlertId`: clicking Review opens the inline detail panel,
+// which (in its own component) reads the single alert and offers the explicit
+// lifecycle actions. No navigation, no URL params, no decision-trail panel.
 //
 // Architecture rules in force (mirroring AdminOperationsPage):
 //   - No fetch, no apiRequest, no axios, no business logic.
 //   - No useAuth / currentUser inspection, no role-based gating.
 //   - No useStoreContext — regulatory alerts are global; product_id / notice_id
 //     live inside the filters object.
-//   - No useMutation, no useQueryClient, no setQueryData.
-//   - No acknowledge / dismiss / resolve UI.
+//   - No useMutation / useQueryClient here — mutations live in the detail
+//     panel's action components, exclusively through the F2.26.6.B hooks.
 //   - No route registration, no nav item, no dashboard tile here.
 
 import { useCallback, useState } from "react";
@@ -27,6 +26,7 @@ import { LoadingState } from "@/components/common/loading-state";
 
 import { useAdminRegulatoryAlerts } from "../hooks";
 import type { ComplianceAlertFilters } from "../types";
+import { RegulatoryAlertDetailPanel } from "../components/RegulatoryAlertDetailPanel";
 import { RegulatoryAlertsFilters } from "../components/RegulatoryAlertsFilters";
 import { RegulatoryAlertsMobileCards } from "../components/RegulatoryAlertsMobileCards";
 import { RegulatoryAlertsTable } from "../components/RegulatoryAlertsTable";
@@ -122,6 +122,7 @@ function PageHeader() {
 export default function AdminRegulatoryPage() {
   const [filters, setFilters] =
     useState<ComplianceAlertFilters>(DEFAULT_FILTERS);
+  const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
 
   const query = useAdminRegulatoryAlerts(filters);
 
@@ -170,6 +171,13 @@ export default function AdminRegulatoryPage() {
         <RegulatoryKpiCards total={total} pageItems={items} />
       ) : null}
 
+      {selectedAlertId !== null ? (
+        <RegulatoryAlertDetailPanel
+          alertId={selectedAlertId}
+          onClose={() => setSelectedAlertId(null)}
+        />
+      ) : null}
+
       {query.isLoading ? (
         <LoadingState message="Loading regulatory alerts…" />
       ) : query.isError ? (
@@ -188,8 +196,11 @@ export default function AdminRegulatoryPage() {
         />
       ) : (
         <>
-          <RegulatoryAlertsTable alerts={items} />
-          <RegulatoryAlertsMobileCards alerts={items} />
+          <RegulatoryAlertsTable alerts={items} onReview={setSelectedAlertId} />
+          <RegulatoryAlertsMobileCards
+            alerts={items}
+            onReview={setSelectedAlertId}
+          />
         </>
       )}
 

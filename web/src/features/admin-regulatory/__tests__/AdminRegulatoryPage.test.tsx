@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import type { UseQueryResult } from "@tanstack/react-query";
+import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
 
 import AdminRegulatoryPage from "../pages/AdminRegulatoryPage";
 import * as hooks from "../hooks";
@@ -19,7 +19,43 @@ import type {
 
 vi.mock("../hooks", () => ({
   useAdminRegulatoryAlerts: vi.fn(),
+  useAdminRegulatoryAlert: vi.fn(),
+  useAcknowledgeAdminRegulatoryAlert: vi.fn(),
+  useDismissAdminRegulatoryAlert: vi.fn(),
+  useResolveAdminRegulatoryAlert: vi.fn(),
 }));
+
+function makeMutation(
+  partial: Partial<UseMutationResult> = {},
+): UseMutationResult {
+  return {
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    reset: vi.fn(),
+    isPending: false,
+    isSuccess: false,
+    isError: false,
+    data: undefined,
+    error: null,
+    ...partial,
+  } as unknown as UseMutationResult;
+}
+
+/** Point the detail query hook at a given query-result shape. */
+function setDetail(partial: Partial<UseQueryResult<ComplianceAlert>>) {
+  const result = {
+    refetch: vi.fn(),
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    isSuccess: false,
+    isFetching: false,
+    data: undefined,
+    error: null,
+    ...partial,
+  } as unknown as UseQueryResult<ComplianceAlert>;
+  vi.mocked(hooks.useAdminRegulatoryAlert).mockReturnValue(result);
+}
 
 const PRODUCT_ID = "11111111-1111-1111-1111-111111111111";
 const NOTICE_ID = "22222222-2222-2222-2222-222222222222";
@@ -88,6 +124,18 @@ beforeEach(() => {
   vi.mocked(hooks.useAdminRegulatoryAlerts).mockReset();
   vi.mocked(hooks.useAdminRegulatoryAlerts).mockReturnValue(
     asQueryResult({ isSuccess: true, data: makeResponse([]) }),
+  );
+  // Detail + mutation hooks: only exercised when a Review opens the panel.
+  vi.mocked(hooks.useAdminRegulatoryAlert).mockReset();
+  setDetail({ isLoading: true });
+  vi.mocked(hooks.useAcknowledgeAdminRegulatoryAlert).mockReturnValue(
+    makeMutation() as never,
+  );
+  vi.mocked(hooks.useDismissAdminRegulatoryAlert).mockReturnValue(
+    makeMutation() as never,
+  );
+  vi.mocked(hooks.useResolveAdminRegulatoryAlert).mockReturnValue(
+    makeMutation() as never,
   );
 });
 
@@ -234,18 +282,64 @@ describe("AdminRegulatoryPage — success render", () => {
     expect(within(row).queryByText("ban")).not.toBeInTheDocument();
   });
 
-  it("review affordance is present but disabled (no lifecycle action)", () => {
+  it("Review affordance is enabled and does not itself fire a mutation", () => {
+    const alert = makeAlert();
     vi.mocked(hooks.useAdminRegulatoryAlerts).mockReturnValue(
-      asQueryResult({ isSuccess: true, data: makeResponse([makeAlert()]) }),
+      asQueryResult({ isSuccess: true, data: makeResponse([alert]) }),
     );
+    const ack = makeMutation();
+    vi.mocked(hooks.useAcknowledgeAdminRegulatoryAlert).mockReturnValue(
+      ack as never,
+    );
+    setDetail({ isSuccess: true, data: alert });
+
     renderPage();
-    expect(screen.getByTestId("regulatory-row-review")).toBeDisabled();
-    expect(screen.getByTestId("regulatory-card-review")).toBeDisabled();
-    // No lifecycle-action buttons exist on the surface.
+    const reviewBtn = screen.getByTestId("regulatory-row-review");
+    expect(reviewBtn).not.toBeDisabled();
+    fireEvent.click(reviewBtn);
+    // Opening the panel must not run any lifecycle mutation.
+    expect(ack.mutate).not.toHaveBeenCalled();
+  });
+});
+
+// --------------------------------------------------------------------- //
+// Detail panel open / close (page integration)
+// --------------------------------------------------------------------- //
+
+describe("AdminRegulatoryPage — detail panel selection", () => {
+  it("clicking Review opens the detail panel for that alert", () => {
+    const alert = makeAlert();
+    vi.mocked(hooks.useAdminRegulatoryAlerts).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeResponse([alert]) }),
+    );
+    setDetail({ isSuccess: true, data: alert });
+
+    renderPage();
     expect(
-      screen.queryByRole("button", {
-        name: /acknowledge|dismiss|resolve|hold|ban/i,
-      }),
+      screen.queryByTestId("regulatory-detail-panel"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("regulatory-row-review"));
+
+    expect(screen.getByTestId("regulatory-detail-panel")).toBeInTheDocument();
+    // The detail query was asked for the clicked alert id.
+    expect(hooks.useAdminRegulatoryAlert).toHaveBeenCalledWith(alert.id);
+  });
+
+  it("Close hides the detail panel", () => {
+    const alert = makeAlert();
+    vi.mocked(hooks.useAdminRegulatoryAlerts).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeResponse([alert]) }),
+    );
+    setDetail({ isSuccess: true, data: alert });
+
+    renderPage();
+    fireEvent.click(screen.getByTestId("regulatory-row-review"));
+    expect(screen.getByTestId("regulatory-detail-panel")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("regulatory-detail-close"));
+    expect(
+      screen.queryByTestId("regulatory-detail-panel"),
     ).not.toBeInTheDocument();
   });
 });

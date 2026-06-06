@@ -1,8 +1,8 @@
-// F2.26.6.C: mobile card stack for the regulatory alerts read surface.
+// F2.26.6.C/D: mobile card stack for the regulatory alerts read surface.
 //
 // Pure presentational, small-screens-only (`md:hidden`). Same data as the
-// desktop table, one card per alert. The "Review" affordance is a static,
-// disabled button for this subphase — no detail panel, no mutation.
+// desktop table, one card per alert. The "Review" button opens the detail
+// panel for any alert via `onReview`; it performs no mutation itself.
 
 import { Button } from "@/components/ui/button";
 
@@ -16,10 +16,12 @@ import {
 
 export interface RegulatoryAlertsMobileCardsProps {
   alerts: ComplianceAlert[];
+  onReview: (alertId: string) => void;
 }
 
 export function RegulatoryAlertsMobileCards({
   alerts,
+  onReview,
 }: RegulatoryAlertsMobileCardsProps) {
   return (
     <ul
@@ -86,9 +88,7 @@ export function RegulatoryAlertsMobileCards({
               type="button"
               variant="outline"
               size="sm"
-              disabled
-              aria-disabled="true"
-              title="Alert review opens in a later update"
+              onClick={() => onReview(alert.id)}
               data-testid="regulatory-card-review"
             >
               Review
