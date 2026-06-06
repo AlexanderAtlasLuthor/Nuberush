@@ -4,7 +4,7 @@
 **Status:** Strategic product/architecture document — source of truth for what the
 NubeRush Web App is, what it is not, and how it should evolve.
 **Audience:** Founder, future engineering team, future product/design team.
-**Last reviewed:** 2026-05-04.
+**Last reviewed:** 2026-06-06.
 **Related:** [PRD.md](PRD.md), [phase-0-foundation.md](phase-0-foundation.md),
 [s5.5-handoff.md](s5.5-handoff.md), [f2.6-inventory-readiness.md](f2.6-inventory-readiness.md).
 
@@ -62,6 +62,20 @@ operational identity.
 
 The Web App is a **single application with two distinct surfaces**, gated by
 the backend role of the authenticated user.
+
+> **Status note (updated 2026-06-06).** The per-feature *Current status* /
+> *Not built* / *Placeholder* markers in §3.1 and §3.2 below are **historical**
+> — they are the original 2026-05-04 snapshot and are **no longer the source of
+> current truth**. Do not read them as the present state. For the authoritative
+> current implementation state, see **§4 below** and **[PRD.md](PRD.md) §9**.
+> After F2.26 the Admin Console and Store Panel surfaces (dashboards, stores +
+> store applications, global users, products + detail + images, inventory,
+> orders, audit/unified feed, compliance, Admin Regulatory, earnings, settings)
+> are built and shipped, so most "Not built" markers below are stale. A few
+> remain genuinely true (e.g. billing/commission models, daily-operations /
+> shifts). The *responsibilities* and *backend dependencies* notes are retained
+> as design context. Customer App, Driver App, and Stripe checkout/payments
+> remain future.
 
 ### 3.1 NubeRush Admin Console
 
@@ -240,8 +254,8 @@ by backend tenancy.
 
 ## 4. Current implementation status
 
-Snapshot of the Web App as of 2026-05-04. This section is descriptive — it
-records what is real today, not what should be real.
+Snapshot of the Web App as of 2026-06-06 (refreshed after F2.26.6). This
+section is descriptive — it records what is real today, not what should be real.
 
 ### Implemented / strong
 
@@ -250,34 +264,35 @@ records what is real today, not what should be real.
   blocked with a clear `ErrorState`).
 - `DashboardLayout` (sidebar + topbar chrome, layout-on-pathless-route
   pattern).
+- Admin Console surface — dedicated `/app/admin/*` shell separate from the
+  store surface (admin dashboard, stores + store applications, global users,
+  global products/inventory/orders oversight, compliance, audit, operations,
+  settings, earnings).
+- Store Operations Panel — `/app/store/*` surface (dashboard, inventory,
+  products, orders, users, compliance, audit, settings).
 - Inventory UI (full CRUD-equivalent + logs).
-- Products UI (full CRUD + compliance + audit panel).
+- Products UI (full CRUD + detail + product images + compliance + audit panel).
 - Orders UI (list, detail, transitions, cancel, return, audit panel).
 - Create Order internal flow (idempotent, store-scoped).
-- Users create-only MVP.
-- Audit Hub MVP (per-resource panels + store-wide inventory log panel).
-- Inventory / Orders UI tests from F2.11-M2.
+- Users management (global admin + store-scoped).
+- Audit — unified feed (global for admin, store-scoped for store users).
+- Compliance review surface.
+- Admin Regulatory surface (`/app/admin/regulatory`) — admin-only regulatory
+  alerts with explicit human review, lifecycle actions, and a decision trail;
+  no automatic hold/ban/block.
+- Earnings (admin + store) — read-only internal accounting estimates.
 - Centralized API client with session-token handling and typed errors.
 - Consistent loading / error / empty / success patterns across features.
 
 ### Partial / limited
 
-- Dashboard is a placeholder (`FeaturePlaceholder`, "F2.7+ coming").
-- Settings is a placeholder (`SettingsPlaceholderPage`).
-- User management is create-only — list / update / deactivate require
-  backend endpoints that do not exist yet.
-- Audit is a **hub**, not a global feed; only store-scoped inventory
-  logs are surfaced as a feed.
-- No Admin Console surface — there is no separate UX for the platform
-  operator. Admin users currently land in the same `/app` shell as
-  store users.
-- No store management CRUD (cannot create/edit/deactivate stores from
-  the UI).
-- No billing / commissions / payouts UI. No backend either.
-- No reporting / KPIs (charts, exports, period comparisons).
-- No product images / media (no upload, no CDN, no thumbnails).
 - `compliance_blocked` order action deferred (documented in
   [s5.5-handoff.md](s5.5-handoff.md)).
+- Regulatory dashboard KPI tile is deferred — no Admin Dashboard regulatory
+  aggregate yet; a future tile should read a backend aggregate rather than add
+  a second dashboard query.
+- Billing / payouts / commission settlement — not built; earnings are internal
+  estimates only, pending Stripe (see below).
 
 ### Not part of Web App yet
 
@@ -285,9 +300,11 @@ records what is real today, not what should be real.
 - Customer catalog app.
 - Driver workflow.
 - Delivery / proof-of-delivery capture.
-- Customer-facing payments UX. (Admin/business-management payment UX
-  may eventually be added to the Admin Console — that is the only
-  in-scope payment surface for the Web App.)
+- Customer-facing payments UX, Stripe checkout, `PaymentIntent`, payment
+  webhook, and payment capture/settlement — pending Stripe approval; no real
+  payments are processed in the Web App. (Admin/business-management payment UX
+  may eventually be added to the Admin Console — the only in-scope payment
+  surface for the Web App.)
 
 ---
 
