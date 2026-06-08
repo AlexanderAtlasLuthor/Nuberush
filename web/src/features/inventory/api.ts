@@ -434,13 +434,24 @@ export interface InventoryImportParams {
   storeId: string;
   /** The QuickBooks POS `.xlsx` file selected by the user. */
   file: File;
+  /**
+   * F2.27.9 (admin only): when true, rows whose SKU has no existing
+   * variant create a new product + variant (not for sale, pending
+   * review) instead of being blocked. Omitted from the request when
+   * falsy so non-admin imports stay byte-for-byte as before.
+   */
+  createMissing?: boolean;
 }
 
-function buildImportFormData(file: File): FormData {
+function buildImportFormData(file: File, createMissing?: boolean): FormData {
   const form = new FormData();
   // Field name MUST be `file` — it matches the FastAPI `UploadFile`
   // parameter name on both import endpoints.
   form.append("file", file);
+  if (createMissing) {
+    // Matches the `create_missing: bool = Form(...)` endpoint param.
+    form.append("create_missing", "true");
+  }
   return form;
 }
 
@@ -470,7 +481,7 @@ export function previewInventoryImport(
   )}/inventory/import/preview`;
   return apiRequest<InventoryImportPreviewResponse>(path, {
     method: "POST",
-    body: buildImportFormData(params.file),
+    body: buildImportFormData(params.file, params.createMissing),
     signal,
   });
 }
@@ -495,7 +506,7 @@ export function confirmInventoryImport(
   )}/inventory/import/confirm`;
   return apiRequest<InventoryImportConfirmResponse>(path, {
     method: "POST",
-    body: buildImportFormData(params.file),
+    body: buildImportFormData(params.file, params.createMissing),
     signal,
   });
 }

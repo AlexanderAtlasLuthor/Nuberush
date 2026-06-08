@@ -43,6 +43,22 @@ describe("previewInventoryImport", () => {
     // Must not hand-set Content-Type for multipart uploads.
     expect(options?.headers).toBeUndefined();
   });
+
+  it("omits create_missing when not requested", async () => {
+    await previewInventoryImport({ storeId: STORE_ID, file: makeFile() });
+    const [, options] = vi.mocked(apiRequest).mock.calls[0];
+    expect((options?.body as FormData).get("create_missing")).toBeNull();
+  });
+
+  it("appends create_missing=true when requested", async () => {
+    await previewInventoryImport({
+      storeId: STORE_ID,
+      file: makeFile(),
+      createMissing: true,
+    });
+    const [, options] = vi.mocked(apiRequest).mock.calls[0];
+    expect((options?.body as FormData).get("create_missing")).toBe("true");
+  });
 });
 
 describe("confirmInventoryImport", () => {

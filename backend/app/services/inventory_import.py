@@ -39,15 +39,24 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import UTC
+from datetime import datetime
+from decimal import ROUND_HALF_UP
+from decimal import Decimal
+from decimal import InvalidOperation
 from uuid import UUID
 
 from openpyxl import load_workbook
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
+from app.db.models import Product
+from app.db.models import ProductApprovalStatus
 from app.db.models import ProductVariant
 from app.schemas.inventory_import import InventoryImportConfirmResponse
 from app.schemas.inventory_import import InventoryImportPreviewResponse
@@ -90,6 +99,10 @@ MAX_INVENTORY_IMPORT_QUANTITY: int = 1_000_000
 # Audit metadata for every inventory mutation produced by an import.
 INVENTORY_IMPORT_REASON: str = "inventory_import"
 
+# Fallback category for a created product when the QuickBooks Department
+# Name cell is empty (Product.category is NOT NULL / non-empty).
+DEFAULT_IMPORT_CATEGORY: str = "Uncategorized"
+
 
 # Row-issue codes (mirrored 1:1 in the frontend types).
 CODE_MISSING_SKU = "MISSING_SKU"
@@ -98,6 +111,10 @@ CODE_QUANTITY_OUT_OF_RANGE = "QUANTITY_OUT_OF_RANGE"
 CODE_DUPLICATE_SKU_IN_FILE = "DUPLICATE_SKU_IN_FILE"
 CODE_VARIANT_NOT_FOUND = "VARIANT_NOT_FOUND"
 CODE_RESERVED_EXCEEDS_NEW_ONHAND = "RESERVED_EXCEEDS_NEW_ONHAND"
+# F2.27.9 create-mode row codes.
+CODE_MISSING_ITEM_NAME = "MISSING_ITEM_NAME"
+CODE_INVALID_PRICE = "INVALID_PRICE"
+CODE_BARCODE_DROPPED = "BARCODE_DROPPED"  # warning, not blocking
 
 # File-level codes (raised, never per-row).
 CODE_BAD_HEADERS = "BAD_HEADERS"
@@ -105,10 +122,12 @@ CODE_UNSUPPORTED_FILE_TYPE = "UNSUPPORTED_FILE_TYPE"
 CODE_EMPTY_FILE = "EMPTY_FILE"
 CODE_FILE_TOO_LARGE = "FILE_TOO_LARGE"
 CODE_BLOCKING_ERRORS = "BLOCKING_ERRORS"
+CODE_CATALOG_CONFLICT = "CATALOG_CONFLICT"
 
 # Preview row actions.
 ACTION_UPDATE = "update"
 ACTION_CREATE_INVENTORY_ITEM = "create_inventory_item"
+ACTION_CREATE_PRODUCT_AND_VARIANT = "create_product_and_variant"
 ACTION_SKIP = "skip"
 
 
@@ -520,6 +539,11 @@ class _AnalyzedRow:
     action: str
     errors: list[InventoryImportRowIssue]
     warnings: list[InventoryImportRowIssue]
+    # F2.27.9 create-mode payload, populated only for
+    # ACTION_CREATE_PRODUCT_AND_VARIANT rows so confirm doesn't re-derive.
+    create_price: Decimal | None = None
+    create_cost: Decimal | None = None
+    create_barcode: str | None = None
 
 
 def _duplicate_skus(workbook: ParsedInventoryImportWorkbook) -> set[str]:
@@ -539,6 +563,84 @@ def _variants_by_sku(
     return {variant.sku: variant for variant in db.scalars(stmt).all()}
 
 
+def _existing_variant_barcodes(db: Session, barcodes: set[str]) -> set[str]:
+    """Return the subset of `barcodes` already used by some variant.
+
+    `ProductVariant.barcode` is globally unique, so any reuse would fail
+    at insert; we surface it as a non-blocking BARCODE_DROPPED instead.
+    """
+    if not barcodes:
+        return set()
+    stmt = select(ProductVariant.barcode).where(
+        ProductVariant.barcode.in_(barcodes)
+    )
+    return {b for b in db.scalars(stmt).all() if b}
+
+
+def _coerce_import_price(value: float | None) -> tuple[Decimal | None, bool]:
+    """Map a Regular Price cell to a non-negative 2dp Decimal.
+
+    Returns `(price, True)` on success or `(None, False)` when the value
+    is missing, unparseable, or negative.
+    """
+    if value is None:
+        return None, False
+    try:
+        price = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None, False
+    if price < 0:
+        return None, False
+    return price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), True
+
+
+def _coerce_import_cost(value: float | None) -> Decimal | None:
+    """Map an Average Unit Cost cell to a 2dp Decimal, or None.
+
+    Cost is optional; anything missing, unparseable, or negative becomes
+    None rather than blocking the row.
+    """
+    if value is None:
+        return None
+    try:
+        cost = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if cost < 0:
+        return None
+    return cost.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _conflicting_import_barcodes(
+    db: Session,
+    workbook: ParsedInventoryImportWorkbook,
+    duplicates: set[str],
+    variants: dict[str, ProductVariant],
+) -> set[str]:
+    """Barcodes (UPCs) that cannot be assigned to a newly-created variant.
+
+    A UPC conflicts when it appears on more than one would-create row in
+    the file, or it already belongs to an existing variant. Those rows
+    keep their other data but import with `barcode=None` (+ a
+    BARCODE_DROPPED warning). Only would-create rows are considered:
+    non-empty SKU, not an in-file SKU duplicate, and no existing variant.
+    """
+    candidate_upcs = [
+        row.upc
+        for row in workbook.rows
+        if row.upc
+        and row.normalized_sku
+        and row.normalized_sku not in duplicates
+        and variants.get(row.normalized_sku) is None
+    ]
+    counts: dict[str, int] = {}
+    for upc in candidate_upcs:
+        counts[upc] = counts.get(upc, 0) + 1
+    in_file_dups = {upc for upc, count in counts.items() if count > 1}
+    existing = _existing_variant_barcodes(db, set(candidate_upcs))
+    return in_file_dups | existing
+
+
 def _existing_item(
     db: Session, store_id: UUID, variant_id: UUID
 ) -> InventoryItem | None:
@@ -553,16 +655,28 @@ def _analyze_workbook(
     db: Session,
     store_id: UUID,
     workbook: ParsedInventoryImportWorkbook,
+    *,
+    create_missing: bool = False,
 ) -> list[_AnalyzedRow]:
     """Diff every parsed row against the DB without mutating anything.
 
     Shared by preview (rendering) and confirm (the blocking-error gate).
     Reads `ProductVariant` (global SKU) and `InventoryItem`
     (store-scoped) only.
+
+    When `create_missing` is True (admin-only catalog import), a row whose
+    SKU has no existing variant becomes `create_product_and_variant`
+    instead of the blocking `VARIANT_NOT_FOUND`, provided it carries the
+    fields a new product/variant needs (item name + a valid price).
     """
     duplicates = _duplicate_skus(workbook)
     variants = _variants_by_sku(
         db, {r.normalized_sku for r in workbook.rows if r.normalized_sku}
+    )
+    conflicting_barcodes = (
+        _conflicting_import_barcodes(db, workbook, duplicates, variants)
+        if create_missing
+        else set()
     )
 
     analyzed: list[_AnalyzedRow] = []
@@ -576,6 +690,9 @@ def _analyze_workbook(
         new_on_hand: int | None = None
         delta: int | None = None
         action = ACTION_SKIP
+        create_price: Decimal | None = None
+        create_cost: Decimal | None = None
+        create_barcode: str | None = None
 
         if not row.normalized_sku:
             errors.append(
@@ -613,15 +730,64 @@ def _analyze_workbook(
             variants.get(row.normalized_sku) if row.normalized_sku else None
         )
         if row.normalized_sku and variant is None:
-            errors.append(
-                InventoryImportRowIssue(
-                    code=CODE_VARIANT_NOT_FOUND,
-                    message=(
-                        "No product variant exists with this SKU; a "
-                        "variant must be created before importing stock."
-                    ),
+            if create_missing:
+                # Admin catalog import: this row will create a product +
+                # variant. Validate the fields a new catalog row needs.
+                matched_product_name = row.item_name
+                current_on_hand = 0
+                quantity_reserved = 0
+                if row.parsed_quantity is not None:
+                    new_on_hand = row.parsed_quantity
+                    delta = new_on_hand
+                if not row.item_name:
+                    errors.append(
+                        InventoryImportRowIssue(
+                            code=CODE_MISSING_ITEM_NAME,
+                            message=(
+                                "Item Name is required to create a new "
+                                "product."
+                            ),
+                        )
+                    )
+                create_price, price_ok = _coerce_import_price(
+                    row.regular_price
                 )
-            )
+                if not price_ok:
+                    errors.append(
+                        InventoryImportRowIssue(
+                            code=CODE_INVALID_PRICE,
+                            message=(
+                                "Regular Price is missing or not a valid "
+                                "non-negative amount."
+                            ),
+                        )
+                    )
+                create_cost = _coerce_import_cost(row.average_unit_cost)
+                if row.upc and row.upc in conflicting_barcodes:
+                    create_barcode = None
+                    warnings.append(
+                        InventoryImportRowIssue(
+                            code=CODE_BARCODE_DROPPED,
+                            message=(
+                                "UPC already in use (or duplicated in the "
+                                "file); the new variant will be created "
+                                "without a barcode."
+                            ),
+                        )
+                    )
+                else:
+                    create_barcode = row.upc
+                action = ACTION_CREATE_PRODUCT_AND_VARIANT
+            else:
+                errors.append(
+                    InventoryImportRowIssue(
+                        code=CODE_VARIANT_NOT_FOUND,
+                        message=(
+                            "No product variant exists with this SKU; a "
+                            "variant must be created before importing stock."
+                        ),
+                    )
+                )
 
         if variant is not None:
             matched_variant_id = variant.id
@@ -671,6 +837,9 @@ def _analyze_workbook(
                 action=action,
                 errors=errors,
                 warnings=warnings,
+                create_price=create_price,
+                create_cost=create_cost,
+                create_barcode=create_barcode,
             )
         )
     return analyzed
@@ -706,6 +875,11 @@ def _summarize(analyzed: list[_AnalyzedRow]) -> InventoryImportSummary:
         to_create_inventory_item=sum(
             1 for a in analyzed if a.action == ACTION_CREATE_INVENTORY_ITEM
         ),
+        to_create_product_and_variant=sum(
+            1
+            for a in analyzed
+            if a.action == ACTION_CREATE_PRODUCT_AND_VARIANT
+        ),
         to_skip=sum(1 for a in analyzed if a.action == ACTION_SKIP),
         blocking_error_count=sum(len(a.errors) for a in analyzed),
     )
@@ -715,9 +889,13 @@ def build_inventory_import_preview(
     db: Session,
     store_id: UUID,
     workbook: ParsedInventoryImportWorkbook,
+    *,
+    create_missing: bool = False,
 ) -> InventoryImportPreviewResponse:
     """Build the preview response. Performs zero DB writes."""
-    analyzed = _analyze_workbook(db, store_id, workbook)
+    analyzed = _analyze_workbook(
+        db, store_id, workbook, create_missing=create_missing
+    )
     return InventoryImportPreviewResponse(
         store_id=store_id,
         summary=_summarize(analyzed),
@@ -736,6 +914,7 @@ def confirm_inventory_import(
     workbook: ParsedInventoryImportWorkbook,
     *,
     actor_user_id: UUID | None,
+    create_missing: bool = False,
 ) -> InventoryImportConfirmResponse:
     """Apply the import inside one transaction.
 
@@ -744,10 +923,17 @@ def confirm_inventory_import(
     write. Then, for each applicable row, locks/creates the
     `InventoryItem`, sets `quantity_on_hand` to the parsed quantity, and
     appends an `InventoryLog` (movement_type=adjustment,
-    reason="inventory_import") only when the delta is non-zero. A single
-    commit lands everything; any failure rolls the entire import back.
+    reason="inventory_import") only when the delta is non-zero.
+
+    When `create_missing` is True (admin catalog import), rows whose SKU
+    has no existing variant additionally create a `Product` (not for
+    sale, pending review) + `ProductVariant` before the inventory row.
+    A single commit lands everything; any failure rolls the entire
+    import back.
     """
-    analyzed = _analyze_workbook(db, store_id, workbook)
+    analyzed = _analyze_workbook(
+        db, store_id, workbook, create_missing=create_missing
+    )
     if any(a.errors for a in analyzed):
         raise InventoryImportValidationError(
             CODE_BLOCKING_ERRORS,
@@ -755,19 +941,36 @@ def confirm_inventory_import(
         )
 
     updated_count = 0
-    created_count = 0
+    created_count = 0  # inventory items created (both paths)
+    created_product_count = 0
+    created_variant_count = 0
     skipped_count = 0
     unchanged_count = 0
     log_count = 0
 
     # All-or-nothing: any failure inside the loop rolls back every prior
     # mutation in this transaction. The `InventoryImportValidationError`
-    # branches re-raise as controlled errors; any other exception is a
-    # genuine fault that must also leave the DB untouched.
+    # branches re-raise as controlled errors; a catalog unique-violation
+    # (concurrent insert of the same SKU/barcode) becomes a controlled
+    # 409; any other exception is a genuine fault that must also leave
+    # the DB untouched.
     try:
         for analyzed_row in analyzed:
             if analyzed_row.action == ACTION_SKIP:
                 skipped_count += 1
+                continue
+
+            if analyzed_row.action == ACTION_CREATE_PRODUCT_AND_VARIANT:
+                created = _create_product_variant_and_item(
+                    db,
+                    store_id,
+                    analyzed_row,
+                    actor_user_id=actor_user_id,
+                )
+                created_product_count += 1
+                created_variant_count += 1
+                created_count += 1
+                log_count += created.log_written
                 continue
 
             variant_id = analyzed_row.matched_variant_id
@@ -836,6 +1039,19 @@ def confirm_inventory_import(
                 created_count += 1
 
         inventory_svc._commit_or_translate(db)
+    except InventoryImportValidationError:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise InventoryImportValidationError(
+            CODE_CATALOG_CONFLICT,
+            (
+                "A product/variant conflict (duplicate SKU or barcode) "
+                "aborted the import; nothing was written."
+            ),
+            status_code=409,
+        ) from exc
     except Exception:
         db.rollback()
         raise
@@ -844,10 +1060,91 @@ def confirm_inventory_import(
         store_id=store_id,
         updated_count=updated_count,
         created_inventory_item_count=created_count,
+        created_product_count=created_product_count,
+        created_variant_count=created_variant_count,
         skipped_count=skipped_count,
         unchanged_count=unchanged_count,
         inventory_log_count=log_count,
     )
+
+
+@dataclass(slots=True)
+class _CreatedCatalogRow:
+    """Outcome of creating one product+variant+inventory row."""
+
+    log_written: int  # 0 or 1 — feeds the import's inventory_log_count
+
+
+def _create_product_variant_and_item(
+    db: Session,
+    store_id: UUID,
+    analyzed_row: _AnalyzedRow,
+    *,
+    actor_user_id: UUID | None,
+) -> _CreatedCatalogRow:
+    """Create Product + ProductVariant + InventoryItem for one row.
+
+    No-commit: every insert is flushed into the caller's transaction so
+    the whole import commits (or rolls back) together. The new product
+    is admin-curated but NOT sellable — `approval_status=approved`,
+    `compliance_status=allowed`, `allowed_for_sale=False` — so a bulk
+    import never silently puts regulated goods on the storefront. A
+    duplicate SKU/barcode surfaces as an IntegrityError at flush, which
+    the caller translates into a controlled CATALOG_CONFLICT abort.
+    """
+    row = analyzed_row.parsed
+    new_on_hand = analyzed_row.new_on_hand or 0
+
+    product = Product(
+        name=row.item_name,
+        category=row.department_name or DEFAULT_IMPORT_CATEGORY,
+        compliance_status=ComplianceStatus.allowed,
+        allowed_for_sale=False,
+        approval_status=ProductApprovalStatus.approved,
+        reviewed_by_user_id=actor_user_id,
+        reviewed_at=datetime.now(UTC),
+    )
+    db.add(product)
+    db.flush()
+
+    variant = ProductVariant(
+        product_id=product.id,
+        sku=row.normalized_sku,
+        price=analyzed_row.create_price,
+        cost=analyzed_row.create_cost,
+        barcode=analyzed_row.create_barcode,
+        is_active=True,
+    )
+    db.add(variant)
+    db.flush()
+
+    item = InventoryItem(
+        store_id=store_id,
+        variant_id=variant.id,
+        quantity_on_hand=new_on_hand,
+        quantity_reserved=0,
+        reorder_threshold=0,
+        status=InventoryStatus.available,
+    )
+    db.add(item)
+    db.flush()
+
+    log_written = 0
+    if new_on_hand != 0:
+        inventory_svc._write_inventory_log(
+            db,
+            item=item,
+            movement_type=InventoryMovementType.adjustment,
+            quantity_delta=new_on_hand,
+            quantity_after=new_on_hand,
+            actor_user_id=actor_user_id,
+            reason=INVENTORY_IMPORT_REASON,
+            reference_type=None,
+            reference_id=None,
+        )
+        log_written = 1
+
+    return _CreatedCatalogRow(log_written=log_written)
 
 
 def _lock_item_for_store(

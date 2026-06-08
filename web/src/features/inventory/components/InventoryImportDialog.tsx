@@ -17,7 +17,9 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import { getApiErrorMessage } from "@/api";
+import { useAuth } from "@/auth";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -54,6 +56,7 @@ interface InventoryImportDialogProps {
 const ACTION_LABEL: Record<string, string> = {
   update: "Update",
   create_inventory_item: "Create item",
+  create_product_and_variant: "Create product",
   skip: "Skip",
 };
 
@@ -94,6 +97,11 @@ function PreviewSummary({
       label: "To create",
       value: s.to_create_inventory_item,
       testid: "summary-to-create",
+    },
+    {
+      label: "To create product",
+      value: s.to_create_product_and_variant,
+      testid: "summary-to-create-product",
     },
     { label: "To skip", value: s.to_skip, testid: "summary-to-skip" },
     {
@@ -181,7 +189,14 @@ export function InventoryImportDialog({
   onOpenChange,
   storeId,
 }: InventoryImportDialogProps) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
   const [file, setFile] = useState<File | null>(null);
+  // F2.27.9 admin-only: also create missing products + variants from the
+  // sheet. Visible to admins only; the backend is the real authority and
+  // 403s a non-admin who sends it anyway.
+  const [createMissing, setCreateMissing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const preview = useInventoryImportPreviewMutation();
@@ -193,6 +208,7 @@ export function InventoryImportDialog({
   useEffect(() => {
     if (open) {
       setFile(null);
+      setCreateMissing(false);
       resetPreview();
       resetConfirm();
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -206,7 +222,18 @@ export function InventoryImportDialog({
     resetPreview();
     resetConfirm();
     if (selected) {
-      preview.mutate({ storeId, file: selected });
+      preview.mutate({ storeId, file: selected, createMissing });
+    }
+  };
+
+  const handleCreateMissingChange = (next: boolean) => {
+    setCreateMissing(next);
+    // The toggle changes how VARIANT_NOT_FOUND rows are classified, so a
+    // prior preview is stale — re-run it against the same file. A confirm
+    // result is invalidated too (it would apply the old classification).
+    resetConfirm();
+    if (file) {
+      preview.mutate({ storeId, file, createMissing: next });
     }
   };
 
@@ -218,12 +245,13 @@ export function InventoryImportDialog({
     file !== null &&
     previewData !== undefined &&
     !hasBlockingErrors &&
+    !preview.isPending &&
     !confirm.isPending &&
     !confirm.isSuccess;
 
   const handleConfirm = () => {
     if (!canConfirm || file === null) return;
-    confirm.mutate({ storeId, file });
+    confirm.mutate({ storeId, file, createMissing });
   };
 
   return (
@@ -252,6 +280,33 @@ export function InventoryImportDialog({
               className="block w-full text-sm file:mr-4 file:rounded-md file:border file:border-border file:bg-muted file:px-3 file:py-1.5 file:text-sm"
             />
           </div>
+
+          {isAdmin ? (
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="inventory-import-create-missing"
+                  checked={createMissing}
+                  disabled={preview.isPending || confirm.isPending}
+                  onCheckedChange={(value) =>
+                    handleCreateMissingChange(value === true)
+                  }
+                  data-testid="import-create-missing-toggle"
+                />
+                <Label
+                  htmlFor="inventory-import-create-missing"
+                  className="text-sm cursor-pointer"
+                >
+                  Create missing products &amp; variants
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                New products load as <span className="font-medium">not for
+                sale, pending review</span> — an admin must enable each before
+                it appears on the storefront.
+              </p>
+            </div>
+          ) : null}
 
           {preview.isPending ? (
             <p className="text-sm text-muted-foreground" data-testid="import-preview-loading">
@@ -306,7 +361,10 @@ export function InventoryImportDialog({
               data-testid="import-confirm-success"
             >
               Import complete: {confirm.data.updated_count} updated,{" "}
-              {confirm.data.created_inventory_item_count} created,{" "}
+              {confirm.data.created_inventory_item_count} inventory items
+              created,{" "}
+              {confirm.data.created_product_count} products /{" "}
+              {confirm.data.created_variant_count} variants created,{" "}
               {confirm.data.unchanged_count} unchanged,{" "}
               {confirm.data.skipped_count} skipped (
               {confirm.data.inventory_log_count} log entries).

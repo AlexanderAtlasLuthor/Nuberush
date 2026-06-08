@@ -40,7 +40,8 @@ InventoryImportRowWarning = InventoryImportRowIssue
 class InventoryImportPreviewRow(BaseModel):
     """One analyzed row, ready for the review UI.
 
-    `action` is one of: `update`, `create_inventory_item`, `skip`.
+    `action` is one of: `update`, `create_inventory_item`,
+    `create_product_and_variant` (admin catalog import), or `skip`.
     A row with any `errors` is always `skip` (it cannot be applied).
     """
 
@@ -70,6 +71,9 @@ class InventoryImportSummary(BaseModel):
     rows_with_warnings: int
     to_update: int
     to_create_inventory_item: int
+    # F2.27.9: rows that will create a new Product + ProductVariant
+    # (admin catalog import). 0 when create-missing mode is off.
+    to_create_product_and_variant: int = 0
     to_skip: int
     blocking_error_count: int
 
@@ -88,6 +92,10 @@ class InventoryImportConfirmResponse(BaseModel):
     store_id: UUID
     updated_count: int
     created_inventory_item_count: int
+    # F2.27.9 catalog creation (admin import). Default 0 keeps the
+    # F2.27.8 response shape valid for inventory-only imports.
+    created_product_count: int = 0
+    created_variant_count: int = 0
     skipped_count: int
     unchanged_count: int
     inventory_log_count: int

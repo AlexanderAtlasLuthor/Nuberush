@@ -29,10 +29,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import InventoryItem
+from app.db.models import ComplianceStatus
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
 from app.db.models import Product
+from app.db.models import ProductApprovalStatus
 from app.db.models import ProductVariant
 from app.db.models import Store
 from app.db.models import User
@@ -169,19 +171,23 @@ def make_item(db_session: Session) -> Callable[..., InventoryItem]:
 
 
 def _preview(client, store_id, data, *, headers, filename="inv.xlsx",
-             content_type=XLSX_CONTENT_TYPE):
+             content_type=XLSX_CONTENT_TYPE, create_missing=None):
+    form = {"create_missing": "true"} if create_missing else None
     return client.post(
         f"/stores/{store_id}/inventory/import/preview",
         files={"file": (filename, data, content_type)},
+        data=form,
         headers=headers,
     )
 
 
 def _confirm(client, store_id, data, *, headers, filename="inv.xlsx",
-             content_type=XLSX_CONTENT_TYPE):
+             content_type=XLSX_CONTENT_TYPE, create_missing=None):
+    form = {"create_missing": "true"} if create_missing else None
     return client.post(
         f"/stores/{store_id}/inventory/import/confirm",
         files={"file": (filename, data, content_type)},
+        data=form,
         headers=headers,
     )
 
@@ -672,3 +678,331 @@ def test_confirm_all_or_nothing_rollback(
     assert db_session.get(InventoryItem, i1.id).quantity_on_hand == 1
     assert db_session.get(InventoryItem, i2.id).quantity_on_hand == 1
     assert db_session.scalar(select(func.count()).select_from(InventoryLog)) == 0
+
+
+# ===================================================================== #
+# F2.27.9 — admin catalog creation (create_missing)
+# ===================================================================== #
+
+
+def _row_full(sku, qty, name, *, dept="ACCESSORIES", upc="", price=19.99,
+              cost=8.0):
+    """A row with the product fields a create-mode import needs."""
+    return _row(sku, qty, name=name, dept=dept, upc=upc, price=price,
+                cost=cost)
+
+
+def test_preview_create_missing_admin(client, make_user, make_store):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    data = make_xlsx_bytes([_row_full("NEW-1", 5, "Widget", upc="111")])
+    resp = _preview(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    row = body["rows"][0]
+    assert row["action"] == "create_product_and_variant"
+    assert row["errors"] == []
+    assert row["current_on_hand"] == 0
+    assert row["new_on_hand"] == 5
+    assert row["delta"] == 5
+    assert body["summary"]["to_create_product_and_variant"] == 1
+    assert body["summary"]["blocking_error_count"] == 0
+
+
+def test_preview_create_missing_false_still_blocks(
+    client, make_user, make_store
+):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    data = make_xlsx_bytes([_row_full("NEW-2", 5, "Widget")])
+    resp = _preview(client, target.id, data, headers=_auth(admin))
+    row = resp.json()["rows"][0]
+    assert row["action"] == "skip"
+    assert {i["code"] for i in row["errors"]} == {imp.CODE_VARIANT_NOT_FOUND}
+
+
+def test_create_missing_forbidden_for_manager(client, make_user):
+    manager = make_user(UserRole.manager)
+    data = make_xlsx_bytes([_row_full("NEW-3", 5, "Widget")])
+    preview = _preview(
+        client, manager.store_id, data, headers=_auth(manager),
+        create_missing=True,
+    )
+    assert preview.status_code == 403
+    confirm = _confirm(
+        client, manager.store_id, data, headers=_auth(manager),
+        create_missing=True,
+    )
+    assert confirm.status_code == 403
+
+
+def test_create_missing_forbidden_for_owner(client, make_user):
+    owner = make_user(UserRole.owner)
+    data = make_xlsx_bytes([_row_full("NEW-3b", 5, "Widget")])
+    resp = _preview(
+        client, owner.store_id, data, headers=_auth(owner),
+        create_missing=True,
+    )
+    assert resp.status_code == 403
+
+
+def test_confirm_create_missing_creates_catalog(
+    client, db_session, make_user, make_store
+):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    data = make_xlsx_bytes(
+        [_row_full("CAT-1", 6, "Cosmic Widget", dept="GADGETS",
+                   upc="555", price=29.99, cost=12.5)]
+    )
+    resp = _confirm(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["created_product_count"] == 1
+    assert body["created_variant_count"] == 1
+    assert body["created_inventory_item_count"] == 1
+    assert body["inventory_log_count"] == 1
+
+    db_session.expire_all()
+    variant = db_session.scalar(
+        select(ProductVariant).where(ProductVariant.sku == "CAT-1")
+    )
+    assert variant is not None
+    assert variant.price == Decimal("29.99")
+    assert variant.cost == Decimal("12.50")
+    assert variant.barcode == "555"
+    product = db_session.get(Product, variant.product_id)
+    assert product.name == "Cosmic Widget"
+    assert product.category == "GADGETS"
+    assert product.approval_status == ProductApprovalStatus.approved
+    assert product.compliance_status == ComplianceStatus.allowed
+    assert product.allowed_for_sale is False
+    assert product.reviewed_by_user_id == admin.id
+    item = db_session.scalar(
+        select(InventoryItem).where(
+            InventoryItem.store_id == target.id,
+            InventoryItem.variant_id == variant.id,
+        )
+    )
+    assert item.quantity_on_hand == 6
+    log = db_session.scalar(
+        select(InventoryLog).where(InventoryLog.variant_id == variant.id)
+    )
+    assert log.movement_type == InventoryMovementType.adjustment
+    assert log.reason == "inventory_import"
+
+
+def test_confirm_create_missing_default_category(
+    client, db_session, make_user, make_store
+):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    # empty department → Uncategorized fallback
+    data = make_xlsx_bytes([_row_full("CAT-DEF", 1, "NoDept", dept="")])
+    resp = _confirm(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    assert resp.status_code == 200
+    db_session.expire_all()
+    variant = db_session.scalar(
+        select(ProductVariant).where(ProductVariant.sku == "CAT-DEF")
+    )
+    product = db_session.get(Product, variant.product_id)
+    assert product.category == imp.DEFAULT_IMPORT_CATEGORY
+
+
+def test_create_missing_barcode_conflict_drops_to_null(
+    client, db_session, make_user, make_store, make_variant
+):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    # Pre-existing variant already owns barcode "DUP-UPC".
+    existing = make_variant("EXIST-BC")
+    existing.barcode = "DUP-UPC"
+    db_session.commit()
+
+    data = make_xlsx_bytes(
+        [_row_full("BC-1", 2, "HasConflictUPC", upc="DUP-UPC")]
+    )
+    preview = _preview(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    row = preview.json()["rows"][0]
+    assert row["action"] == "create_product_and_variant"
+    assert {w["code"] for w in row["warnings"]} == {imp.CODE_BARCODE_DROPPED}
+    assert preview.json()["summary"]["blocking_error_count"] == 0
+
+    resp = _confirm(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    assert resp.status_code == 200
+    db_session.expire_all()
+    created = db_session.scalar(
+        select(ProductVariant).where(ProductVariant.sku == "BC-1")
+    )
+    assert created.barcode is None
+
+
+def test_create_missing_in_file_duplicate_barcode_dropped(
+    client, db_session, make_user, make_store
+):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    data = make_xlsx_bytes(
+        [
+            _row_full("BC-A", 1, "A", upc="SHARED"),
+            _row_full("BC-B", 1, "B", upc="SHARED"),
+        ]
+    )
+    resp = _confirm(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    assert resp.status_code == 200
+    db_session.expire_all()
+    for sku in ("BC-A", "BC-B"):
+        v = db_session.scalar(
+            select(ProductVariant).where(ProductVariant.sku == sku)
+        )
+        assert v.barcode is None
+
+
+def test_create_missing_missing_item_name_blocks(
+    client, make_user, make_store
+):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    data = make_xlsx_bytes([_row_full("NO-NAME", 3, "")])
+    resp = _preview(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    row = resp.json()["rows"][0]
+    assert row["action"] == "skip"
+    assert imp.CODE_MISSING_ITEM_NAME in {i["code"] for i in row["errors"]}
+
+
+def test_create_missing_invalid_price_blocks(client, make_user, make_store):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    data = make_xlsx_bytes([_row_full("BAD-PRICE", 3, "X", price=-5.0)])
+    resp = _preview(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    row = resp.json()["rows"][0]
+    assert row["action"] == "skip"
+    assert imp.CODE_INVALID_PRICE in {i["code"] for i in row["errors"]}
+
+
+def test_create_missing_duplicate_sku_in_file_still_blocks(
+    client, make_user, make_store
+):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    data = make_xlsx_bytes(
+        [_row_full("DUP-S", 1, "A"), _row_full("DUP-S", 2, "B")]
+    )
+    resp = _confirm(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == imp.CODE_BLOCKING_ERRORS
+
+
+def test_confirm_create_missing_rollback(
+    monkeypatch, db_session, make_user, make_store
+):
+    """A failure on the 2nd create row leaves zero catalog rows behind."""
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    data = make_xlsx_bytes(
+        [_row_full("RB-A", 4, "A"), _row_full("RB-B", 4, "B")]
+    )
+    workbook = imp.parse_quickbooks_inventory_workbook(data)
+
+    products_before = db_session.scalar(
+        select(func.count()).select_from(Product)
+    )
+    variants_before = db_session.scalar(
+        select(func.count()).select_from(ProductVariant)
+    )
+
+    real_write = imp.inventory_svc._write_inventory_log
+    calls = {"n": 0}
+
+    def _boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("induced failure on second create row")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(imp.inventory_svc, "_write_inventory_log", _boom)
+
+    with pytest.raises(RuntimeError):
+        imp.confirm_inventory_import(
+            db_session, target.id, workbook,
+            actor_user_id=admin.id, create_missing=True,
+        )
+
+    db_session.expire_all()
+    assert db_session.scalar(
+        select(func.count()).select_from(Product)
+    ) == products_before
+    assert db_session.scalar(
+        select(func.count()).select_from(ProductVariant)
+    ) == variants_before
+
+
+def test_create_missing_rerun_updates_not_recreate(
+    client, db_session, make_user, make_store
+):
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    data = make_xlsx_bytes([_row_full("RERUN", 5, "Widget", upc="900")])
+
+    first = _confirm(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    assert first.json()["created_product_count"] == 1
+
+    # Re-run the SAME file: the variant now exists, so it's an update.
+    data2 = make_xlsx_bytes([_row_full("RERUN", 8, "Widget", upc="900")])
+    second = _confirm(
+        client, target.id, data2, headers=_auth(admin), create_missing=True
+    )
+    body = second.json()
+    assert body["created_product_count"] == 0
+    assert body["created_variant_count"] == 0
+    assert body["updated_count"] == 1
+
+    db_session.expire_all()
+    variants = db_session.scalars(
+        select(ProductVariant).where(ProductVariant.sku == "RERUN")
+    ).all()
+    assert len(variants) == 1
+    assert db_session.scalar(
+        select(InventoryItem).where(
+            InventoryItem.variant_id == variants[0].id
+        )
+    ).quantity_on_hand == 8
+
+
+def test_create_missing_does_not_affect_inventory_only_path(
+    client, db_session, make_user, make_store, make_variant, make_item
+):
+    """Regression: an existing-variant row behaves exactly as F2.27.8
+    even when create_missing is on."""
+    admin = make_user(UserRole.admin)
+    target = make_store()
+    variant = make_variant("EXISTS")
+    make_item(target, variant, quantity_on_hand=2)
+    data = make_xlsx_bytes([_row_full("EXISTS", 9, "ignored-name")])
+    resp = _confirm(
+        client, target.id, data, headers=_auth(admin), create_missing=True
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["created_product_count"] == 0
+    assert body["updated_count"] == 1

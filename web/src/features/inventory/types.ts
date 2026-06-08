@@ -263,6 +263,7 @@ export interface InventoryImportIssue {
 export type InventoryImportAction =
   | "update"
   | "create_inventory_item"
+  | "create_product_and_variant"
   | "skip";
 
 /** One analyzed row in the preview. Numeric diff fields are nullable. */
@@ -291,6 +292,8 @@ export interface InventoryImportSummary {
   rows_with_warnings: number;
   to_update: number;
   to_create_inventory_item: number;
+  /** F2.27.9: rows that will create a new product + variant (admin import). */
+  to_create_product_and_variant: number;
   to_skip: number;
   blocking_error_count: number;
 }
@@ -307,6 +310,9 @@ export interface InventoryImportConfirmResponse {
   store_id: string;
   updated_count: number;
   created_inventory_item_count: number;
+  /** F2.27.9 catalog creation; 0 for inventory-only imports. */
+  created_product_count: number;
+  created_variant_count: number;
   skipped_count: number;
   unchanged_count: number;
   inventory_log_count: number;

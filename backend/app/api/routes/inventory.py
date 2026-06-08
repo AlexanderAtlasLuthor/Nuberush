@@ -34,6 +34,7 @@ from fastapi import APIRouter
 from fastapi import Body
 from fastapi import Depends
 from fastapi import File
+from fastapi import Form
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi import UploadFile
@@ -124,6 +125,25 @@ def _import_error(
         status_code=exc.status_code,
         detail={"code": exc.code, "message": exc.message},
     )
+
+
+def _assert_create_missing_allowed(
+    current_user: User, create_missing: bool
+) -> None:
+    """Catalog creation via import is admin-only (F2.27.9).
+
+    The base import gate is `require_manager_or_above`; opting into
+    `create_missing` (which creates global Product/ProductVariant rows)
+    escalates the requirement to admin. Managers/owners get a 403.
+    """
+    if create_missing and current_user.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Only admins can create products and variants during an "
+                "inventory import."
+            ),
+        )
 
 
 # --------------------------------------------------------------------- #
@@ -247,15 +267,19 @@ def create_inventory_item(
 def preview_inventory_import(
     store_id: UUID,
     file: UploadFile = File(...),
+    create_missing: bool = Form(default=False),
     current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
 ) -> InventoryImportPreviewResponse:
+    _assert_create_missing_allowed(current_user, create_missing)
     data = _read_validated_import_upload(file)
     try:
         workbook = import_svc.parse_quickbooks_inventory_workbook(data)
     except import_svc.InventoryImportValidationError as exc:
         raise _import_error(exc) from exc
-    return import_svc.build_inventory_import_preview(db, store_id, workbook)
+    return import_svc.build_inventory_import_preview(
+        db, store_id, workbook, create_missing=create_missing
+    )
 
 
 @router.post(
@@ -266,14 +290,20 @@ def preview_inventory_import(
 def confirm_inventory_import(
     store_id: UUID,
     file: UploadFile = File(...),
+    create_missing: bool = Form(default=False),
     current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
 ) -> InventoryImportConfirmResponse:
+    _assert_create_missing_allowed(current_user, create_missing)
     data = _read_validated_import_upload(file)
     try:
         workbook = import_svc.parse_quickbooks_inventory_workbook(data)
         return import_svc.confirm_inventory_import(
-            db, store_id, workbook, actor_user_id=current_user.id
+            db,
+            store_id,
+            workbook,
+            actor_user_id=current_user.id,
+            create_missing=create_missing,
         )
     except import_svc.InventoryImportValidationError as exc:
         raise _import_error(exc) from exc

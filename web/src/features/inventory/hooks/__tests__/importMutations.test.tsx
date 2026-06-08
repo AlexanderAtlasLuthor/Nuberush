@@ -13,6 +13,8 @@ import type { ReactNode } from "react";
 import { useInventoryImportPreviewMutation } from "../useInventoryImportPreviewMutation";
 import { useInventoryImportConfirmMutation } from "../useInventoryImportConfirmMutation";
 import { inventoryKeys } from "../queryKeys";
+import { productsKeys } from "@/features/products/hooks";
+import { adminProductsQueryKeys } from "@/features/admin-products/hooks";
 import * as inventoryApi from "../../api";
 
 vi.mock("../../api", () => ({
@@ -101,5 +103,11 @@ describe("useInventoryImportConfirmMutation", () => {
       file,
     });
     expect(spy).toHaveBeenCalledWith({ queryKey: inventoryKeys.lists() });
+    // F2.27.9: catalog rows may have been created, so the product lists
+    // are invalidated too.
+    expect(spy).toHaveBeenCalledWith({ queryKey: productsKeys.lists() });
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: adminProductsQueryKeys.lists(),
+    });
   });
 });
