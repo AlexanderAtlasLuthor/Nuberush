@@ -25,6 +25,11 @@ web/vite-*.log
 web/vite-*.err.log
 web/*.tsbuildinfo
 
+# Playwright e2e artifacts (F2.27.3)
+web/test-results/
+web/playwright-report/
+web/.playwright/
+
 # Python
 __pycache__/
 *.py[cod]
