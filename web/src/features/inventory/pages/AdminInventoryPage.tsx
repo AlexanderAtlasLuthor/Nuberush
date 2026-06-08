@@ -1,11 +1,19 @@
 // F2.18.5: real Admin Inventory page over the F2.18.1A global feed.
 //
 // Mounted at /app/admin/inventory. Replaces the F2.17 placeholder
-// with a real, contract-bound READ-ONLY list. Per F2.18 contract
-// lock §9.3 the Admin Inventory UI must not render mutation
-// controls — no receive / adjust / sell / reserve / damage / release
-// / return / threshold / status actions are exposed here. Existing
-// store-scoped mutation hooks remain untouched.
+// with a real, contract-bound list. Per F2.18 contract lock §9.3 the
+// cross-store inventory LIST is read-only — no row-level mutation
+// controls (receive / adjust / sell / reserve / damage / release /
+// return / threshold / status) are exposed here. Existing store-scoped
+// mutation hooks remain untouched.
+//
+// F2.27.9 exception: the page hosts <AdminInventoryImport>, a
+// store-scoped import launcher. It is NOT a row mutation — the admin
+// picks one target store and the existing InventoryImportDialog runs
+// against it (RBAC stays backend-authoritative; create_missing is
+// admin-only). The import dialog, store-picker, and all session and
+// data-fetching wiring live entirely inside AdminInventoryImport so
+// this page file stays free of session/role logic.
 //
 // Wiring:
 //   useAdminInventoryQuery(filters)
@@ -33,6 +41,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
 import { AdminInventoryFilters } from "../components/AdminInventoryFilters";
+import { AdminInventoryImport } from "../components/AdminInventoryImport";
 import { AdminInventoryTable } from "../components/AdminInventoryTable";
 import { useAdminInventoryQuery } from "../hooks";
 import type { AdminInventoryFilters as AdminInventoryFiltersType } from "../types";
@@ -95,7 +104,8 @@ function PageHeader() {
       <h1 className="text-xl font-semibold">Inventory</h1>
       <p className="text-sm text-muted-foreground">
         Stock levels across every store in the NubeRush platform.
-        Read-only — operate on inventory from a store context.
+        The list is read-only — use Import inventory to load a QuickBooks
+        export into a specific store.
       </p>
     </header>
   );
@@ -136,7 +146,10 @@ export default function AdminInventoryPage() {
       className="p-6 md:p-8 space-y-6 max-w-7xl"
       data-testid="admin-inventory-page"
     >
-      <PageHeader />
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <PageHeader />
+        <AdminInventoryImport />
+      </div>
 
       <AdminInventoryFilters
         filters={filters}

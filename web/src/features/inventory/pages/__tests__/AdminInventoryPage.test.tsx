@@ -25,6 +25,8 @@ import type { UseQueryResult } from "@tanstack/react-query";
 
 import AdminInventoryPage from "../AdminInventoryPage";
 import * as inventoryHooks from "../../hooks";
+import * as storesHooks from "@/features/stores/hooks";
+import type { StoreListResponse } from "@/features/stores/types";
 import type {
   AdminInventoryFilters,
   InventoryItem,
@@ -44,6 +46,14 @@ vi.mock("../../hooks", () => ({
   useUpdateInventoryThresholdMutation: vi.fn(),
   useUpdateInventoryStatusMutation: vi.fn(),
   inventoryKeys: { all: ["inventory"] as const },
+}));
+
+// The page now hosts <AdminInventoryImport>, which calls
+// useAdminStoresQuery to populate its store picker. Stub it so the page
+// renders without a QueryClient. The launcher's own behaviour (picking a
+// store, opening the dialog) is covered in AdminInventoryImport.test.tsx.
+vi.mock("@/features/stores/hooks", () => ({
+  useAdminStoresQuery: vi.fn(),
 }));
 
 const STORE_A_ID = "11111111-1111-1111-1111-111111111111";
@@ -111,6 +121,15 @@ function makeListResponse(
 
 beforeEach(() => {
   vi.mocked(inventoryHooks.useAdminInventoryQuery).mockReset();
+  vi.mocked(storesHooks.useAdminStoresQuery).mockReturnValue(
+    asQueryResult<StoreListResponse>({
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isSuccess: true,
+      data: { items: [], total: 0, limit: 100, offset: 0 },
+    }),
+  );
 });
 
 afterEach(() => {
@@ -156,6 +175,17 @@ describe("AdminInventoryPage — chrome", () => {
       .mocked(inventoryHooks.useAdminInventoryQuery)
       .mock.calls.at(-1);
     expect(lastCall?.[0]).toMatchObject({ limit: 100, offset: 0 });
+  });
+
+  it("renders the admin inventory import launcher (F2.27.9)", () => {
+    render(<AdminInventoryPage />);
+    expect(
+      screen.getByTestId("admin-inventory-import"),
+    ).toBeInTheDocument();
+    // Nothing selected yet → import button is disabled.
+    expect(
+      screen.getByTestId("admin-inventory-import-open"),
+    ).toBeDisabled();
   });
 });
 
