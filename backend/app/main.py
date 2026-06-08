@@ -20,6 +20,7 @@ from app.api.routes.products import variants_router
 from app.api.routes.public import router as public_router
 from app.api.routes.store_dashboard import router as store_dashboard_router
 from app.api.routes.store_earnings import router as store_earnings_router
+from app.api.routes.store_regulatory import router as store_regulatory_router
 from app.api.routes.stores import router as stores_router
 from app.api.routes.users import router as users_router
 from app.core.config import get_app_settings
@@ -51,6 +52,7 @@ app.include_router(orders_router)
 app.include_router(stores_router)
 app.include_router(store_dashboard_router)
 app.include_router(store_earnings_router)
+app.include_router(store_regulatory_router)
 app.include_router(audit_router)
 app.include_router(admin_dashboard_router)
 app.include_router(admin_earnings_router)

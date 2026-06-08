@@ -130,6 +130,10 @@ vi.mock("@/features/store/pages/StoreSettingsPage", () => ({
   default: () => <div>Store settings page</div>,
 }));
 
+vi.mock("@/features/store-regulatory/pages/StoreRegulatoryPage", () => ({
+  default: () => <div>Store regulatory page</div>,
+}));
+
 vi.mock("@/features/store-onboarding/pages/StoreOnboardingPage", () => ({
   default: () => <div>Store onboarding page</div>,
 }));
@@ -722,6 +726,7 @@ describe("app route split", () => {
     ["/app/store/orders/order-1", "Order detail page"],
     ["/app/store/users", "Users page"],
     ["/app/store/audit", "Audit page"],
+    ["/app/store/regulatory", "Store regulatory page"],
     ["/app/store/settings", "Store settings page"],
   ])("renders store route %s", async (path, label) => {
     renderRoute(path);

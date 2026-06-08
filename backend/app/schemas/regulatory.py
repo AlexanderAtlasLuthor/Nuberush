@@ -82,6 +82,8 @@ __all__ = [
     "RegulatoryProductMatchListResponse",
     "ComplianceAlertRead",
     "ComplianceAlertListResponse",
+    "StoreComplianceAlertRead",
+    "StoreComplianceAlertListResponse",
     "ComplianceAlertAggregate",
     "ComplianceAlertResolutionAction",
     "ComplianceAlertActionRequest",
@@ -347,6 +349,48 @@ class ComplianceAlertListResponse(BaseModel):
     """Paginated envelope for compliance alerts."""
 
     items: list[ComplianceAlertRead]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
+
+
+class StoreComplianceAlertRead(BaseModel):
+    """Store-safe projection of a compliance alert (F2.27.6).
+
+    The Store Panel read-only surface. Deliberately OMITS every admin decision
+    field exposed by `ComplianceAlertRead` — `match_id`, `resolution_note`,
+    `resolved_by_user_id`, `resolved_at` — plus the entire decision trail. A
+    store user only ever learns that an advisory alert exists for a product
+    they carry, its severity/status/recommended action, and the regulatory
+    notice it came from. `product_id` is NON-nullable here: the store service
+    excludes notice-level (product-less) alerts, so a row reaching this schema
+    always has a concrete product the store can act on.
+
+    The `notice_*` and `product_name` fields are denormalised by the service
+    via a read-only join so the Store Panel can render context without a second
+    round trip; they are optional so the schema tolerates a missing relation.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    notice_id: UUID
+    product_id: UUID
+    severity: ComplianceAlertSeverity
+    status: ComplianceAlertStatus
+    recommended_action: ComplianceRecommendedAction
+    created_at: datetime
+    updated_at: datetime
+    notice_title: str | None = None
+    notice_type: RegulatoryNoticeType | None = None
+    notice_published_at: datetime | None = None
+    product_name: str | None = None
+
+
+class StoreComplianceAlertListResponse(BaseModel):
+    """Paginated envelope for store-scoped compliance alerts (F2.27.6)."""
+
+    items: list[StoreComplianceAlertRead]
     total: int = Field(ge=0)
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)

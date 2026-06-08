@@ -85,6 +85,12 @@ export const STORE_NAV_ITEMS: ReadonlyArray<NavItemConfig> = [
     description: "Compliance and audit logs",
   },
   {
+    label: "Regulatory",
+    href: "/app/store/regulatory",
+    icon: ShieldAlert,
+    description: "Regulatory alerts for products you carry",
+  },
+  {
     label: "Settings",
     href: "/app/store/settings",
     icon: Settings,

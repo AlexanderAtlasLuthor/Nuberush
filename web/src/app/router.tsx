@@ -14,6 +14,7 @@ import InventoryPage from "@/features/inventory/pages/InventoryPage";
 import AdminDashboardPage from "@/features/admin-dashboard/pages/AdminDashboardPage";
 import AdminEarningsPage from "@/features/admin-earnings/pages/AdminEarningsPage";
 import StoreEarningsPage from "@/features/store-earnings/pages/StoreEarningsPage";
+import StoreRegulatoryPage from "@/features/store-regulatory/pages/StoreRegulatoryPage";
 import AdminOperationsPage from "@/features/admin-operations/pages/AdminOperationsPage";
 import AdminProductsPage from "@/features/admin-products/pages/AdminProductsPage";
 import AdminProductDetailPage from "@/features/admin-products/pages/AdminProductDetailPage";
@@ -224,6 +225,10 @@ export const appRoutes: RouteObject[] = [
               { path: "earnings", element: <StoreEarningsPage /> },
               { path: "users", element: <UsersPage /> },
               { path: "audit", element: <AuditPage /> },
+              // F2.27.6: store-scoped read-only regulatory surface. Reads the
+              // store-safe /stores/{id}/regulatory routes; no lifecycle
+              // actions (those stay on /app/admin/regulatory).
+              { path: "regulatory", element: <StoreRegulatoryPage /> },
               { path: "settings", element: <StoreSettingsPage /> },
             ],
           },

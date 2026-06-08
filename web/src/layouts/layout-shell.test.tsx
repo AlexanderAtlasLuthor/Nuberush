@@ -158,6 +158,7 @@ describe("navigation config", () => {
       ["Earnings", "/app/store/earnings"],
       ["Users", "/app/store/users"],
       ["Audit", "/app/store/audit"],
+      ["Regulatory", "/app/store/regulatory"],
       ["Settings", "/app/store/settings"],
     ]);
     expect(STORE_NAV_ITEMS.some((i) => i.href.startsWith("/app/admin"))).toBe(
