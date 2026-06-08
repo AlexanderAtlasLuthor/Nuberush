@@ -59,6 +59,12 @@ function emptySummary(): AdminDashboardSummary {
     },
     compliance: { blocked_count: 0 },
     products: { pending_approvals_count: 0 },
+    regulatory: {
+      total_alerts: 0,
+      open_count: 0,
+      high_or_critical_count: 0,
+      hold_or_ban_count: 0,
+    },
     recent_audit: [],
   };
 }
@@ -97,6 +103,12 @@ describe("useAdminDashboardQuery — happy path", () => {
       },
       compliance: { blocked_count: 0 },
       products: { pending_approvals_count: 0 },
+      regulatory: {
+        total_alerts: 0,
+        open_count: 0,
+        high_or_critical_count: 0,
+        hold_or_ban_count: 0,
+      },
       recent_audit: [],
     };
     vi.mocked(adminDashboardApi.getAdminDashboard).mockResolvedValue(

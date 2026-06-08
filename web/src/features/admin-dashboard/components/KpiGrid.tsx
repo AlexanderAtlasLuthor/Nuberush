@@ -30,6 +30,7 @@ import {
   ClipboardCheck,
   ClipboardList,
   FileWarning,
+  ShieldAlert,
   Store,
   Users,
 } from "lucide-react";
@@ -101,12 +102,25 @@ export function KpiGrid({ summary }: KpiGridProps) {
         to="/app/admin/audit"
         data-testid="kpi-compliance-blocked"
       />
+      {/* Regulatory alerts (F2.27.5). Backend-computed global counts only —
+          the primary value is the open count; the secondary high/critical,
+          hold/ban and total are summarized in the description. No client-side
+          aggregation: every number comes from `summary.regulatory`. */}
+      <KpiCard
+        accent="warning"
+        title="Regulatory alerts"
+        value={summary.regulatory.open_count}
+        description={`${summary.regulatory.high_or_critical_count} high/critical · ${summary.regulatory.hold_or_ban_count} hold/ban · ${summary.regulatory.total_alerts} total`}
+        icon={ShieldAlert}
+        to="/app/admin/regulatory"
+        data-testid="kpi-regulatory-alerts"
+      />
       {/* Pending approvals fills the rest of the bento row. On lg+ the
-          tile spans 3 of the 4 grid columns so the row that started with
-          "Compliance blockers" finishes flush against the hero — no
-          dead space on the right edge. On sm the tile spans both
-          columns so it doesn't look orphaned on the narrower layout. */}
-      <div className="sm:col-span-2 lg:col-span-3">
+          tile spans 2 of the 4 grid columns so the row that started with
+          "Compliance blockers" + "Regulatory alerts" finishes flush against
+          the hero — no dead space on the right edge. On sm the tile spans
+          both columns so it doesn't look orphaned on the narrower layout. */}
+      <div className="sm:col-span-2 lg:col-span-2">
         <KpiCard
           accent="primary"
           title="Pending approvals"

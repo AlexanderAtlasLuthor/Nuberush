@@ -84,6 +84,20 @@ export interface ComplianceAlertListResponse {
 }
 
 /**
+ * Global, dense-by-enum counts of compliance alerts (F2.27.5). Computed
+ * server-side BEFORE pagination, so these are TRUE global counts for the
+ * active filters — never derived from a single page of rows. The backend
+ * densifies every map so every enum key is present (zero-filled). Backend:
+ * `ComplianceAlertAggregate`.
+ */
+export interface ComplianceAlertAggregate {
+  total: number;
+  by_status: Record<ComplianceAlertStatus, number>;
+  by_severity: Record<ComplianceAlertSeverity, number>;
+  by_recommended_action: Record<ComplianceRecommendedAction, number>;
+}
+
+/**
  * Optional query filters for the alert list. Mirrors the
  * `GET /admin/regulatory/alerts` query params. All optional; omitted /
  * empty filters are dropped from the query string by the API layer.

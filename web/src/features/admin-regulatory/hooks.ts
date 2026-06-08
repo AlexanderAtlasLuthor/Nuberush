@@ -25,6 +25,7 @@ import {
 import {
   acknowledgeAdminRegulatoryAlert,
   dismissAdminRegulatoryAlert,
+  getAdminRegulatoryAggregate,
   getAdminRegulatoryAlert,
   getAdminRegulatoryAlertDecisions,
   getAdminRegulatoryAlerts,
@@ -33,6 +34,7 @@ import {
 import type {
   ComplianceAlert,
   ComplianceAlertActionRequest,
+  ComplianceAlertAggregate,
   ComplianceAlertFilters,
   ComplianceAlertListResponse,
   ComplianceAlertResolveRequest,
@@ -69,6 +71,15 @@ export const adminRegulatoryKeys = {
   alerts: (filters: ComplianceAlertFilters = {}) =>
     [...adminRegulatoryKeys.all, "alerts", filters] as const,
 
+  /**
+   * Concrete key for one alert-aggregate filter snapshot (F2.27.5). Uses a
+   * distinct `"aggregate"` segment so it never collides with the list cache;
+   * the filters object is always present so the tuple shape stays stable and
+   * different filter snapshots get distinct cache slots.
+   */
+  aggregate: (filters: ComplianceAlertFilters = {}) =>
+    [...adminRegulatoryKeys.all, "aggregate", filters] as const,
+
   /** Concrete key for a single alert's detail. */
   alert: (alertId: string) =>
     [...adminRegulatoryKeys.all, "alert", alertId] as const,
@@ -94,6 +105,11 @@ function alertsListPrefix() {
   return [...adminRegulatoryKeys.all, "alerts"] as const;
 }
 
+/** Prefix matching every alert-aggregate snapshot, regardless of filters. */
+function aggregatePrefix() {
+  return [...adminRegulatoryKeys.all, "aggregate"] as const;
+}
+
 /** Prefix matching every decision-trail snapshot for one alert. */
 function decisionsPrefix(alertId: string) {
   return [...adminRegulatoryKeys.alert(alertId), "decisions"] as const;
@@ -110,6 +126,22 @@ export function useAdminRegulatoryAlerts(
   return useQuery({
     queryKey: adminRegulatoryKeys.alerts(filters),
     queryFn: ({ signal }) => getAdminRegulatoryAlerts(filters, signal),
+  });
+}
+
+/**
+ * GET /admin/regulatory/aggregate — global, dense-by-enum alert counts for
+ * the active filters (F2.27.5). Independent of the list query: it backs the
+ * KPI cards with TRUE global counts instead of page-local `.filter()` math.
+ * Filters are part of the queryKey so each filter snapshot caches separately
+ * and refetches when filters change.
+ */
+export function useAdminRegulatoryAggregate(
+  filters: ComplianceAlertFilters = {},
+): UseQueryResult<ComplianceAlertAggregate> {
+  return useQuery({
+    queryKey: adminRegulatoryKeys.aggregate(filters),
+    queryFn: ({ signal }) => getAdminRegulatoryAggregate(filters, signal),
   });
 }
 
@@ -172,8 +204,10 @@ export function useAdminRegulatoryAlertDecisions(
 // On success every lifecycle mutation invalidates the same bounded subtree
 // so the UI re-reads consistent state:
 //   1. every alert-list snapshot      (alertsListPrefix)
-//   2. the mutated alert's detail      (adminRegulatoryKeys.alert)
-//   3. that alert's decision trail     (decisionsPrefix — a new audit row was
+//   2. every alert-aggregate snapshot  (aggregatePrefix — a status/action
+//      transition moves the global KPI counts)
+//   3. the mutated alert's detail      (adminRegulatoryKeys.alert)
+//   4. that alert's decision trail     (decisionsPrefix — a new audit row was
 //      written server-side)
 //
 // `alert(alertId)` already prefixes the decision trail, so (2) implicitly
@@ -197,6 +231,9 @@ function invalidateAlertSubtree(
   alertId: string,
 ): void {
   queryClient.invalidateQueries({ queryKey: alertsListPrefix() });
+  // A lifecycle change moves an alert between status buckets, so the global
+  // counts shift too — flush every aggregate snapshot.
+  queryClient.invalidateQueries({ queryKey: aggregatePrefix() });
   queryClient.invalidateQueries({
     queryKey: adminRegulatoryKeys.alert(alertId),
   });

@@ -16,6 +16,7 @@ import type { ReactNode } from "react";
 import {
   adminRegulatoryKeys,
   useAcknowledgeAdminRegulatoryAlert,
+  useAdminRegulatoryAggregate,
   useAdminRegulatoryAlert,
   useAdminRegulatoryAlertDecisions,
   useAdminRegulatoryAlerts,
@@ -23,16 +24,24 @@ import {
   useResolveAdminRegulatoryAlert,
 } from "../hooks";
 import * as regulatoryApi from "../api";
-import type { ComplianceAlert } from "../types";
+import type { ComplianceAlert, ComplianceAlertAggregate } from "../types";
 
 vi.mock("../api", () => ({
   getAdminRegulatoryAlerts: vi.fn(),
+  getAdminRegulatoryAggregate: vi.fn(),
   getAdminRegulatoryAlert: vi.fn(),
   getAdminRegulatoryAlertDecisions: vi.fn(),
   acknowledgeAdminRegulatoryAlert: vi.fn(),
   dismissAdminRegulatoryAlert: vi.fn(),
   resolveAdminRegulatoryAlert: vi.fn(),
 }));
+
+const SAMPLE_AGGREGATE: ComplianceAlertAggregate = {
+  total: 3,
+  by_status: { open: 2, acknowledged: 0, actioned: 0, dismissed: 1 },
+  by_severity: { low: 1, medium: 0, high: 1, critical: 1 },
+  by_recommended_action: { none: 1, hold: 1, ban: 1 },
+};
 
 const ALERT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
@@ -70,6 +79,7 @@ function makeWrapper(client: QueryClient) {
 
 beforeEach(() => {
   vi.mocked(regulatoryApi.getAdminRegulatoryAlerts).mockReset();
+  vi.mocked(regulatoryApi.getAdminRegulatoryAggregate).mockReset();
   vi.mocked(regulatoryApi.getAdminRegulatoryAlert).mockReset();
   vi.mocked(regulatoryApi.getAdminRegulatoryAlertDecisions).mockReset();
   vi.mocked(regulatoryApi.acknowledgeAdminRegulatoryAlert).mockReset();
@@ -100,6 +110,22 @@ describe("adminRegulatoryKeys", () => {
     expect(adminRegulatoryKeys.alerts()).toEqual([
       "admin-regulatory",
       "alerts",
+      {},
+    ]);
+  });
+
+  it("aggregate(filters) appends 'aggregate' + filters object verbatim", () => {
+    expect(adminRegulatoryKeys.aggregate({ status: "open" })).toEqual([
+      "admin-regulatory",
+      "aggregate",
+      { status: "open" },
+    ]);
+  });
+
+  it("aggregate() defaults to an empty filters object (stable shape)", () => {
+    expect(adminRegulatoryKeys.aggregate()).toEqual([
+      "admin-regulatory",
+      "aggregate",
       {},
     ]);
   });
@@ -162,6 +188,30 @@ describe("useAdminRegulatoryAlerts", () => {
     ).mock.calls[0];
     expect(filters).toEqual({ status: "open" });
     expect(signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+describe("useAdminRegulatoryAggregate", () => {
+  it("calls getAdminRegulatoryAggregate with the filters and a signal", async () => {
+    vi.mocked(regulatoryApi.getAdminRegulatoryAggregate).mockResolvedValue(
+      SAMPLE_AGGREGATE,
+    );
+    const client = makeQueryClient();
+
+    const { result } = renderHook(
+      () => useAdminRegulatoryAggregate({ status: "open" }),
+      { wrapper: makeWrapper(client) },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(regulatoryApi.getAdminRegulatoryAggregate).toHaveBeenCalledTimes(1);
+    const [filters, signal] = vi.mocked(
+      regulatoryApi.getAdminRegulatoryAggregate,
+    ).mock.calls[0];
+    expect(filters).toEqual({ status: "open" });
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(result.current.data).toEqual(SAMPLE_AGGREGATE);
   });
 });
 
@@ -234,6 +284,7 @@ describe("useAdminRegulatoryAlertDecisions", () => {
 // --------------------------------------------------------------------- //
 
 const EXPECTED_LISTS_KEY = ["admin-regulatory", "alerts"];
+const EXPECTED_AGGREGATE_KEY = ["admin-regulatory", "aggregate"];
 const EXPECTED_ALERT_KEY = ["admin-regulatory", "alert", ALERT_ID];
 const EXPECTED_DECISIONS_KEY = [
   "admin-regulatory",
@@ -244,6 +295,10 @@ const EXPECTED_DECISIONS_KEY = [
 
 function expectInvalidatesAlertSubtree(invalidateSpy: ReturnType<typeof vi.spyOn>) {
   expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: EXPECTED_LISTS_KEY });
+  // A lifecycle change shifts the global counts, so the aggregate is flushed.
+  expect(invalidateSpy).toHaveBeenCalledWith({
+    queryKey: EXPECTED_AGGREGATE_KEY,
+  });
   expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: EXPECTED_ALERT_KEY });
   expect(invalidateSpy).toHaveBeenCalledWith({
     queryKey: EXPECTED_DECISIONS_KEY,

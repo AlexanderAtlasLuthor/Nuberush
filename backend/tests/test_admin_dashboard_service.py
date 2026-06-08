@@ -39,8 +39,15 @@ from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db.models import ComplianceAlert
+from app.db.models import ComplianceAlertSeverity
+from app.db.models import ComplianceAlertStatus
+from app.db.models import ComplianceRecommendedAction
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
+from app.db.models import RegulatoryNotice
+from app.db.models import RegulatorySource
+from app.db.models import RegulatorySourceKind
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
@@ -280,6 +287,11 @@ class TestRBAC:
         assert summary.orders.recent == []
         assert summary.compliance.blocked_count == 0
         assert summary.products.pending_approvals_count == 0
+        # Regulatory KPIs all zero on an empty DB.
+        assert summary.regulatory.total_alerts == 0
+        assert summary.regulatory.open_count == 0
+        assert summary.regulatory.high_or_critical_count == 0
+        assert summary.regulatory.hold_or_ban_count == 0
         assert summary.recent_audit == []
 
     @pytest.mark.parametrize(
@@ -668,6 +680,71 @@ class TestProductsPendingApprovalsCount:
 
         summary = svc.get_admin_dashboard_summary(db_session, actor=admin)
         assert summary.products.pending_approvals_count == 1
+
+
+# --------------------------------------------------------------------- #
+# Regulatory summary (F2.27.5)
+# --------------------------------------------------------------------- #
+
+
+class TestRegulatorySummary:
+    def _notice(self, db_session: Session) -> RegulatoryNotice:
+        source = RegulatorySource(
+            name=f"src-{uuid.uuid4().hex[:8]}",
+            kind=RegulatorySourceKind.manual,
+        )
+        db_session.add(source)
+        db_session.flush()
+        notice = RegulatoryNotice(
+            source_id=source.id,
+            title="t",
+            notice_type="manual_snapshot",
+            payload={},
+            content_hash=uuid.uuid4().hex,
+        )
+        db_session.add(notice)
+        db_session.flush()
+        return notice
+
+    def test_counts_reflect_seeded_alerts(
+        self, db_session: Session, make_admin
+    ):
+        admin = make_admin()
+        notice = self._notice(db_session)
+
+        def _alert(status, severity, action):
+            db_session.add(
+                ComplianceAlert(
+                    notice_id=notice.id,
+                    severity=severity,
+                    status=status,
+                    recommended_action=action,
+                )
+            )
+
+        # 2 open / 1 dismissed; 1 high + 1 critical; 1 hold + 1 ban.
+        _alert(
+            ComplianceAlertStatus.open,
+            ComplianceAlertSeverity.high,
+            ComplianceRecommendedAction.hold,
+        )
+        _alert(
+            ComplianceAlertStatus.open,
+            ComplianceAlertSeverity.critical,
+            ComplianceRecommendedAction.ban,
+        )
+        _alert(
+            ComplianceAlertStatus.dismissed,
+            ComplianceAlertSeverity.low,
+            ComplianceRecommendedAction.none,
+        )
+        db_session.commit()
+
+        summary = svc.get_admin_dashboard_summary(db_session, actor=admin)
+        assert summary.regulatory.total_alerts == 3
+        assert summary.regulatory.open_count == 2
+        assert summary.regulatory.high_or_critical_count == 2
+        assert summary.regulatory.hold_or_ban_count == 2
 
 
 # --------------------------------------------------------------------- #

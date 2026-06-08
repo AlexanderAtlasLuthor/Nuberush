@@ -61,16 +61,21 @@ from app.db.models import ProductApprovalStatus
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
+from app.db.models import ComplianceAlertSeverity
+from app.db.models import ComplianceAlertStatus
+from app.db.models import ComplianceRecommendedAction
 from app.schemas.admin_dashboard import AdminDashboardComplianceSummary
 from app.schemas.admin_dashboard import AdminDashboardInventorySummary
 from app.schemas.admin_dashboard import AdminDashboardOrdersSummary
 from app.schemas.admin_dashboard import AdminDashboardProductsSummary
+from app.schemas.admin_dashboard import AdminDashboardRegulatorySummary
 from app.schemas.admin_dashboard import AdminDashboardStoresSummary
 from app.schemas.admin_dashboard import AdminDashboardSummary
 from app.schemas.admin_dashboard import AdminDashboardUsersSummary
 from app.schemas.orders import OrderRead
 from app.services.audit import list_admin_audit
 from app.services.orders import _order_read_load_options
+from app.services.regulatory import aggregate_compliance_alerts
 
 
 # Bounded tails (F2.19.0 §3.1.2). These are service-owned invariants,
@@ -255,6 +260,35 @@ def _compliance_summary(db: Session) -> AdminDashboardComplianceSummary:
     return AdminDashboardComplianceSummary(blocked_count=count)
 
 
+def _regulatory_summary(db: Session) -> AdminDashboardRegulatorySummary:
+    """High-level global regulatory KPIs for the dashboard tile (F2.27.5).
+
+    Reuses the canonical `aggregate_compliance_alerts(db)` (NO filters — the
+    dashboard reports the whole universe of alerts) and flattens its dense
+    histograms into the four dashboard counts. Single source of truth: the
+    same aggregate backs the `/admin/regulatory/aggregate` endpoint, so the
+    tile and the regulatory page can never drift.
+
+    Read-only — `aggregate_compliance_alerts` runs only SELECTs.
+    """
+    aggregate = aggregate_compliance_alerts(db)
+    open_count = aggregate.by_status[ComplianceAlertStatus.open]
+    high_or_critical_count = (
+        aggregate.by_severity[ComplianceAlertSeverity.high]
+        + aggregate.by_severity[ComplianceAlertSeverity.critical]
+    )
+    hold_or_ban_count = (
+        aggregate.by_recommended_action[ComplianceRecommendedAction.hold]
+        + aggregate.by_recommended_action[ComplianceRecommendedAction.ban]
+    )
+    return AdminDashboardRegulatorySummary(
+        total_alerts=aggregate.total,
+        open_count=open_count,
+        high_or_critical_count=high_or_critical_count,
+        hold_or_ban_count=hold_or_ban_count,
+    )
+
+
 def get_admin_dashboard_summary(
     db: Session,
     *,
@@ -282,6 +316,7 @@ def get_admin_dashboard_summary(
     orders = _orders_summary(db)
     compliance = _compliance_summary(db)
     products = _products_summary(db)
+    regulatory = _regulatory_summary(db)
 
     audit_response = list_admin_audit(
         db,
@@ -297,5 +332,6 @@ def get_admin_dashboard_summary(
         orders=orders,
         compliance=compliance,
         products=products,
+        regulatory=regulatory,
         recent_audit=audit_response.items,
     )

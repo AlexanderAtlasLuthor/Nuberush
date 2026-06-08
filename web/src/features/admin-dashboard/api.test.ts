@@ -46,6 +46,12 @@ function emptySummary(): AdminDashboardSummary {
     },
     compliance: { blocked_count: 0 },
     products: { pending_approvals_count: 0 },
+    regulatory: {
+      total_alerts: 0,
+      open_count: 0,
+      high_or_critical_count: 0,
+      hold_or_ban_count: 0,
+    },
     recent_audit: [],
   };
 }
@@ -124,6 +130,12 @@ describe("getAdminDashboard", () => {
       },
       compliance: { blocked_count: 2 },
       products: { pending_approvals_count: 7 },
+      regulatory: {
+        total_alerts: 9,
+        open_count: 4,
+        high_or_critical_count: 3,
+        hold_or_ban_count: 2,
+      },
       recent_audit: [],
     };
     vi.mocked(apiRequest).mockResolvedValueOnce(response as never);
@@ -133,6 +145,8 @@ describe("getAdminDashboard", () => {
     expect(result).toBe(response);
     expect(result.orders.open_count).toBe(4);
     expect(result.compliance.blocked_count).toBe(2);
+    expect(result.regulatory.total_alerts).toBe(9);
+    expect(result.regulatory.open_count).toBe(4);
   });
 
   it("propagates errors from apiRequest unchanged (no try/catch in feature layer)", async () => {

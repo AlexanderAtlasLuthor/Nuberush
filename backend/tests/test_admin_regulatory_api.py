@@ -584,6 +584,106 @@ def test_acknowledge_blank_reason_422(
 
 
 # ===================================================================== #
+# Aggregate — GET /admin/regulatory/aggregate (F2.27.5)
+# ===================================================================== #
+
+
+_AGGREGATE = f"{BASE}/aggregate"
+
+_STATUS_KEYS = {"open", "acknowledged", "actioned", "dismissed"}
+_SEVERITY_KEYS = {"low", "medium", "high", "critical"}
+_ACTION_KEYS = {"none", "hold", "ban"}
+
+
+def test_aggregate_non_admin_403(client: TestClient, db_session: Session):
+    user = central_make_user(
+        db_session, role=UserRole.manager, store_id=None
+    )
+    assert client.get(_AGGREGATE, headers=_auth(user)).status_code == 403
+
+
+def test_aggregate_anonymous_401(client: TestClient):
+    assert client.get(_AGGREGATE).status_code == 401
+
+
+def test_aggregate_empty_state_dense(client: TestClient, admin: User):
+    resp = client.get(_AGGREGATE, headers=_auth(admin))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body.keys()) == {
+        "total",
+        "by_status",
+        "by_severity",
+        "by_recommended_action",
+    }
+    assert body["total"] == 0
+    # Dense-by-enum: every member present, zero-filled.
+    assert set(body["by_status"].keys()) == _STATUS_KEYS
+    assert set(body["by_severity"].keys()) == _SEVERITY_KEYS
+    assert set(body["by_recommended_action"].keys()) == _ACTION_KEYS
+    assert all(v == 0 for v in body["by_status"].values())
+    assert all(v == 0 for v in body["by_severity"].values())
+    assert all(v == 0 for v in body["by_recommended_action"].values())
+
+
+def test_aggregate_counts_match_seeded_alert(
+    client: TestClient, db_session: Session, admin: User, make_product
+):
+    # One name-matched open/high/hold alert via the real pipeline.
+    _open_alert_id(client, admin, db_session, make_product)
+
+    resp = client.get(_AGGREGATE, headers=_auth(admin))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["by_status"]["open"] == 1
+    assert body["by_severity"]["high"] == 1
+    assert body["by_recommended_action"]["hold"] == 1
+
+
+def test_aggregate_respects_filters(
+    client: TestClient, db_session: Session, admin: User, make_product
+):
+    _open_alert_id(client, admin, db_session, make_product)
+
+    # Matching filter keeps the alert in the totals.
+    match = client.get(
+        _AGGREGATE, headers=_auth(admin), params={"status": "open"}
+    )
+    assert match.status_code == 200
+    assert match.json()["total"] == 1
+
+    # Non-matching filter excludes it (aggregate honors the same surface as
+    # the list endpoint).
+    miss = client.get(
+        _AGGREGATE, headers=_auth(admin), params={"status": "dismissed"}
+    )
+    assert miss.status_code == 200
+    assert miss.json()["total"] == 0
+    assert miss.json()["by_status"]["open"] == 0
+
+
+def test_aggregate_independent_of_list_pagination(
+    client: TestClient, db_session: Session, admin: User, make_product
+):
+    # Two distinct alerts via two name-matched notices.
+    _open_alert_id(client, admin, db_session, make_product, name="Vape One")
+    _open_alert_id(client, admin, db_session, make_product, name="Vape Two")
+
+    # A paginated list of size 1 does not shrink the aggregate.
+    page = client.get(
+        f"{BASE}/alerts", headers=_auth(admin), params={"limit": 1, "offset": 0}
+    )
+    assert page.status_code == 200
+    assert len(page.json()["items"]) == 1
+    assert page.json()["total"] == 2
+
+    agg = client.get(_AGGREGATE, headers=_auth(admin))
+    assert agg.json()["total"] == 2
+    assert agg.json()["by_status"]["open"] == 2
+
+
+# ===================================================================== #
 # Decision trail — GET /alerts/{alert_id}/decisions
 # ===================================================================== #
 

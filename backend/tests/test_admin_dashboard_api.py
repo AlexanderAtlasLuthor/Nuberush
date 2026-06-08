@@ -28,8 +28,15 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.db.models import ComplianceAlert
+from app.db.models import ComplianceAlertSeverity
+from app.db.models import ComplianceAlertStatus
+from app.db.models import ComplianceRecommendedAction
 from app.db.models import ComplianceStatus
 from app.db.models import InventoryItem
+from app.db.models import RegulatoryNotice
+from app.db.models import RegulatorySource
+from app.db.models import RegulatorySourceKind
 from app.db.models import InventoryLog
 from app.db.models import InventoryMovementType
 from app.db.models import InventoryStatus
@@ -54,6 +61,7 @@ _TOP_LEVEL_KEYS = {
     "orders",
     "compliance",
     "products",
+    "regulatory",
     "recent_audit",
 }
 
@@ -63,6 +71,12 @@ _INVENTORY_KEYS = {"low_stock_count"}
 _ORDERS_KEYS = {"open_count", "by_status", "recent"}
 _COMPLIANCE_KEYS = {"blocked_count"}
 _PRODUCTS_KEYS = {"pending_approvals_count"}
+_REGULATORY_KEYS = {
+    "total_alerts",
+    "open_count",
+    "high_or_critical_count",
+    "hold_or_ban_count",
+}
 
 _NON_ADMIN_ROLES = (
     UserRole.owner,
@@ -330,6 +344,7 @@ class TestResponseEnvelope:
         assert set(body["orders"].keys()) == _ORDERS_KEYS
         assert set(body["compliance"].keys()) == _COMPLIANCE_KEYS
         assert set(body["products"].keys()) == _PRODUCTS_KEYS
+        assert set(body["regulatory"].keys()) == _REGULATORY_KEYS
 
     def test_orders_by_status_includes_every_enum_member(
         self, client: TestClient, make_user
@@ -557,6 +572,75 @@ class TestBackendComputed:
         )
         body = resp.json()
         assert body["products"]["pending_approvals_count"] == 0
+
+    def test_regulatory_summary_zero_on_empty_db(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.get(ADMIN_DASHBOARD_URL, headers=_auth(admin))
+        body = resp.json()
+        assert body["regulatory"] == {
+            "total_alerts": 0,
+            "open_count": 0,
+            "high_or_critical_count": 0,
+            "hold_or_ban_count": 0,
+        }
+
+    def test_regulatory_summary_reflects_seeded_alerts(
+        self, client: TestClient, db_session: Session, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        # A notice to satisfy ComplianceAlert.notice_id (NOT NULL).
+        source = RegulatorySource(
+            name=f"src-{uuid.uuid4().hex[:8]}",
+            kind=RegulatorySourceKind.manual,
+        )
+        db_session.add(source)
+        db_session.flush()
+        notice = RegulatoryNotice(
+            source_id=source.id,
+            title="t",
+            notice_type="manual_snapshot",
+            payload={},
+            content_hash=uuid.uuid4().hex,
+        )
+        db_session.add(notice)
+        db_session.flush()
+
+        def _alert(status, severity, action):
+            db_session.add(
+                ComplianceAlert(
+                    notice_id=notice.id,
+                    severity=severity,
+                    status=status,
+                    recommended_action=action,
+                )
+            )
+
+        # 2 open, 1 acknowledged. 1 high + 1 critical. 1 hold + 1 ban.
+        _alert(
+            ComplianceAlertStatus.open,
+            ComplianceAlertSeverity.high,
+            ComplianceRecommendedAction.hold,
+        )
+        _alert(
+            ComplianceAlertStatus.open,
+            ComplianceAlertSeverity.critical,
+            ComplianceRecommendedAction.ban,
+        )
+        _alert(
+            ComplianceAlertStatus.acknowledged,
+            ComplianceAlertSeverity.low,
+            ComplianceRecommendedAction.none,
+        )
+        db_session.commit()
+
+        resp = client.get(ADMIN_DASHBOARD_URL, headers=_auth(admin))
+        body = resp.json()
+        assert body["regulatory"]["total_alerts"] == 3
+        assert body["regulatory"]["open_count"] == 2
+        assert body["regulatory"]["high_or_critical_count"] == 2
+        assert body["regulatory"]["hold_or_ban_count"] == 2
 
 
 # --------------------------------------------------------------------- #

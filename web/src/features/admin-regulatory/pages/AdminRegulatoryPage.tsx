@@ -24,7 +24,10 @@ import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { LoadingState } from "@/components/common/loading-state";
 
-import { useAdminRegulatoryAlerts } from "../hooks";
+import {
+  useAdminRegulatoryAggregate,
+  useAdminRegulatoryAlerts,
+} from "../hooks";
 import type { ComplianceAlertFilters } from "../types";
 import { RegulatoryAlertDetailPanel } from "../components/RegulatoryAlertDetailPanel";
 import { RegulatoryAlertsFilters } from "../components/RegulatoryAlertsFilters";
@@ -125,6 +128,11 @@ export default function AdminRegulatoryPage() {
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
 
   const query = useAdminRegulatoryAlerts(filters);
+  // KPI cards read GLOBAL counts from the aggregate endpoint, using the SAME
+  // filters as the list so the two never describe different sets. The list's
+  // pagination (limit/offset) does not affect the aggregate — the backend
+  // computes counts across every matching row.
+  const aggregateQuery = useAdminRegulatoryAggregate(filters);
 
   const limit = filters.limit ?? DEFAULT_LIMIT;
   const offset = filters.offset ?? 0;
@@ -167,9 +175,11 @@ export default function AdminRegulatoryPage() {
         disabled={query.isLoading || query.isFetching}
       />
 
-      {query.isSuccess ? (
-        <RegulatoryKpiCards total={total} pageItems={items} />
-      ) : null}
+      <RegulatoryKpiCards
+        aggregate={aggregateQuery.data}
+        isLoading={aggregateQuery.isLoading}
+        isError={aggregateQuery.isError}
+      />
 
       {selectedAlertId !== null ? (
         <RegulatoryAlertDetailPanel

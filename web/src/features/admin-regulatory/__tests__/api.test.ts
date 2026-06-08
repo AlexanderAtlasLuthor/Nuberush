@@ -11,6 +11,7 @@ import { apiRequest } from "@/api";
 import {
   acknowledgeAdminRegulatoryAlert,
   dismissAdminRegulatoryAlert,
+  getAdminRegulatoryAggregate,
   getAdminRegulatoryAlert,
   getAdminRegulatoryAlertDecisions,
   getAdminRegulatoryAlerts,
@@ -25,6 +26,7 @@ const ALERT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const PRODUCT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const NOTICE_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const ALERTS = "/admin/regulatory/alerts";
+const AGGREGATE = "/admin/regulatory/aggregate";
 
 beforeEach(() => {
   vi.mocked(apiRequest).mockReset();
@@ -94,6 +96,62 @@ describe("getAdminRegulatoryAlerts", () => {
     const boom = new Error("403 Forbidden");
     vi.mocked(apiRequest).mockRejectedValueOnce(boom);
     await expect(getAdminRegulatoryAlerts()).rejects.toBe(boom);
+  });
+});
+
+// --------------------------------------------------------------------- //
+// getAdminRegulatoryAggregate (F2.27.5)
+// --------------------------------------------------------------------- //
+
+describe("getAdminRegulatoryAggregate", () => {
+  it("calls GET /admin/regulatory/aggregate with no query when no filters", async () => {
+    await getAdminRegulatoryAggregate();
+
+    const [path, options] = vi.mocked(apiRequest).mock.calls[0];
+    expect(path).toBe(AGGREGATE);
+    expect(path).not.toMatch(/\?/);
+    expect(options?.method).toBe("GET");
+    expect(options?.body).toBeUndefined();
+  });
+
+  it("serialises the same filter dimensions as the list (no limit/offset)", async () => {
+    await getAdminRegulatoryAggregate({
+      // limit/offset are list-only and must NOT appear on the aggregate query.
+      limit: 25,
+      offset: 50,
+      status: "open",
+      severity: "high",
+      recommended_action: "hold",
+      product_id: PRODUCT_ID,
+      notice_id: NOTICE_ID,
+    });
+
+    const [path] = vi.mocked(apiRequest).mock.calls[0];
+    expect(path).toBe(
+      `${AGGREGATE}?status=open&severity=high&recommended_action=hold` +
+        `&product_id=${PRODUCT_ID}&notice_id=${NOTICE_ID}`,
+    );
+    expect(path).not.toMatch(/limit=/);
+    expect(path).not.toMatch(/offset=/);
+  });
+
+  it("drops empty / whitespace-only product_id and notice_id filters", async () => {
+    await getAdminRegulatoryAggregate({ product_id: "  ", notice_id: "" });
+    const [path] = vi.mocked(apiRequest).mock.calls[0];
+    expect(path).toBe(AGGREGATE);
+  });
+
+  it("forwards the AbortSignal to apiRequest", async () => {
+    const controller = new AbortController();
+    await getAdminRegulatoryAggregate({ status: "open" }, controller.signal);
+    const [, options] = vi.mocked(apiRequest).mock.calls[0];
+    expect(options?.signal).toBe(controller.signal);
+  });
+
+  it("propagates ApiError from apiRequest untouched", async () => {
+    const boom = new Error("403 Forbidden");
+    vi.mocked(apiRequest).mockRejectedValueOnce(boom);
+    await expect(getAdminRegulatoryAggregate()).rejects.toBe(boom);
   });
 });
 

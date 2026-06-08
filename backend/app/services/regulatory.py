@@ -80,6 +80,7 @@ from app.db.models import RegulatorySource
 from app.db.models import User
 from app.schemas.products import ProductComplianceUpdate
 from app.schemas.regulatory import ComplianceAlertActionRequest
+from app.schemas.regulatory import ComplianceAlertAggregate
 from app.schemas.regulatory import ComplianceAlertListResponse
 from app.schemas.regulatory import ComplianceAlertRead
 from app.schemas.regulatory import ComplianceAlertResolutionAction
@@ -1068,6 +1069,38 @@ def list_regulatory_notices(
     )
 
 
+def _compliance_alert_filters(
+    *,
+    status_filter: ComplianceAlertStatus | None = None,
+    severity: ComplianceAlertSeverity | None = None,
+    recommended_action: ComplianceRecommendedAction | None = None,
+    product_id: UUID | None = None,
+    notice_id: UUID | None = None,
+) -> list:
+    """Build the shared `ComplianceAlert` filter predicates.
+
+    Single source of truth for the `status / severity / recommended_action /
+    product_id / notice_id` filter surface so the paginated list and the
+    global aggregate (F2.27.5) can NEVER drift. Returns a list of SQLAlchemy
+    boolean expressions; an empty list means "no filters". Pure — builds no
+    statement, touches no session.
+    """
+    filters = []
+    if status_filter is not None:
+        filters.append(ComplianceAlert.status == status_filter)
+    if severity is not None:
+        filters.append(ComplianceAlert.severity == severity)
+    if recommended_action is not None:
+        filters.append(
+            ComplianceAlert.recommended_action == recommended_action
+        )
+    if product_id is not None:
+        filters.append(ComplianceAlert.product_id == product_id)
+    if notice_id is not None:
+        filters.append(ComplianceAlert.notice_id == notice_id)
+    return filters
+
+
 def list_compliance_alerts(
     db: Session,
     *,
@@ -1089,19 +1122,13 @@ def list_compliance_alerts(
     stmt = select(ComplianceAlert)
     count_stmt = select(func.count()).select_from(ComplianceAlert)
 
-    filters = []
-    if status_filter is not None:
-        filters.append(ComplianceAlert.status == status_filter)
-    if severity is not None:
-        filters.append(ComplianceAlert.severity == severity)
-    if recommended_action is not None:
-        filters.append(
-            ComplianceAlert.recommended_action == recommended_action
-        )
-    if product_id is not None:
-        filters.append(ComplianceAlert.product_id == product_id)
-    if notice_id is not None:
-        filters.append(ComplianceAlert.notice_id == notice_id)
+    filters = _compliance_alert_filters(
+        status_filter=status_filter,
+        severity=severity,
+        recommended_action=recommended_action,
+        product_id=product_id,
+        notice_id=notice_id,
+    )
     for f in filters:
         stmt = stmt.where(f)
         count_stmt = count_stmt.where(f)
@@ -1118,6 +1145,69 @@ def list_compliance_alerts(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+def aggregate_compliance_alerts(
+    db: Session,
+    *,
+    status_filter: ComplianceAlertStatus | None = None,
+    severity: ComplianceAlertSeverity | None = None,
+    recommended_action: ComplianceRecommendedAction | None = None,
+    product_id: UUID | None = None,
+    notice_id: UUID | None = None,
+) -> ComplianceAlertAggregate:
+    """Global, dense-by-enum counts of compliance alerts (F2.27.5).
+
+    Computes `total` plus three group-by histograms (`status`, `severity`,
+    `recommended_action`) over the SAME filtered set as `list_compliance_alerts`
+    — the shared `_compliance_alert_filters` guarantees the aggregate and the
+    list never diverge. Counts are computed across ALL matching rows, never a
+    single page, so pagination cannot affect them.
+
+    Every enum member is densified to a count (zero-filled when no row matches)
+    so the wire shape is predictable for the frontend regardless of which
+    values are present in the data.
+
+    Strictly read-only: only SELECTs — no `db.add`, `db.delete`, `db.commit`,
+    `db.flush`, lifecycle call or product mutation.
+    """
+    filters = _compliance_alert_filters(
+        status_filter=status_filter,
+        severity=severity,
+        recommended_action=recommended_action,
+        product_id=product_id,
+        notice_id=notice_id,
+    )
+
+    def _dense_histogram(column, enum_cls) -> dict:
+        counts = {member: 0 for member in enum_cls}
+        stmt = select(column, func.count(ComplianceAlert.id)).group_by(column)
+        for f in filters:
+            stmt = stmt.where(f)
+        for row_value, row_count in db.execute(stmt).all():
+            counts[row_value] = int(row_count)
+        return counts
+
+    by_status = _dense_histogram(
+        ComplianceAlert.status, ComplianceAlertStatus
+    )
+    by_severity = _dense_histogram(
+        ComplianceAlert.severity, ComplianceAlertSeverity
+    )
+    by_recommended_action = _dense_histogram(
+        ComplianceAlert.recommended_action, ComplianceRecommendedAction
+    )
+
+    # `total` is derived from the status histogram so it always agrees with the
+    # densified maps (every alert has a NOT NULL status), with no extra query.
+    total = sum(by_status.values())
+
+    return ComplianceAlertAggregate(
+        total=total,
+        by_status=by_status,
+        by_severity=by_severity,
+        by_recommended_action=by_recommended_action,
     )
 
 

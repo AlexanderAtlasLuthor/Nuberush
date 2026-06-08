@@ -139,6 +139,12 @@ function makeSummary(
     },
     compliance: { blocked_count: 2 },
     products: { pending_approvals_count: 3 },
+    regulatory: {
+      total_alerts: 14,
+      open_count: 6,
+      high_or_critical_count: 4,
+      hold_or_ban_count: 3,
+    },
     recent_audit: [
       {
         id: AUDIT_ID_1,
@@ -269,7 +275,7 @@ describe("AdminDashboardPage — error state", () => {
 // --------------------------------------------------------------------- //
 
 describe("AdminDashboardPage — KPI cards (backend values verbatim)", () => {
-  it("renders all seven KPI values from backend summary", () => {
+  it("renders all eight KPI values from backend summary", () => {
     vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
       asQueryResult({ isSuccess: true, data: makeSummary() }),
     );
@@ -298,6 +304,25 @@ describe("AdminDashboardPage — KPI cards (backend values verbatim)", () => {
     expect(
       within(grid).getByTestId("kpi-products-pending-approvals"),
     ).toHaveTextContent("3");
+  });
+
+  it("renders the regulatory tile from backend summary (no client aggregation)", () => {
+    vi.mocked(adminDashboardHooks.useAdminDashboardQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSummary() }),
+    );
+
+    renderPage();
+
+    const grid = screen.getByTestId("admin-dashboard-kpi-grid");
+    const tile = within(grid).getByTestId("kpi-regulatory-alerts");
+    // Primary value is the global open count.
+    expect(tile).toHaveTextContent("6");
+    // Secondary high/critical, hold/ban and total summarized in the body.
+    expect(tile).toHaveTextContent("4 high/critical");
+    expect(tile).toHaveTextContent("3 hold/ban");
+    expect(tile).toHaveTextContent("14 total");
+    // Drill-down points at the regulatory surface.
+    expect(tile.closest("a")).toHaveAttribute("href", "/app/admin/regulatory");
   });
 
   it("renders zeros as `0` (not hidden, not empty)", () => {

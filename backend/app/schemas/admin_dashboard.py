@@ -117,6 +117,32 @@ class AdminDashboardProductsSummary(BaseModel):
     pending_approvals_count: int = Field(ge=0)
 
 
+class AdminDashboardRegulatorySummary(BaseModel):
+    """Regulatory KPI: high-level global counts over `compliance_alerts`.
+
+    A flattened, dashboard-friendly projection of the canonical
+    `ComplianceAlertAggregate` (F2.27.5), computed server-side with NO
+    filters (the dashboard reports the whole universe of alerts):
+
+    - `total_alerts`:           every compliance alert, all statuses.
+    - `open_count`:             alerts in status `open`.
+    - `high_or_critical_count`: alerts with severity `high` OR `critical`.
+    - `hold_or_ban_count`:      alerts recommending `hold` OR `ban`.
+
+    Each value is derived from the same dense-by-enum aggregate the
+    `/admin/regulatory/aggregate` endpoint exposes, so the dashboard tile and
+    the regulatory page never drift. Read-only; never reproduces the alert
+    lifecycle predicates client-side.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    total_alerts: int = Field(ge=0)
+    open_count: int = Field(ge=0)
+    high_or_critical_count: int = Field(ge=0)
+    hold_or_ban_count: int = Field(ge=0)
+
+
 class AdminDashboardSummary(BaseModel):
     """Top-level response for `GET /admin/dashboard`.
 
@@ -134,4 +160,5 @@ class AdminDashboardSummary(BaseModel):
     orders: AdminDashboardOrdersSummary
     compliance: AdminDashboardComplianceSummary
     products: AdminDashboardProductsSummary
+    regulatory: AdminDashboardRegulatorySummary
     recent_audit: list[AuditEventRead]

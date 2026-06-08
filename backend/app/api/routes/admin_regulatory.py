@@ -38,6 +38,7 @@ from app.db.models import RegulatoryNoticeType
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.regulatory import ComplianceAlertActionRequest
+from app.schemas.regulatory import ComplianceAlertAggregate
 from app.schemas.regulatory import ComplianceAlertListResponse
 from app.schemas.regulatory import ComplianceAlertRead
 from app.schemas.regulatory import ComplianceAlertResolveRequest
@@ -169,6 +170,35 @@ def list_alerts_endpoint(
         db,
         limit=limit,
         offset=offset,
+        status_filter=status,
+        severity=severity,
+        recommended_action=recommended_action,
+        product_id=product_id,
+        notice_id=notice_id,
+    )
+
+
+@router.get("/aggregate", response_model=ComplianceAlertAggregate)
+def aggregate_alerts_endpoint(
+    actor: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    status: ComplianceAlertStatus | None = Query(default=None),
+    severity: ComplianceAlertSeverity | None = Query(default=None),
+    recommended_action: ComplianceRecommendedAction | None = Query(
+        default=None
+    ),
+    product_id: UUID | None = Query(default=None),
+    notice_id: UUID | None = Query(default=None),
+) -> ComplianceAlertAggregate:
+    """Global, dense-by-enum counts of compliance alerts (F2.27.5).
+
+    Same filter surface as `GET /admin/regulatory/alerts`; counts are computed
+    server-side across ALL matching rows (never a single page). Admin-only,
+    read-only. Declared before `/alerts/{alert_id}` is irrelevant — `/aggregate`
+    is a distinct path — but kept in the alerts section for locality.
+    """
+    return svc.aggregate_compliance_alerts(
+        db,
         status_filter=status,
         severity=severity,
         recommended_action=recommended_action,

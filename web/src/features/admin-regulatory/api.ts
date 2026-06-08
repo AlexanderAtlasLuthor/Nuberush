@@ -25,6 +25,7 @@ import { apiRequest } from "@/api";
 import type {
   ComplianceAlert,
   ComplianceAlertActionRequest,
+  ComplianceAlertAggregate,
   ComplianceAlertFilters,
   ComplianceAlertListResponse,
   ComplianceAlertResolveRequest,
@@ -33,6 +34,7 @@ import type {
 } from "./types";
 
 const ALERTS_PATH = "/admin/regulatory/alerts";
+const AGGREGATE_PATH = "/admin/regulatory/aggregate";
 
 /**
  * Trim a string filter, dropping it entirely when empty. Keeps a "no filter"
@@ -43,6 +45,36 @@ function trimOrUndefined(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Serialize the shared alert filter dimensions (status / severity /
+ * recommended_action / product_id / notice_id) onto a URLSearchParams. Single
+ * source of truth so the list and the aggregate (F2.27.5) always send an
+ * identical filter surface and can never drift. `limit` / `offset` are NOT
+ * handled here — they are list-only pagination, irrelevant to the aggregate.
+ */
+function appendAlertFilters(
+  search: URLSearchParams,
+  filters: ComplianceAlertFilters,
+): void {
+  if (filters.status !== undefined) {
+    search.set("status", filters.status);
+  }
+  if (filters.severity !== undefined) {
+    search.set("severity", filters.severity);
+  }
+  if (filters.recommended_action !== undefined) {
+    search.set("recommended_action", filters.recommended_action);
+  }
+  const productId = trimOrUndefined(filters.product_id);
+  if (productId !== undefined) {
+    search.set("product_id", productId);
+  }
+  const noticeId = trimOrUndefined(filters.notice_id);
+  if (noticeId !== undefined) {
+    search.set("notice_id", noticeId);
+  }
 }
 
 // --------------------------------------------------------------------- //
@@ -74,28 +106,36 @@ export function getAdminRegulatoryAlerts(
     // Preserve explicit offset=0 — that's "first page", not "skip".
     search.set("offset", String(filters.offset));
   }
-  if (filters.status !== undefined) {
-    search.set("status", filters.status);
-  }
-  if (filters.severity !== undefined) {
-    search.set("severity", filters.severity);
-  }
-  if (filters.recommended_action !== undefined) {
-    search.set("recommended_action", filters.recommended_action);
-  }
-
-  const productId = trimOrUndefined(filters.product_id);
-  if (productId !== undefined) {
-    search.set("product_id", productId);
-  }
-  const noticeId = trimOrUndefined(filters.notice_id);
-  if (noticeId !== undefined) {
-    search.set("notice_id", noticeId);
-  }
+  appendAlertFilters(search, filters);
 
   const query = search.toString();
   const path = `${ALERTS_PATH}${query ? `?${query}` : ""}`;
   return apiRequest<ComplianceAlertListResponse>(path, {
+    method: "GET",
+    signal,
+  });
+}
+
+/**
+ * GET /admin/regulatory/aggregate  (F2.27.5)
+ *
+ * Global, dense-by-enum counts of compliance alerts for the active filters,
+ * computed server-side BEFORE pagination. Sends the SAME filter surface as
+ * `getAdminRegulatoryAlerts` (minus `limit`/`offset`, which are list-only),
+ * so the KPI cards reflect every matching alert, not just the current page.
+ *
+ * Backend auth: `require_admin` (anon → 401, non-admin → 403).
+ */
+export function getAdminRegulatoryAggregate(
+  filters: ComplianceAlertFilters = {},
+  signal?: AbortSignal,
+): Promise<ComplianceAlertAggregate> {
+  const search = new URLSearchParams();
+  appendAlertFilters(search, filters);
+
+  const query = search.toString();
+  const path = `${AGGREGATE_PATH}${query ? `?${query}` : ""}`;
+  return apiRequest<ComplianceAlertAggregate>(path, {
     method: "GET",
     signal,
   });

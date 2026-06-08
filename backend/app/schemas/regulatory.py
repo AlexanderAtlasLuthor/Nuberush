@@ -82,6 +82,7 @@ __all__ = [
     "RegulatoryProductMatchListResponse",
     "ComplianceAlertRead",
     "ComplianceAlertListResponse",
+    "ComplianceAlertAggregate",
     "ComplianceAlertResolutionAction",
     "ComplianceAlertActionRequest",
     "ComplianceAlertResolveRequest",
@@ -349,6 +350,30 @@ class ComplianceAlertListResponse(BaseModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)
+
+
+class ComplianceAlertAggregate(BaseModel):
+    """Global, dense-by-enum counts of compliance alerts (F2.27.5).
+
+    Backend-as-source-of-truth aggregate over `compliance_alerts`, computed
+    server-side BEFORE pagination so callers never derive KPIs from a single
+    page of rows. The three histograms group on the alert's enum columns
+    (`status`, `severity`, `recommended_action`); the service densifies each
+    map so EVERY enum member is present with a count (zero-filled when no row
+    matches). The maps are keyed by the SAME ORM enums the list endpoint
+    accepts as filters, so a dashboard tile and the regulatory page read one
+    contract.
+
+    `extra="forbid"` matches the dashboard-owned aggregate wrappers: a
+    miswired service surfaces as a 500 rather than a silent field drop.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    total: int = Field(ge=0)
+    by_status: dict[ComplianceAlertStatus, int]
+    by_severity: dict[ComplianceAlertSeverity, int]
+    by_recommended_action: dict[ComplianceRecommendedAction, int]
 
 
 class ComplianceAlertResolutionAction(str, enum.Enum):

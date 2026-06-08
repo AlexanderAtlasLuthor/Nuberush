@@ -13,18 +13,79 @@ import AdminRegulatoryPage from "../pages/AdminRegulatoryPage";
 import * as hooks from "../hooks";
 import type {
   ComplianceAlert,
+  ComplianceAlertAggregate,
   ComplianceAlertFilters,
   ComplianceAlertListResponse,
 } from "../types";
 
 vi.mock("../hooks", () => ({
   useAdminRegulatoryAlerts: vi.fn(),
+  useAdminRegulatoryAggregate: vi.fn(),
   useAdminRegulatoryAlert: vi.fn(),
   useAdminRegulatoryAlertDecisions: vi.fn(),
   useAcknowledgeAdminRegulatoryAlert: vi.fn(),
   useDismissAdminRegulatoryAlert: vi.fn(),
   useResolveAdminRegulatoryAlert: vi.fn(),
 }));
+
+/** Build a dense-by-enum aggregate, zero-filled then overlaid with counts. */
+function makeAggregate(
+  partial: {
+    total?: number;
+    by_status?: Partial<ComplianceAlertAggregate["by_status"]>;
+    by_severity?: Partial<ComplianceAlertAggregate["by_severity"]>;
+    by_recommended_action?: Partial<
+      ComplianceAlertAggregate["by_recommended_action"]
+    >;
+  } = {},
+): ComplianceAlertAggregate {
+  return {
+    total: partial.total ?? 0,
+    by_status: {
+      open: 0,
+      acknowledged: 0,
+      actioned: 0,
+      dismissed: 0,
+      ...partial.by_status,
+    },
+    by_severity: {
+      low: 0,
+      medium: 0,
+      high: 0,
+      critical: 0,
+      ...partial.by_severity,
+    },
+    by_recommended_action: {
+      none: 0,
+      hold: 0,
+      ban: 0,
+      ...partial.by_recommended_action,
+    },
+  };
+}
+
+function asAggregateResult(
+  partial: Partial<UseQueryResult<ComplianceAlertAggregate>>,
+): UseQueryResult<ComplianceAlertAggregate> {
+  return {
+    refetch: vi.fn(),
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    isSuccess: false,
+    isFetching: false,
+    data: undefined,
+    error: null,
+    ...partial,
+  } as unknown as UseQueryResult<ComplianceAlertAggregate>;
+}
+
+/** Filters last passed to the aggregate hook (parallels `lastFilters`). */
+function lastAggregateFilters(): ComplianceAlertFilters | undefined {
+  const calls = vi.mocked(hooks.useAdminRegulatoryAggregate).mock.calls;
+  if (calls.length === 0) return undefined;
+  return calls[calls.length - 1][0] as ComplianceAlertFilters | undefined;
+}
 
 function makeMutation(
   partial: Partial<UseMutationResult> = {},
@@ -125,6 +186,11 @@ beforeEach(() => {
   vi.mocked(hooks.useAdminRegulatoryAlerts).mockReset();
   vi.mocked(hooks.useAdminRegulatoryAlerts).mockReturnValue(
     asQueryResult({ isSuccess: true, data: makeResponse([]) }),
+  );
+  // Aggregate hook: default to a successful zero-filled aggregate.
+  vi.mocked(hooks.useAdminRegulatoryAggregate).mockReset();
+  vi.mocked(hooks.useAdminRegulatoryAggregate).mockReturnValue(
+    asAggregateResult({ isSuccess: true, data: makeAggregate() }),
   );
   // Detail + mutation hooks: only exercised when a Review opens the panel.
   vi.mocked(hooks.useAdminRegulatoryAlert).mockReset();
@@ -359,24 +425,23 @@ describe("AdminRegulatoryPage — detail panel selection", () => {
 // --------------------------------------------------------------------- //
 
 describe("AdminRegulatoryPage — KPI cards", () => {
-  it("shows total from response and page-derived counts with safe wording", () => {
-    const alerts = [
-      makeAlert({ status: "open", severity: "high", recommended_action: "hold" }),
-      makeAlert({
-        status: "open",
-        severity: "critical",
-        recommended_action: "ban",
-      }),
-      makeAlert({
-        status: "dismissed",
-        severity: "low",
-        recommended_action: "none",
-      }),
-    ];
+  it("renders GLOBAL backend aggregate counts, not page-derived counts", () => {
+    // The list page holds only 2 rows, but the global aggregate reports 87.
     vi.mocked(hooks.useAdminRegulatoryAlerts).mockReturnValue(
       asQueryResult({
         isSuccess: true,
-        data: makeResponse(alerts, { total: 87 }),
+        data: makeResponse([makeAlert(), makeAlert()], { total: 87 }),
+      }),
+    );
+    vi.mocked(hooks.useAdminRegulatoryAggregate).mockReturnValue(
+      asAggregateResult({
+        isSuccess: true,
+        data: makeAggregate({
+          total: 87,
+          by_status: { open: 40, dismissed: 12 },
+          by_severity: { high: 9, critical: 6 },
+          by_recommended_action: { hold: 7, ban: 4 },
+        }),
       }),
     );
     renderPage();
@@ -385,17 +450,56 @@ describe("AdminRegulatoryPage — KPI cards", () => {
     expect(
       screen.getByTestId("regulatory-kpi-total-value"),
     ).toHaveTextContent("87");
-    // Page-derived cards are explicitly scoped to "this page".
-    expect(screen.getByText(/open \(this page\)/i)).toBeInTheDocument();
+    // Open is the global count (40), NOT the 2 rows on this page.
+    expect(screen.getByTestId("regulatory-kpi-open-value")).toHaveTextContent(
+      "40",
+    );
+    // High + critical summed globally (9 + 6 = 15).
     expect(
-      screen.getByTestId("regulatory-kpi-open-page-value"),
-    ).toHaveTextContent("2");
+      screen.getByTestId("regulatory-kpi-high-critical-value"),
+    ).toHaveTextContent("15");
+    // Hold + ban summed globally (7 + 4 = 11).
     expect(
-      screen.getByTestId("regulatory-kpi-high-critical-page-value"),
-    ).toHaveTextContent("2");
+      screen.getByTestId("regulatory-kpi-hold-ban-value"),
+    ).toHaveTextContent("11");
+  });
+
+  it("never labels a KPI count '(this page)'", () => {
+    renderPage();
+    expect(screen.queryByText(/\(this page\)/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a neutral placeholder while the aggregate loads", () => {
+    vi.mocked(hooks.useAdminRegulatoryAggregate).mockReturnValue(
+      asAggregateResult({ isLoading: true, isSuccess: false }),
+    );
+    renderPage();
     expect(
-      screen.getByTestId("regulatory-kpi-hold-ban-page-value"),
-    ).toHaveTextContent("2");
+      screen.getByTestId("regulatory-kpi-total-value"),
+    ).toHaveTextContent("—");
+    expect(
+      screen.getByTestId("regulatory-kpi-open-value"),
+    ).toHaveTextContent("—");
+  });
+
+  it("renders zero counts as 0 (not a placeholder) when the aggregate is empty", () => {
+    // Default beforeEach aggregate is a successful all-zero aggregate.
+    renderPage();
+    expect(
+      screen.getByTestId("regulatory-kpi-total-value"),
+    ).toHaveTextContent("0");
+    expect(
+      screen.getByTestId("regulatory-kpi-open-value"),
+    ).toHaveTextContent("0");
+  });
+
+  it("drives the aggregate hook with the same filters as the list", () => {
+    renderPage();
+    fireEvent.change(screen.getByTestId("regulatory-filter-status"), {
+      target: { value: "open" },
+    });
+    expect(lastAggregateFilters()).toMatchObject({ status: "open" });
+    expect(lastFilters()).toMatchObject({ status: "open" });
   });
 });
 

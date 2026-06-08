@@ -101,6 +101,24 @@ export interface AdminDashboardProductsSummary {
 }
 
 /**
+ * Regulatory KPI (F2.27.5). High-level global counts over
+ * `compliance_alerts`, computed server-side with NO filters (the dashboard
+ * reports the whole universe of alerts). The frontend never reproduces the
+ * lifecycle predicates — it renders these counts verbatim. Backend:
+ * `AdminDashboardRegulatorySummary`.
+ *
+ * - `open_count`: alerts in status `open`.
+ * - `high_or_critical_count`: severity `high` + `critical`.
+ * - `hold_or_ban_count`: recommended action `hold` + `ban`.
+ */
+export interface AdminDashboardRegulatorySummary {
+  total_alerts: number;
+  open_count: number;
+  high_or_critical_count: number;
+  hold_or_ban_count: number;
+}
+
+/**
  * Top-level response shape for `GET /admin/dashboard`.
  *
  * Bundles every KPI section plus the bounded recent audit tail.
@@ -118,5 +136,6 @@ export interface AdminDashboardSummary {
   orders: AdminDashboardOrdersSummary;
   compliance: AdminDashboardComplianceSummary;
   products: AdminDashboardProductsSummary;
+  regulatory: AdminDashboardRegulatorySummary;
   recent_audit: AuditEvent[];
 }
