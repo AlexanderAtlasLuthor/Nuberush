@@ -244,6 +244,75 @@ export interface UpdateInventoryStatusRequest {
 export type InventoryListResponse = PaginatedResponse<InventoryItem>;
 
 // --------------------------------------------------------------------- //
+// F2.27.8 — Excel inventory import (QuickBooks POS .xlsx)
+// --------------------------------------------------------------------- //
+//
+// 1:1 mirror of backend/app/schemas/inventory_import.py. The two
+// endpoints take a multipart `.xlsx` upload and return these shapes:
+//   POST /stores/{store_id}/inventory/import/preview
+//   POST /stores/{store_id}/inventory/import/confirm
+
+/** One error or warning attached to a preview row. */
+export interface InventoryImportIssue {
+  /** Stable machine token (e.g. "MISSING_SKU", "VARIANT_NOT_FOUND"). */
+  code: string;
+  message: string;
+}
+
+/** Per-row action the confirm step will take. */
+export type InventoryImportAction =
+  | "update"
+  | "create_inventory_item"
+  | "skip";
+
+/** One analyzed row in the preview. Numeric diff fields are nullable. */
+export interface InventoryImportPreviewRow {
+  row_number: number;
+  raw_sku: string | null;
+  normalized_sku: string;
+  item_name: string | null;
+  parsed_quantity: number | null;
+  matched_variant_id: string | null;
+  matched_product_name: string | null;
+  current_on_hand: number | null;
+  quantity_reserved: number | null;
+  new_on_hand: number | null;
+  delta: number | null;
+  action: InventoryImportAction;
+  errors: InventoryImportIssue[];
+  warnings: InventoryImportIssue[];
+}
+
+/** Aggregate counts. `blocking_error_count > 0` disables confirm. */
+export interface InventoryImportSummary {
+  total_rows: number;
+  valid_rows: number;
+  rows_with_errors: number;
+  rows_with_warnings: number;
+  to_update: number;
+  to_create_inventory_item: number;
+  to_skip: number;
+  blocking_error_count: number;
+}
+
+/** Response for the preview endpoint. No DB writes performed. */
+export interface InventoryImportPreviewResponse {
+  store_id: string;
+  summary: InventoryImportSummary;
+  rows: InventoryImportPreviewRow[];
+}
+
+/** Outcome of a committed import. */
+export interface InventoryImportConfirmResponse {
+  store_id: string;
+  updated_count: number;
+  created_inventory_item_count: number;
+  skipped_count: number;
+  unchanged_count: number;
+  inventory_log_count: number;
+}
+
+// --------------------------------------------------------------------- //
 // F2.18.2C — admin global inventory feed (GET /admin/inventory)
 // --------------------------------------------------------------------- //
 

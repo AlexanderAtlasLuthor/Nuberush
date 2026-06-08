@@ -14,7 +14,7 @@
 //     null branch is rendering-only, never an early return.
 
 import { useState } from "react";
-import { Boxes } from "lucide-react";
+import { Boxes, Upload } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import { useStoreContext } from "@/auth";
@@ -36,6 +36,7 @@ import { getApiErrorMessage } from "@/api";
 
 import { useInventoryList } from "../hooks";
 import { InventoryActions } from "../components/InventoryActions";
+import { InventoryImportDialog } from "../components/InventoryImportDialog";
 import { inventoryStatusLabel } from "../labels";
 import type { InventoryItem } from "../types";
 
@@ -188,6 +189,7 @@ export default function InventoryPage() {
 
   const [limit] = useState(DEFAULT_LIMIT);
   const [offset, setOffset] = useState(0);
+  const [importOpen, setImportOpen] = useState(false);
   // Seed the low-stock filter from the URL so a link like
   // `/app/store/inventory?low_stock_only=true` from the dashboard lands
   // the user on a pre-filtered list. The filter remains user-mutable
@@ -245,7 +247,31 @@ export default function InventoryPage() {
 
   return (
     <div className="p-6 md:p-8 space-y-6 max-w-6xl">
-      <PageHeader />
+      <div className="flex items-start justify-between gap-4">
+        <PageHeader />
+        {/*
+          Import entry point. Visibility is NOT role-gated client-side
+          (the backend is the RBAC authority: import is
+          require_manager_or_above, so staff/cross-store callers get a
+          403 the dialog surfaces). This page deliberately holds no
+          client-side permission logic.
+        */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setImportOpen(true)}
+          data-testid="open-inventory-import"
+        >
+          <Upload className="mr-2 h-4 w-4" />
+          Import inventory
+        </Button>
+      </div>
+
+      <InventoryImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        storeId={currentStoreId}
+      />
 
       <FilterBar
         lowStockOnly={lowStockOnly}

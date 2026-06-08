@@ -34,6 +34,8 @@ import type {
   AdjustStockRequest,
   AdminInventoryFilters,
   DamageStockRequest,
+  InventoryImportConfirmResponse,
+  InventoryImportPreviewResponse,
   InventoryItem,
   InventoryListResponse,
   InventoryLogEntry,
@@ -421,4 +423,79 @@ export function getAdminInventory(
   const query = search.toString();
   const path = `/admin/inventory${query ? `?${query}` : ""}`;
   return apiRequest<InventoryListResponse>(path, { method: "GET", signal });
+}
+
+// --------------------------------------------------------------------- //
+// F2.27.8: Excel inventory import (manager-or-above, store-scoped)
+// --------------------------------------------------------------------- //
+
+export interface InventoryImportParams {
+  /** Store UUID. Goes into the URL path. */
+  storeId: string;
+  /** The QuickBooks POS `.xlsx` file selected by the user. */
+  file: File;
+}
+
+function buildImportFormData(file: File): FormData {
+  const form = new FormData();
+  // Field name MUST be `file` — it matches the FastAPI `UploadFile`
+  // parameter name on both import endpoints.
+  form.append("file", file);
+  return form;
+}
+
+/**
+ * POST /stores/{store_id}/inventory/import/preview
+ *
+ * Uploads a QuickBooks POS `.xlsx` and returns a non-destructive
+ * preview: per-row diff against existing variants/inventory plus an
+ * aggregate summary. NO DB writes happen server-side.
+ *
+ * The body is a `FormData` with a single `file` field; `apiRequest`
+ * intentionally does NOT set Content-Type for FormData so the browser
+ * supplies its own multipart boundary.
+ *
+ * Throws ApiError on:
+ *   - 400 (unsupported file type / empty file)
+ *   - 401 (no/invalid token), 403 (staff or cross-store caller)
+ *   - 413 (file too large)
+ *   - 422 (bad headers / unreadable workbook)
+ */
+export function previewInventoryImport(
+  params: InventoryImportParams,
+  signal?: AbortSignal,
+): Promise<InventoryImportPreviewResponse> {
+  const path = `/stores/${encodeURIComponent(
+    params.storeId,
+  )}/inventory/import/preview`;
+  return apiRequest<InventoryImportPreviewResponse>(path, {
+    method: "POST",
+    body: buildImportFormData(params.file),
+    signal,
+  });
+}
+
+/**
+ * POST /stores/{store_id}/inventory/import/confirm
+ *
+ * Re-uploads the SAME `.xlsx` and applies the import in one
+ * all-or-nothing transaction. The server re-validates from scratch and
+ * refuses (422 with code `BLOCKING_ERRORS`) if any row has a blocking
+ * error — a stale preview cannot smuggle bad rows through.
+ *
+ * Throws ApiError with the same status family as `previewInventoryImport`,
+ * plus 422 (`BLOCKING_ERRORS`) when the import cannot be applied.
+ */
+export function confirmInventoryImport(
+  params: InventoryImportParams,
+  signal?: AbortSignal,
+): Promise<InventoryImportConfirmResponse> {
+  const path = `/stores/${encodeURIComponent(
+    params.storeId,
+  )}/inventory/import/confirm`;
+  return apiRequest<InventoryImportConfirmResponse>(path, {
+    method: "POST",
+    body: buildImportFormData(params.file),
+    signal,
+  });
 }

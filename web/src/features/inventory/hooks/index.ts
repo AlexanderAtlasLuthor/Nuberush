@@ -16,6 +16,10 @@ export { useUpdateInventoryStatusMutation } from "./useUpdateInventoryStatusMuta
 // F2.18.2C — admin global inventory feed
 export { useAdminInventoryQuery } from "./useAdminInventoryQuery";
 
+// F2.27.8 — Excel inventory import
+export { useInventoryImportPreviewMutation } from "./useInventoryImportPreviewMutation";
+export { useInventoryImportConfirmMutation } from "./useInventoryImportConfirmMutation";
+
 export {
   inventoryKeys,
   type InventoryListQueryParams,

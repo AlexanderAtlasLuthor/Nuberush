@@ -33,8 +33,10 @@ from uuid import UUID
 from fastapi import APIRouter
 from fastapi import Body
 from fastapi import Depends
+from fastapi import File
 from fastapi import HTTPException
 from fastapi import Query
+from fastapi import UploadFile
 from fastapi import status
 from sqlalchemy.orm import Session
 
@@ -57,7 +59,10 @@ from app.schemas.inventory import ReleaseReservationRequest
 from app.schemas.inventory import ReserveStockRequest
 from app.schemas.inventory import ReturnStockRequest
 from app.schemas.inventory import SaleStockRequest
+from app.schemas.inventory_import import InventoryImportConfirmResponse
+from app.schemas.inventory_import import InventoryImportPreviewResponse
 from app.services import inventory as svc
+from app.services import inventory_import as import_svc
 
 
 router = APIRouter(tags=["inventory"])
@@ -88,6 +93,37 @@ def _assert_can_access_store(current_user: User, store_id: UUID) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this store.",
         )
+
+
+def _read_validated_import_upload(file: UploadFile) -> bytes:
+    """Validate upload metadata, read the bytes, validate the real size.
+
+    Centralizes the upload contract shared by the preview and confirm
+    endpoints. Translates a controlled `InventoryImportValidationError`
+    into a clean HTTP error carrying a stable machine `code`. The
+    multipart `Content-Length`/`size` is advisory, so the authoritative
+    size check runs against the bytes actually read.
+    """
+    try:
+        import_svc.validate_inventory_import_upload_metadata(
+            file.filename or "",
+            file.content_type,
+            file.size if file.size is not None else 1,
+        )
+        data = file.file.read()
+        import_svc.validate_inventory_import_size(len(data))
+    except import_svc.InventoryImportValidationError as exc:
+        raise _import_error(exc) from exc
+    return data
+
+
+def _import_error(
+    exc: import_svc.InventoryImportValidationError,
+) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": exc.message},
+    )
 
 
 # --------------------------------------------------------------------- #
@@ -189,6 +225,58 @@ def create_inventory_item(
     return svc.create_inventory_item(
         db, store_id, payload, actor_user_id=current_user.id
     )
+
+
+# --------------------------------------------------------------------- #
+# Excel inventory import (F2.27.8; require_manager_or_above)
+# --------------------------------------------------------------------- #
+#
+# Two store-scoped endpoints accept a QuickBooks POS `.xlsx` export as a
+# multipart upload. RBAC mirrors the rest of the setup tier:
+# require_store_member gates tenancy (admin → any store, owner/manager →
+# own store, staff/cross-store → 403) and require_manager_or_above gates
+# the role. Preview performs NO DB writes; confirm applies the import in
+# a single all-or-nothing transaction and audits via InventoryLog.
+
+
+@router.post(
+    "/stores/{store_id}/inventory/import/preview",
+    response_model=InventoryImportPreviewResponse,
+    dependencies=[Depends(require_store_member)],
+)
+def preview_inventory_import(
+    store_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_manager_or_above),
+    db: Session = Depends(get_db),
+) -> InventoryImportPreviewResponse:
+    data = _read_validated_import_upload(file)
+    try:
+        workbook = import_svc.parse_quickbooks_inventory_workbook(data)
+    except import_svc.InventoryImportValidationError as exc:
+        raise _import_error(exc) from exc
+    return import_svc.build_inventory_import_preview(db, store_id, workbook)
+
+
+@router.post(
+    "/stores/{store_id}/inventory/import/confirm",
+    response_model=InventoryImportConfirmResponse,
+    dependencies=[Depends(require_store_member)],
+)
+def confirm_inventory_import(
+    store_id: UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_manager_or_above),
+    db: Session = Depends(get_db),
+) -> InventoryImportConfirmResponse:
+    data = _read_validated_import_upload(file)
+    try:
+        workbook = import_svc.parse_quickbooks_inventory_workbook(data)
+        return import_svc.confirm_inventory_import(
+            db, store_id, workbook, actor_user_id=current_user.id
+        )
+    except import_svc.InventoryImportValidationError as exc:
+        raise _import_error(exc) from exc
 
 
 @router.patch(

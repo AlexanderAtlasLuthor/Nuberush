@@ -47,6 +47,14 @@ vi.mock("../../components/InventoryActions", () => ({
   ),
 }));
 
+// The import dialog pulls in its own mutation hooks; stub it so this
+// page suite stays focused on the list shell. Its visibility is driven
+// by the "Import inventory" trigger button, which the page owns.
+vi.mock("../../components/InventoryImportDialog", () => ({
+  InventoryImportDialog: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="mock-import-dialog" /> : null,
+}));
+
 const STORE_ID = "22222222-2222-2222-2222-222222222222";
 const ITEM_ID = "11111111-1111-1111-1111-111111111111";
 const VARIANT_ID = "33333333-3333-3333-3333-333333333333";
@@ -452,5 +460,31 @@ describe("InventoryPage - architecture", () => {
     expect(code).not.toMatch(/items\s*\.\s*filter\s*\(/);
     expect(code).not.toMatch(/items\s*\.\s*reduce\s*\(/);
     expect(code).not.toMatch(/\baggregate\s*\(/);
+  });
+});
+
+describe("InventoryPage - import trigger (F2.27.8)", () => {
+  it("renders the Import inventory button in store context", () => {
+    renderPage();
+    expect(
+      screen.getByRole("button", { name: /import inventory/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens the import dialog when the button is clicked", () => {
+    renderPage();
+    expect(screen.queryByTestId("mock-import-dialog")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: /import inventory/i }),
+    );
+    expect(screen.getByTestId("mock-import-dialog")).toBeInTheDocument();
+  });
+
+  it("does not render the import button outside store context", () => {
+    mockStore(null);
+    renderPage();
+    expect(
+      screen.queryByRole("button", { name: /import inventory/i }),
+    ).toBeNull();
   });
 });
