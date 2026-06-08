@@ -47,6 +47,14 @@ _TOP_LEVEL_KEYS = {
     "operations",
     "notifications",
     "admin_preferences",
+    "editable",
+}
+
+_EDITABLE_KEYS = {
+    "platform_name",
+    "support_email",
+    "default_locale",
+    "default_timezone",
 }
 
 _PLATFORM_KEYS = {
@@ -406,3 +414,212 @@ class TestComputedValues:
         # blocked = restricted (1) + banned (1) + allowed_for_sale=False (1)
         assert body["blocked_count"] == 3
         assert body["default_jurisdiction"] == "FL"
+
+
+# --------------------------------------------------------------------- #
+# Editable section (GET) — F2.27.10
+# --------------------------------------------------------------------- #
+
+
+class TestEditableSection:
+    def test_get_includes_editable_block_with_defaults(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        body = client.get(ADMIN_SETTINGS_URL, headers=_auth(admin)).json()
+        assert set(body["editable"].keys()) == _EDITABLE_KEYS
+        # Defaults from get-or-create when no row exists yet.
+        assert body["editable"]["platform_name"] == "NubeRush"
+        assert body["editable"]["support_email"] is None
+        assert body["editable"]["default_locale"] == "en-US"
+        assert body["editable"]["default_timezone"] == "America/New_York"
+
+    def test_get_does_not_leak_secrets(self, client: TestClient, make_user):
+        admin = make_user(role=UserRole.admin)
+        raw = client.get(ADMIN_SETTINGS_URL, headers=_auth(admin)).text.lower()
+        for needle in (
+            "service_role",
+            "resend_api_key",
+            "database_url",
+            "supabase_jwks",
+            "secret",
+            "password",
+            "token",
+        ):
+            assert needle not in raw, needle
+
+
+# --------------------------------------------------------------------- #
+# PATCH /admin/settings — F2.27.10
+# --------------------------------------------------------------------- #
+
+
+class TestPatchAuthRBAC:
+    def test_anonymous_returns_401(self, client: TestClient):
+        resp = client.patch(ADMIN_SETTINGS_URL, json={"platform_name": "X"})
+        assert resp.status_code == 401, resp.text
+
+    @pytest.mark.parametrize("role", _NON_ADMIN_ROLES)
+    def test_non_admin_forbidden(
+        self, client: TestClient, make_store, make_user, role: UserRole
+    ):
+        store = make_store()
+        actor = make_user(role=role, store_id=store.id)
+        resp = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(actor),
+            json={"platform_name": "Nope"},
+        )
+        assert resp.status_code == 403, resp.text
+
+    def test_admin_returns_200(self, client: TestClient, make_user):
+        admin = make_user(role=UserRole.admin)
+        resp = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"platform_name": "Acme Platform"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["editable"]["platform_name"] == "Acme Platform"
+
+
+class TestPatchValidation:
+    def test_unknown_field_422(self, client: TestClient, make_user):
+        admin = make_user(role=UserRole.admin)
+        resp = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"platform_name": "X", "surprise": 1},
+        )
+        assert resp.status_code == 422, resp.text
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "app_env",
+            "app_debug",
+            "version",
+            "database_url",
+            "supabase_service_role_key",
+            "resend_api_key",
+            "commission_rate_basis_points",
+            "currency",
+            "default_aging_minutes",
+            "event_types",
+        ],
+    )
+    def test_env_backed_and_policy_fields_rejected(
+        self, client: TestClient, make_user, field: str
+    ):
+        admin = make_user(role=UserRole.admin)
+        resp = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={field: "anything"},
+        )
+        assert resp.status_code == 422, f"{field} should be rejected"
+
+    def test_blank_platform_name_422(self, client: TestClient, make_user):
+        admin = make_user(role=UserRole.admin)
+        resp = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"platform_name": "   "},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_oversize_platform_name_422(self, client: TestClient, make_user):
+        admin = make_user(role=UserRole.admin)
+        resp = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"platform_name": "x" * 151},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_invalid_email_422(self, client: TestClient, make_user):
+        admin = make_user(role=UserRole.admin)
+        resp = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"support_email": "not-an-email"},
+        )
+        assert resp.status_code == 422, resp.text
+
+
+class TestPatchPersistence:
+    def test_patch_then_get_reflects_change(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        patch = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={
+                "platform_name": "Patched Co",
+                "support_email": "ops@example.com",
+                "default_locale": "es-MX",
+                "default_timezone": "America/Chicago",
+            },
+        )
+        assert patch.status_code == 200, patch.text
+
+        body = client.get(ADMIN_SETTINGS_URL, headers=_auth(admin)).json()
+        assert body["editable"] == {
+            "platform_name": "Patched Co",
+            "support_email": "ops@example.com",
+            "default_locale": "es-MX",
+            "default_timezone": "America/Chicago",
+        }
+
+    def test_partial_patch_leaves_other_fields(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"support_email": "ops@example.com"},
+        )
+        # Only platform_name changes now; support_email must survive.
+        client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"platform_name": "Only Name"},
+        )
+        body = client.get(ADMIN_SETTINGS_URL, headers=_auth(admin)).json()
+        assert body["editable"]["platform_name"] == "Only Name"
+        assert body["editable"]["support_email"] == "ops@example.com"
+
+    def test_blank_email_clears_field(self, client: TestClient, make_user):
+        admin = make_user(role=UserRole.admin)
+        client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"support_email": "ops@example.com"},
+        )
+        cleared = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"support_email": "   "},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["editable"]["support_email"] is None
+
+    def test_empty_payload_is_noop_200(self, client: TestClient, make_user):
+        admin = make_user(role=UserRole.admin)
+        resp = client.patch(ADMIN_SETTINGS_URL, headers=_auth(admin), json={})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["editable"]["platform_name"] == "NubeRush"
+
+    def test_patch_response_does_not_leak_secrets(
+        self, client: TestClient, make_user
+    ):
+        admin = make_user(role=UserRole.admin)
+        raw = client.patch(
+            ADMIN_SETTINGS_URL,
+            headers=_auth(admin),
+            json={"platform_name": "Acme"},
+        ).text.lower()
+        for needle in ("service_role", "resend_api_key", "database_url", "secret", "token"):
+            assert needle not in raw, needle

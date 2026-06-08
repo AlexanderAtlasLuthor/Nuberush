@@ -1607,3 +1607,132 @@ class RegulatoryDecisionAuditLog(Base):
     notice: Mapped[RegulatoryNotice] = relationship()
     product: Mapped[Product | None] = relationship()
     actor_user: Mapped[User] = relationship()
+
+
+class PlatformSettings(Base):
+    """Singleton platform-wide configuration for Admin Settings (F2.27.10.A).
+
+    Backend-first persistence foundation for the writable Admin Settings
+    surface. This subphase ships the storage ONLY — there is no service,
+    schema, route, or get-or-create logic yet. By design the table holds a
+    SINGLE row (enforced by a later service layer, not the DB); this subphase
+    neither inserts that row nor seeds defaults.
+
+    Column server defaults mirror the read-only constants the current
+    `admin_settings` snapshot surfaces (`platform_name` ≈ app name,
+    `default_locale` `en-US`, `default_timezone` `America/New_York`) so the
+    eventual get-or-create lands consistent values. `updated_at` is maintained
+    by the shared `set_updated_at()` trigger, matching `regulatory_sources`
+    and `compliance_alerts`.
+
+    Deliberately NOT here: secrets or env-backed config (Supabase / email /
+    database / CORS) never live in this table.
+    """
+
+    __tablename__ = "platform_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "platform_name <> ''",
+            name="ck_platform_settings_platform_name_non_empty",
+        ),
+        CheckConstraint(
+            "default_locale <> ''",
+            name="ck_platform_settings_default_locale_non_empty",
+        ),
+        CheckConstraint(
+            "default_timezone <> ''",
+            name="ck_platform_settings_default_timezone_non_empty",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    platform_name: Mapped[str] = mapped_column(
+        String(150),
+        server_default=text("'NubeRush'"),
+        nullable=False,
+    )
+    support_email: Mapped[str | None] = mapped_column(String(255))
+    default_locale: Mapped[str] = mapped_column(
+        String(10),
+        server_default=text("'en-US'"),
+        nullable=False,
+    )
+    default_timezone: Mapped[str] = mapped_column(
+        String(50),
+        server_default=text("'America/New_York'"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+
+class PlatformSettingsAuditLog(Base):
+    """Append-only audit trail for platform-settings mutations (F2.27.10.A).
+
+    Dedicated table — deliberately NOT `operational_audit_logs` and NOT wired
+    into the unified Admin Audit feed (`app.services.audit`). Mirrors the
+    repo's other append-only audit tables: a `varchar` `action` discriminator
+    (no PG enum, so new verbs never need an `ALTER TYPE`), JSON `before`/
+    `after` snapshots, and only `created_at` (no `updated_at`).
+
+    `actor_user_id` is REQUIRED and uses ON DELETE RESTRICT: every settings
+    change is accountable to a real admin who cannot be deleted while their
+    decisions stand. The future writer/service (a later subphase) will record
+    `action = "platform_settings_updated"`; this subphase ships the storage
+    only — no writer, no helper, no integration.
+    """
+
+    __tablename__ = "platform_settings_audit_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "action <> ''",
+            name="ck_platform_settings_audit_logs_action_non_empty",
+        ),
+        Index(
+            "ix_platform_settings_audit_logs_platform_settings_id",
+            "platform_settings_id",
+        ),
+        Index(
+            "ix_platform_settings_audit_logs_actor_user_id",
+            "actor_user_id",
+        ),
+        Index(
+            "ix_platform_settings_audit_logs_created_at",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    platform_settings_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "platform_settings.id",
+            name="fk_platform_settings_audit_logs_settings_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_platform_settings_audit_logs_actor_user_id_users",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    before: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    after: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    settings: Mapped[PlatformSettings] = relationship()
+    actor_user: Mapped[User] = relationship()

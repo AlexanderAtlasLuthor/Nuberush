@@ -7,7 +7,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import type { UseQueryResult } from "@tanstack/react-query";
+import type {
+  UseMutationResult,
+  UseQueryResult,
+} from "@tanstack/react-query";
 
 import AdminSettingsPage from "../AdminSettingsPage";
 import * as adminSettingsHooks from "../../hooks";
@@ -15,6 +18,7 @@ import type { AdminSettingsResponse } from "../../types";
 
 vi.mock("../../hooks", () => ({
   useAdminSettingsQuery: vi.fn(),
+  useUpdateAdminSettingsMutation: vi.fn(),
   adminSettingsKeys: { all: ["admin-settings"] as const },
 }));
 
@@ -32,6 +36,22 @@ function asQueryResult(
     error: null,
     ...partial,
   } as unknown as UseQueryResult<AdminSettingsResponse>;
+}
+
+function asMutationResult(
+  partial: Partial<UseMutationResult> = {},
+): UseMutationResult {
+  return {
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    reset: vi.fn(),
+    isPending: false,
+    isError: false,
+    isSuccess: false,
+    data: undefined,
+    error: null,
+    ...partial,
+  } as unknown as UseMutationResult;
 }
 
 function makeSettings(
@@ -80,12 +100,22 @@ function makeSettings(
       default_locale: "en-US",
       default_timezone: "America/New_York",
     },
+    editable: {
+      platform_name: "NubeRush",
+      support_email: null,
+      default_locale: "en-US",
+      default_timezone: "America/New_York",
+    },
     ...overrides,
   };
 }
 
 beforeEach(() => {
   vi.mocked(adminSettingsHooks.useAdminSettingsQuery).mockReset();
+  vi.mocked(adminSettingsHooks.useUpdateAdminSettingsMutation).mockReset();
+  vi.mocked(adminSettingsHooks.useUpdateAdminSettingsMutation).mockReturnValue(
+    asMutationResult() as never,
+  );
 });
 
 afterEach(() => {
@@ -251,17 +281,132 @@ describe("AdminSettingsPage", () => {
     ).toHaveTextContent("en-US");
   });
 
-  it("does NOT render any mutation buttons (no Save, no Edit, no Update)", () => {
+  it("renders the editable form and keeps every read-only section present", () => {
     vi.mocked(adminSettingsHooks.useAdminSettingsQuery).mockReturnValue(
       asQueryResult({ isSuccess: true, data: makeSettings() }),
     );
 
     render(<AdminSettingsPage />);
-    expect(screen.queryByRole("button", { name: /save/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /edit/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /update/i })).toBeNull();
-    // No textbox / form inputs either — the page is read-only.
-    expect(screen.queryByRole("textbox")).toBeNull();
+    // Editable surface present (F2.27.10).
+    expect(screen.getByTestId("admin-settings-form")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-editable")).toBeInTheDocument();
+    expect(screen.getByTestId("admin-settings-submit")).toBeInTheDocument();
+    // Every existing read-only section is still rendered.
+    for (const testId of [
+      "settings-platform",
+      "settings-billing",
+      "settings-compliance",
+      "settings-operations",
+      "settings-notifications",
+      "settings-admin-preferences",
+    ]) {
+      expect(screen.getByTestId(testId)).toBeInTheDocument();
+    }
+  });
+
+  it("read-only sections contain no inputs (only the editable card has them)", () => {
+    vi.mocked(adminSettingsHooks.useAdminSettingsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSettings() }),
+    );
+
+    render(<AdminSettingsPage />);
+    for (const testId of [
+      "settings-platform",
+      "settings-billing",
+      "settings-compliance",
+      "settings-operations",
+      "settings-notifications",
+      "settings-admin-preferences",
+    ]) {
+      const section = screen.getByTestId(testId);
+      expect(within(section).queryByRole("textbox")).toBeNull();
+    }
+  });
+
+  it("seeds the editable inputs from the backend snapshot", () => {
+    vi.mocked(adminSettingsHooks.useAdminSettingsQuery).mockReturnValue(
+      asQueryResult({
+        isSuccess: true,
+        data: makeSettings({
+          editable: {
+            platform_name: "Acme Co",
+            support_email: "ops@example.com",
+            default_locale: "es-MX",
+            default_timezone: "America/Chicago",
+          },
+        }),
+      }),
+    );
+
+    render(<AdminSettingsPage />);
+    expect(screen.getByTestId("admin-settings-platform-name")).toHaveValue(
+      "Acme Co",
+    );
+    expect(screen.getByTestId("admin-settings-support-email")).toHaveValue(
+      "ops@example.com",
+    );
+    // Save disabled until something changes.
+    expect(screen.getByTestId("admin-settings-submit")).toBeDisabled();
+  });
+
+  it("editing a field enables Save and submits only the changed fields", () => {
+    const mutate = vi.fn();
+    vi.mocked(adminSettingsHooks.useAdminSettingsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSettings() }),
+    );
+    vi.mocked(
+      adminSettingsHooks.useUpdateAdminSettingsMutation,
+    ).mockReturnValue(asMutationResult({ mutate }) as never);
+
+    render(<AdminSettingsPage />);
+    const submit = screen.getByTestId("admin-settings-submit");
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId("admin-settings-platform-name"), {
+      target: { value: "Renamed Platform" },
+    });
+    expect(submit).toBeEnabled();
+
+    fireEvent.click(submit);
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledWith({ platform_name: "Renamed Platform" });
+  });
+
+  it("blocks Save when a local validation rule fails", () => {
+    const mutate = vi.fn();
+    vi.mocked(adminSettingsHooks.useAdminSettingsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSettings() }),
+    );
+    vi.mocked(
+      adminSettingsHooks.useUpdateAdminSettingsMutation,
+    ).mockReturnValue(asMutationResult({ mutate }) as never);
+
+    render(<AdminSettingsPage />);
+    // Invalid email blocks submission.
+    fireEvent.change(screen.getByTestId("admin-settings-support-email"), {
+      target: { value: "not-an-email" },
+    });
+    expect(screen.getByTestId("admin-settings-submit")).toBeDisabled();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a mutation API error in the form", () => {
+    vi.mocked(adminSettingsHooks.useAdminSettingsQuery).mockReturnValue(
+      asQueryResult({ isSuccess: true, data: makeSettings() }),
+    );
+    vi.mocked(
+      adminSettingsHooks.useUpdateAdminSettingsMutation,
+    ).mockReturnValue(
+      asMutationResult({
+        isError: true,
+        error: new Error("422 Unprocessable Entity"),
+      }) as never,
+    );
+
+    render(<AdminSettingsPage />);
+    expect(screen.getByTestId("admin-settings-form-error")).toHaveTextContent(
+      "422 Unprocessable Entity",
+    );
   });
 
   it("renders without an AuthProvider, StoreProvider, or router in the tree", () => {

@@ -31,7 +31,11 @@ import { ErrorState } from "@/components/common/error-state";
 import { LoadingState } from "@/components/common/loading-state";
 import { getApiErrorMessage } from "@/api";
 
-import { useAdminSettingsQuery } from "../hooks";
+import {
+  useAdminSettingsQuery,
+  useUpdateAdminSettingsMutation,
+} from "../hooks";
+import { AdminSettingsForm } from "../components/AdminSettingsForm";
 import { SettingsSection } from "../components/SettingsSection";
 import type {
   AdminBillingSettings,
@@ -334,9 +338,24 @@ function AdminPreferencesCard({
   );
 }
 
+function EditableSettingsCard({ data }: { data: AdminSettingsResponse }) {
+  const mutation = useUpdateAdminSettingsMutation();
+  return (
+    <AdminSettingsForm
+      editable={data.editable}
+      isPending={mutation.isPending}
+      errorMessage={
+        mutation.isError ? getApiErrorMessage(mutation.error) : null
+      }
+      onSubmit={(payload) => mutation.mutate(payload)}
+    />
+  );
+}
+
 function SettingsContent({ data }: { data: AdminSettingsResponse }) {
   return (
     <div className="space-y-5">
+      <EditableSettingsCard data={data} />
       <PlatformCard platform={data.platform} />
       <BillingCard billing={data.billing} />
       <ComplianceCard compliance={data.compliance} />

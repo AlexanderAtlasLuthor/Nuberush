@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { apiRequest } from "@/api";
-import { getAdminSettings } from "./api";
+import { getAdminSettings, patchAdminSettings } from "./api";
 import type { AdminSettingsResponse } from "./types";
 
 vi.mock("@/api", () => ({
@@ -56,6 +56,12 @@ const EMPTY_RESPONSE: AdminSettingsResponse = {
     default_locale: "en-US",
     default_timezone: "America/New_York",
   },
+  editable: {
+    platform_name: "NubeRush",
+    support_email: null,
+    default_locale: "en-US",
+    default_timezone: "America/New_York",
+  },
 };
 
 beforeEach(() => {
@@ -85,5 +91,59 @@ describe("getAdminSettings", () => {
   it("returns the response body verbatim", async () => {
     const result = await getAdminSettings();
     expect(result).toEqual(EMPTY_RESPONSE);
+  });
+});
+
+// --------------------------------------------------------------------- //
+// patchAdminSettings (F2.27.10)
+// --------------------------------------------------------------------- //
+
+describe("patchAdminSettings", () => {
+  it("PATCHes /admin/settings with the payload body", async () => {
+    vi.mocked(apiRequest).mockResolvedValueOnce(EMPTY_RESPONSE as never);
+
+    await patchAdminSettings({ platform_name: "Acme" });
+
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    const [path, options] = vi.mocked(apiRequest).mock.calls[0];
+    expect(path).toBe("/admin/settings");
+    expect(options?.method).toBe("PATCH");
+    expect(options?.body).toEqual({ platform_name: "Acme" });
+  });
+
+  it("forwards a partial body verbatim (snake_case, only changed fields)", async () => {
+    vi.mocked(apiRequest).mockResolvedValueOnce(EMPTY_RESPONSE as never);
+
+    await patchAdminSettings({
+      support_email: "ops@example.com",
+      default_locale: "es-MX",
+    });
+
+    const [, options] = vi.mocked(apiRequest).mock.calls[0];
+    expect(options?.body).toEqual({
+      support_email: "ops@example.com",
+      default_locale: "es-MX",
+    });
+  });
+
+  it("supports an empty-string support_email to clear the field", async () => {
+    vi.mocked(apiRequest).mockResolvedValueOnce(EMPTY_RESPONSE as never);
+
+    await patchAdminSettings({ support_email: "" });
+
+    const [, options] = vi.mocked(apiRequest).mock.calls[0];
+    expect(options?.body).toEqual({ support_email: "" });
+  });
+
+  it("returns the AdminSettingsResponse from apiRequest unchanged", async () => {
+    vi.mocked(apiRequest).mockResolvedValueOnce(EMPTY_RESPONSE as never);
+    const result = await patchAdminSettings({ platform_name: "Acme" });
+    expect(result).toBe(EMPTY_RESPONSE);
+  });
+
+  it("propagates ApiError from apiRequest untouched", async () => {
+    const boom = new Error("403 Forbidden");
+    vi.mocked(apiRequest).mockRejectedValueOnce(boom);
+    await expect(patchAdminSettings({ platform_name: "x" })).rejects.toBe(boom);
   });
 });

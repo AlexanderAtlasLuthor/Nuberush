@@ -61,3 +61,48 @@ def test_supabase_settings_can_opt_in_via_process_env(
 
     # Leave no cached opt-in value behind for the next test.
     get_supabase_auth_settings.cache_clear()
+
+
+def test_admin_settings_update_schema_only_exposes_safe_fields() -> None:
+    """F2.27.10: the writable Admin Settings contract must NEVER admit an
+    env-backed or secret field. The mutation schema's field set is the
+    authoritative allow-list — if a future edit adds a sensitive field, this
+    canary fails instead of leaking it through PATCH.
+    """
+    from app.schemas.admin_settings import AdminSettingsUpdate
+
+    assert set(AdminSettingsUpdate.model_fields) == {
+        "platform_name",
+        "support_email",
+        "default_locale",
+        "default_timezone",
+    }
+
+    forbidden = {
+        "app_env",
+        "app_debug",
+        "version",
+        "database_url",
+        "supabase_url",
+        "supabase_service_role_key",
+        "supabase_jwks_url",
+        "resend_api_key",
+        "backend_cors_origins",
+        "commission_rate_basis_points",
+        "currency",
+    }
+    assert forbidden.isdisjoint(AdminSettingsUpdate.model_fields)
+
+
+def test_admin_editable_section_only_exposes_safe_fields() -> None:
+    """The persisted editable block surfaced on GET also stays inside the
+    four-field allow-list — no secret/env value rides along on the response.
+    """
+    from app.schemas.admin_settings import AdminEditableSettings
+
+    assert set(AdminEditableSettings.model_fields) == {
+        "platform_name",
+        "support_email",
+        "default_locale",
+        "default_timezone",
+    }

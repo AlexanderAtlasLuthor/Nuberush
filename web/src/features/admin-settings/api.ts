@@ -16,7 +16,10 @@
 
 import { apiRequest } from "@/api";
 
-import type { AdminSettingsResponse } from "./types";
+import type {
+  AdminSettingsResponse,
+  AdminSettingsUpdateRequest,
+} from "./types";
 
 /**
  * GET /admin/settings
@@ -36,5 +39,25 @@ export function getAdminSettings(
   return apiRequest<AdminSettingsResponse>("/admin/settings", {
     method: "GET",
     signal,
+  });
+}
+
+/**
+ * PATCH /admin/settings  (F2.27.10)
+ *
+ * Partial update of the writable platform-settings cluster. Sends only the
+ * fields the caller supplies (snake_case, matching the backend
+ * `AdminSettingsUpdate`); the backend persists the change, writes a dedicated
+ * audit row, and returns the full refreshed `AdminSettingsResponse`.
+ *
+ * Backend auth: `require_admin` (anon → 401, non-admin → 403). Unknown or
+ * env-backed fields → 422. No store context, no role gating client-side.
+ */
+export function patchAdminSettings(
+  payload: AdminSettingsUpdateRequest,
+): Promise<AdminSettingsResponse> {
+  return apiRequest<AdminSettingsResponse>("/admin/settings", {
+    method: "PATCH",
+    body: payload,
   });
 }

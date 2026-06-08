@@ -72,6 +72,12 @@ const EMPTY_RESPONSE: AdminSettingsResponse = {
     default_locale: "en-US",
     default_timezone: "America/New_York",
   },
+  editable: {
+    platform_name: "NubeRush",
+    support_email: null,
+    default_locale: "en-US",
+    default_timezone: "America/New_York",
+  },
 };
 
 beforeEach(() => {

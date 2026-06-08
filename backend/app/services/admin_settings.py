@@ -21,28 +21,60 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from typing import Any
+
 from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy import case
 from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_app_settings
 from app.db.models import ComplianceStatus
 from app.db.models import Order
 from app.db.models import OrderStatus
+from app.db.models import PlatformSettings
+from app.db.models import PlatformSettingsAuditLog
 from app.db.models import Product
 from app.db.models import User
 from app.db.models import UserRole
 from app.schemas.admin_settings import AdminBillingSettings
 from app.schemas.admin_settings import AdminCompliancePolicySettings
+from app.schemas.admin_settings import AdminEditableSettings
 from app.schemas.admin_settings import AdminNotificationSettings
 from app.schemas.admin_settings import AdminOperationsSettings
 from app.schemas.admin_settings import AdminPlatformSettings
 from app.schemas.admin_settings import AdminPreferencesSettings
 from app.schemas.admin_settings import AdminSettingsResponse
+from app.schemas.admin_settings import AdminSettingsUpdate
+
+
+# Default values for the singleton platform-settings row when it does not
+# exist yet (first access). These mirror the read-only constants the snapshot
+# already surfaces, so get-or-create lands consistent values. NEVER secrets,
+# never env-backed config.
+_PLATFORM_SETTINGS_DEFAULTS: dict[str, Any] = {
+    "platform_name": "NubeRush",
+    "support_email": None,
+    "default_locale": "en-US",
+    "default_timezone": "America/New_York",
+}
+
+# The only fields ever written to / captured in audit before/after. Keeping
+# this list local guarantees a secret/env field can never leak into the audit
+# trail even if the schema later grows.
+_EDITABLE_FIELDS: tuple[str, ...] = (
+    "platform_name",
+    "support_email",
+    "default_locale",
+    "default_timezone",
+)
+
+# Action discriminator for the dedicated platform-settings audit table.
+_AUDIT_ACTION_UPDATED = "platform_settings_updated"
 
 
 # --------------------------------------------------------------------- #
@@ -257,6 +289,50 @@ def _notifications_section() -> AdminNotificationSettings:
     )
 
 
+def _get_or_create_platform_settings(db: Session) -> PlatformSettings:
+    """Return the singleton `platform_settings` row, creating it on first use.
+
+    Singleton-ness is enforced here (not the DB): the oldest row wins if more
+    than one ever exists. When no row exists, one is created with the safe
+    defaults and committed so it persists for subsequent reads. NO audit row
+    is written for this bootstrap create — it is not an admin mutation, just
+    materializing the defaults the snapshot already reported. Never touches
+    env config and never stores a secret.
+    """
+    settings = db.scalars(
+        select(PlatformSettings)
+        .order_by(PlatformSettings.created_at.asc(), PlatformSettings.id.asc())
+        .limit(1)
+    ).first()
+    if settings is not None:
+        return settings
+
+    settings = PlatformSettings(**_PLATFORM_SETTINGS_DEFAULTS)
+    db.add(settings)
+    db.commit()
+    db.refresh(settings)
+    return settings
+
+
+def _editable_snapshot(settings: PlatformSettings) -> dict[str, Any]:
+    """JSON-safe snapshot of ONLY the four editable fields.
+
+    This is the single source for both the audit `before`/`after` payloads and
+    the equality check. By construction it can never carry a secret or an
+    env-backed value — only the allow-listed columns appear.
+    """
+    return {field: getattr(settings, field) for field in _EDITABLE_FIELDS}
+
+
+def _editable_section(settings: PlatformSettings) -> AdminEditableSettings:
+    return AdminEditableSettings(
+        platform_name=settings.platform_name,
+        support_email=settings.support_email,
+        default_locale=settings.default_locale,
+        default_timezone=settings.default_timezone,
+    )
+
+
 def _admin_preferences_section(db: Session) -> AdminPreferencesSettings:
     """One SQL round-trip for `(admin_total, admin_active)`."""
     active_expr = func.coalesce(
@@ -297,6 +373,8 @@ def get_admin_settings_snapshot(
     """
     _assert_admin_caller(actor)
 
+    settings = _get_or_create_platform_settings(db)
+
     return AdminSettingsResponse(
         platform=_platform_section(),
         billing=_billing_section(db),
@@ -304,4 +382,75 @@ def get_admin_settings_snapshot(
         operations=_operations_section(),
         notifications=_notifications_section(),
         admin_preferences=_admin_preferences_section(db),
+        editable=_editable_section(settings),
     )
+
+
+def update_admin_settings(
+    db: Session,
+    payload: AdminSettingsUpdate,
+    *,
+    actor: User,
+) -> AdminSettingsResponse:
+    """Apply a partial update to the writable platform settings (F2.27.10).
+
+    Pipeline (mirrors the `stores.update_store` write pattern, minus any store
+    tenancy):
+      1. RBAC gate (admin only; 403 otherwise).
+      2. Get-or-create the singleton `platform_settings` row.
+      3. Apply ONLY the fields the caller actually sent
+         (`model_dump(exclude_unset=True)` — the schema already restricts the
+         keys to the four-field allow-list).
+      4. No-op short-circuit: if nothing was sent, or every sent value equals
+         the current value, return the current snapshot WITHOUT writing an
+         audit row (a no-op is not an auditable decision). Pending in-memory
+         assignments are discarded with a rollback.
+      5. Otherwise append a `PlatformSettingsAuditLog` (action
+         `platform_settings_updated`) with before/after limited to the four
+         editable fields, and COMMIT it atomically with the field change.
+
+    Audit goes to the dedicated `platform_settings_audit_logs` table ONLY:
+    never `write_operational_audit_log`, never the unified audit feed. The
+    before/after payloads can only contain the allow-listed fields, so no
+    secret or env value can ever land in the trail.
+    """
+    _assert_admin_caller(actor)
+
+    settings = _get_or_create_platform_settings(db)
+
+    changes = payload.model_dump(exclude_unset=True)
+    before = _editable_snapshot(settings)
+
+    for field, value in changes.items():
+        setattr(settings, field, value)
+
+    after = _editable_snapshot(settings)
+
+    if after == before:
+        # Empty payload or every value identical to the current state — not an
+        # auditable change. Discard any same-value reassignments and return the
+        # current snapshot unchanged (no audit row, no updated_at bump).
+        db.rollback()
+        return get_admin_settings_snapshot(db, actor=actor)
+
+    db.add(
+        PlatformSettingsAuditLog(
+            platform_settings_id=settings.id,
+            actor_user_id=actor.id,
+            action=_AUDIT_ACTION_UPDATED,
+            before=before,
+            after=after,
+        )
+    )
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Platform settings update violates database constraints.",
+        ) from exc
+
+    db.refresh(settings)
+    return get_admin_settings_snapshot(db, actor=actor)

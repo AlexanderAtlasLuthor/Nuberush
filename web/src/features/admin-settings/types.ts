@@ -61,6 +61,19 @@ export interface AdminPreferencesSettings {
   default_timezone: string;
 }
 
+/**
+ * The writable platform-settings cluster (F2.27.10). These four values are
+ * PERSISTED (singleton `platform_settings` row) and editable via
+ * `PATCH /admin/settings`. `support_email` is nullable (an operator may clear
+ * it). Everything else on the response stays read-only.
+ */
+export interface AdminEditableSettings {
+  platform_name: string;
+  support_email: string | null;
+  default_locale: string;
+  default_timezone: string;
+}
+
 export interface AdminSettingsResponse {
   platform: AdminPlatformSettings;
   billing: AdminBillingSettings;
@@ -68,4 +81,18 @@ export interface AdminSettingsResponse {
   operations: AdminOperationsSettings;
   notifications: AdminNotificationSettings;
   admin_preferences: AdminPreferencesSettings;
+  editable: AdminEditableSettings;
+}
+
+/**
+ * Partial-update request for the writable cluster (F2.27.10). Mirrors the
+ * backend `AdminSettingsUpdate` (snake_case, all optional). Only fields the
+ * user actually changed should be sent; `support_email` may be sent as an
+ * empty string to clear it (the backend normalizes blank → null).
+ */
+export interface AdminSettingsUpdateRequest {
+  platform_name?: string;
+  support_email?: string | null;
+  default_locale?: string;
+  default_timezone?: string;
 }

@@ -27,9 +27,20 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import EmailStr
 from pydantic import Field
+from pydantic import field_validator
 
 from app.db.models import OrderStatus
+
+
+def _strip_required_text(value: str) -> str:
+    """Trim a required string; reject blank-after-trim (mirrors the repo's
+    `_strip_required` convention in `app.schemas.stores`)."""
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("must not be empty")
+    return stripped
 
 
 class AdminPlatformSettings(BaseModel):
@@ -140,13 +151,34 @@ class AdminPreferencesSettings(BaseModel):
     default_timezone: str = Field(min_length=1)
 
 
+class AdminEditableSettings(BaseModel):
+    """The writable platform-settings cluster (F2.27.10).
+
+    Unlike every other section on this response, these four values are
+    PERSISTED (in `platform_settings`, a singleton row) and can be changed
+    via `PATCH /admin/settings`. They are deliberately the only mutable
+    surface: env-backed config (app_env / debug / version / database / CORS /
+    Supabase / email secrets), billing/commission policy, operational bounds,
+    notification catalog and computed counts stay read-only.
+
+    `support_email` is nullable (an operator may clear it).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    platform_name: str = Field(min_length=1, max_length=150)
+    support_email: str | None = Field(default=None, max_length=255)
+    default_locale: str = Field(min_length=2, max_length=10)
+    default_timezone: str = Field(min_length=1, max_length=50)
+
+
 class AdminSettingsResponse(BaseModel):
     """Top-level response for `GET /admin/settings`.
 
-    Bundles every settings cluster. Read-only, admin-only,
-    computed-on-request. No persistence layer backs this shape; the
-    service layer derives every value from existing tables and
-    locked constants on every call.
+    Bundles every settings cluster. Admin-only, computed-on-request. The
+    read-only sections are derived from existing tables and locked constants
+    on every call; the `editable` section is the persisted singleton
+    (`platform_settings`) surfaced for the writable form (F2.27.10).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -157,3 +189,49 @@ class AdminSettingsResponse(BaseModel):
     operations: AdminOperationsSettings
     notifications: AdminNotificationSettings
     admin_preferences: AdminPreferencesSettings
+    editable: AdminEditableSettings
+
+
+class AdminSettingsUpdate(BaseModel):
+    """Partial update for the writable platform-settings cluster (F2.27.10).
+
+    Every field is optional so a caller may PATCH one at a time; `extra=forbid`
+    rejects any field outside the four-field allow-list with a 422 — this is
+    the schema-level guard that env-backed / billing / operations / secret
+    fields can NEVER be written through this contract.
+
+    Validation mirrors the `platform_settings` columns and the read schema:
+      - `platform_name`: trimmed, 1–150 chars (blank-after-trim → 422).
+      - `support_email`: a valid email when provided; a blank/whitespace string
+        normalizes to `None` so an operator can CLEAR the field (an explicit
+        `null` clears it too). Bounded to 255 chars.
+      - `default_locale`: trimmed, 2–10 chars.
+      - `default_timezone`: trimmed, 1–50 chars.
+
+    Validators run only for fields actually present (Pydantic v2 does not
+    validate untouched defaults), so `model_dump(exclude_unset=True)` yields
+    exactly the fields the caller sent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    platform_name: str | None = Field(default=None, min_length=1, max_length=150)
+    support_email: EmailStr | None = Field(default=None, max_length=255)
+    default_locale: str | None = Field(default=None, min_length=2, max_length=10)
+    default_timezone: str | None = Field(default=None, min_length=1, max_length=50)
+
+    @field_validator("platform_name", "default_locale", "default_timezone")
+    @classmethod
+    def _strip_text(cls, value: str | None) -> str | None:
+        return None if value is None else _strip_required_text(value)
+
+    @field_validator("support_email", mode="before")
+    @classmethod
+    def _blank_email_to_none(cls, value: object) -> object:
+        # A blank / whitespace-only email clears the field (→ None) rather
+        # than 422-ing, so the form can offer "remove support email".
+        if isinstance(value, str) and not value.strip():
+            return None
+        if isinstance(value, str):
+            return value.strip()
+        return value
