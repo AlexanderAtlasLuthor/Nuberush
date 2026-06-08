@@ -1,0 +1,62 @@
+# Render Blueprint — NubeRush backend (Web Service)
+#
+# Declarative deploy readiness for F2.27.4. This blueprint describes the
+# backend service configuration only. It contains NO real secrets:
+#   - secret/manual values use `sync: false` so they must be set in the Render
+#     dashboard and are never read from this file;
+#   - the start command does NOT run database migrations (migrations are a
+#     manual, gated step — see docs/f2.27-deploy-runbook.md).
+#
+# This file does not trigger a deploy by itself; it documents the service.
+
+services:
+  - type: web
+    name: nuberush-backend
+    runtime: python
+    rootDir: backend
+    plan: starter
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      # --- Pinned runtime / non-secret defaults ---
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: APP_ENV
+        value: staging
+      - key: APP_DEBUG
+        value: "false"
+      - key: EMAIL_ENABLED
+        value: "false"
+
+      # --- Secrets / per-environment values: set in Render dashboard ---
+      # sync: false means Render will NOT pull a value from this file; an
+      # operator must provide it manually. No real secrets live in the repo.
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: BACKEND_CORS_ORIGINS
+        sync: false
+      - key: APP_PUBLIC_BASE_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+
+      # --- Optional email / JWT overrides: set manually if used ---
+      - key: EMAIL_PROVIDER
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: EMAIL_FROM_NAME
+        sync: false
+      - key: SUPABASE_JWKS_URL
+        sync: false
+      - key: SUPABASE_JWT_ISSUER
+        sync: false
+      - key: SUPABASE_JWT_AUDIENCE
+        sync: false
