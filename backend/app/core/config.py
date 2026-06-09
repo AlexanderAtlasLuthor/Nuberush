@@ -123,6 +123,26 @@ class EmailSettings(CommonSettings):
     resend_api_key: str = ""
 
 
+class RegulatorySettings(CommonSettings):
+    """Non-secret config for the FDA / public regulatory source client
+    (F2.27.7.D — client boundary only).
+
+    Manual admin-triggered ingestion stays the ONLY execution path — there is
+    no scheduler. All fields default safe/empty so the app imports and starts
+    with no regulatory source configured and the offline test suite needs no
+    env. `fda_regulatory_base_url` gates the real client: with it blank (and no
+    per-source `fetch_config["url"]`), `resolve_source_client` raises a
+    controlled configuration error instead of attempting any fetch.
+    `fda_regulatory_api_key` is an OPTIONAL server-only secret — never logged
+    and never stored in the database (it lives only in settings).
+    """
+
+    fda_regulatory_base_url: str = ""
+    fda_regulatory_api_key: str = ""
+    fda_regulatory_timeout_seconds: float = 10.0
+    fda_regulatory_max_items_per_run: int = 100
+
+
 @lru_cache
 def get_app_settings() -> AppSettings:
     return AppSettings()
@@ -141,3 +161,8 @@ def get_supabase_auth_settings() -> SupabaseAuthSettings:
 @lru_cache
 def get_email_settings() -> EmailSettings:
     return EmailSettings()
+
+
+@lru_cache
+def get_regulatory_settings() -> RegulatorySettings:
+    return RegulatorySettings()

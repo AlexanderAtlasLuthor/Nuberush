@@ -1,0 +1,28 @@
+{
+  "document_number": "FDA-2024-N-1234-0001",
+  "document_type": "enforcement_notice",
+  "title": "FDA Issues Warning Letters to Firms for Selling Unauthorized E-Cigarettes",
+  "publication_date": "2024-09-15",
+  "url": "https://www.fda.gov/tobacco-products/compliance-enforcement/example-enforcement-2024",
+  "summary": "The U.S. Food and Drug Administration issued warning letters to firms for manufacturing and distributing unauthorized e-cigarette products that lack the required marketing authorization.",
+  "company_name": "Example Vapor Co.",
+  "categories": ["ENDS", "Disposable", "Enforcement"],
+  "products": [
+    {
+      "product_name": "Cloud Max Disposable 5000",
+      "brand": "CloudMax",
+      "category": "Disposable Vape",
+      "upc": "812345678901",
+      "item_number": "CM-DISP-5000",
+      "flavor": "Blue Razz Ice"
+    },
+    {
+      "product_name": "Cloud Max Disposable 5000",
+      "brand": "CloudMax",
+      "category": "Disposable Vape",
+      "upc": "812345678902",
+      "item_number": "CM-DISP-5001",
+      "flavor": "Mango Tango"
+    }
+  ]
+}

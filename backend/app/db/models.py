@@ -1221,6 +1221,14 @@ class RegulatorySource(Base):
 
     `last_synced_at` is a bookkeeping timestamp updated by a future ingestion
     service (F2.26.5.B); this subphase neither fetches nor schedules anything.
+
+    F2.27.7.B adds NON-SECRET ingestion bookkeeping consumed by the future
+    orchestrator (F2.27.7.C): `fetch_config` (e.g. endpoint / params / parser
+    key — never a secret, token, or credential), `cursor` (an incremental
+    high-water mark such as a last published date or external ref), and the
+    `last_attempted_at` / `last_succeeded_at` pair. Secrets stay in settings,
+    never in this row. These columns are inert here — no code reads or writes
+    them in this subphase.
     """
 
     __tablename__ = "regulatory_sources"
@@ -1250,10 +1258,22 @@ class RegulatorySource(Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    # F2.27.7.B ingestion bookkeeping (non-secret; orchestrator-owned in .C).
+    fetch_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    cursor: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_succeeded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[datetime] = timestamp_created_at()
     updated_at: Mapped[datetime] = timestamp_updated_at()
 
     notices: Mapped[list[RegulatoryNotice]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+    ingestion_runs: Mapped[list[RegulatoryIngestionRun]] = relationship(
         back_populates="source", cascade="all, delete-orphan"
     )
 
@@ -1607,6 +1627,186 @@ class RegulatoryDecisionAuditLog(Base):
     notice: Mapped[RegulatoryNotice] = relationship()
     product: Mapped[Product | None] = relationship()
     actor_user: Mapped[User] = relationship()
+
+
+class RegulatoryIngestionRun(Base):
+    """An ingestion attempt against one regulatory source — observability only
+    (F2.27.7.B).
+
+    The ledger row a future orchestrator (F2.27.7.C) opens when it ingests a
+    source and closes when it finishes. It records WHO triggered the run, WHEN
+    it ran, its terminal STATUS, and rolled-up COUNTERS (items seen / notices
+    created / deduped / failed, plus matches and alerts created downstream). It
+    NEVER mutates a product, an alert, or a compliance decision — this subphase
+    ships the storage only; no orchestrator, route, scheduler, or writer exists
+    yet.
+
+    `trigger` and `status` are `varchar` discriminators guarded by CHECK
+    constraints (no PG enum, so new values never need an `ALTER TYPE`),
+    matching the repo's audit-table convention; the closed value sets are
+    mirrored as Pydantic enums in `app.schemas.regulatory_ingestion`. Only
+    `manual` is produced by F2.27.7; `scheduled` is future-ready.
+    `actor_user_id` is NULLABLE (ON DELETE SET NULL): a `scheduled` run has no
+    human actor, and a deleted admin must not erase the run's history.
+    """
+
+    __tablename__ = "regulatory_ingestion_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "trigger IN ('manual', 'scheduled')",
+            name="ck_regulatory_ingestion_runs_trigger_valid",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed', 'partial')",
+            name="ck_regulatory_ingestion_runs_status_valid",
+        ),
+        CheckConstraint(
+            "items_seen >= 0 AND items_created >= 0 AND items_deduped >= 0 "
+            "AND items_failed >= 0 AND matches_created >= 0 "
+            "AND alerts_created >= 0",
+            name="ck_regulatory_ingestion_runs_counts_non_negative",
+        ),
+        Index("ix_regulatory_ingestion_runs_source_id", "source_id"),
+        Index("ix_regulatory_ingestion_runs_status", "status"),
+        Index("ix_regulatory_ingestion_runs_started_at", "started_at"),
+        Index("ix_regulatory_ingestion_runs_created_at", "created_at"),
+        Index(
+            "ix_regulatory_ingestion_runs_actor_user_id", "actor_user_id"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "regulatory_sources.id",
+            name="fk_regulatory_ingestion_runs_source_id_regulatory_sources",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    items_seen: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    items_created: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    items_deduped: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    items_failed: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    matches_created: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    alerts_created: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_regulatory_ingestion_runs_actor_user_id_users",
+            ondelete="SET NULL",
+        ),
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+    source: Mapped[RegulatorySource] = relationship(
+        back_populates="ingestion_runs"
+    )
+    actor_user: Mapped[User | None] = relationship()
+    items: Mapped[list[RegulatoryIngestionItem]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+
+
+class RegulatoryIngestionItem(Base):
+    """A per-item outcome within a `RegulatoryIngestionRun` (F2.27.7.B).
+
+    Append-only (only `created_at`, no `updated_at`): each row records what one
+    source item became — `created` (a new notice persisted), `deduped` (matched
+    an existing `(source_id, content_hash)` and reused it), or `failed` (a
+    parse/persist error). `notice_id` is set only for `created` / `deduped`
+    outcomes (ON DELETE SET NULL keeps the ledger row if a notice is removed).
+
+    Security: this table NEVER stores a raw payload/body, a secret, an API key,
+    or an auth header. It holds only the stable `external_ref`, the
+    `content_hash`, and a short machine `error_code` + human `error_message` —
+    there is deliberately NO `raw_payload` / `body` column.
+    """
+
+    __tablename__ = "regulatory_ingestion_items"
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('created', 'deduped', 'failed')",
+            name="ck_regulatory_ingestion_items_outcome_valid",
+        ),
+        Index("ix_regulatory_ingestion_items_run_id", "run_id"),
+        Index("ix_regulatory_ingestion_items_notice_id", "notice_id"),
+        Index("ix_regulatory_ingestion_items_outcome", "outcome"),
+        Index(
+            "ix_regulatory_ingestion_items_external_ref", "external_ref"
+        ),
+        Index(
+            "ix_regulatory_ingestion_items_content_hash", "content_hash"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "regulatory_ingestion_runs.id",
+            name=(
+                "fk_regulatory_ingestion_items_run_id_"
+                "regulatory_ingestion_runs"
+            ),
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    external_ref: Mapped[str | None] = mapped_column(String(255))
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    notice_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "regulatory_notices.id",
+            name=(
+                "fk_regulatory_ingestion_items_notice_id_"
+                "regulatory_notices"
+            ),
+            ondelete="SET NULL",
+        ),
+    )
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    run: Mapped[RegulatoryIngestionRun] = relationship(
+        back_populates="items"
+    )
+    notice: Mapped[RegulatoryNotice | None] = relationship()
 
 
 class PlatformSettings(Base):

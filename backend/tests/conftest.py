@@ -38,6 +38,14 @@ SETTINGS_ENV_VARS = (
     "EMAIL_FROM_ADDRESS",
     "EMAIL_FROM_NAME",
     "RESEND_API_KEY",
+    # F2.27.7.D: strip FDA regulatory-source client vars so RegulatorySettings
+    # falls back to safe/empty defaults (no base URL -> the real client is
+    # never built, no network) and a developer's populated backend/.env can
+    # never leak a real FDA_REGULATORY_API_KEY or base URL into the suite.
+    "FDA_REGULATORY_BASE_URL",
+    "FDA_REGULATORY_API_KEY",
+    "FDA_REGULATORY_TIMEOUT_SECONDS",
+    "FDA_REGULATORY_MAX_ITEMS_PER_RUN",
 )
 
 
@@ -100,6 +108,7 @@ def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
         config.DatabaseSettings,
         config.SupabaseAuthSettings,
         config.EmailSettings,
+        config.RegulatorySettings,
     ):
         monkeypatch.setitem(settings_cls.model_config, "env_file", None)
 
@@ -109,6 +118,7 @@ def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     config.get_db_settings.cache_clear()
     config.get_supabase_auth_settings.cache_clear()
     config.get_email_settings.cache_clear()
+    config.get_regulatory_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)

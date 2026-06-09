@@ -50,7 +50,13 @@ from app.schemas.regulatory import RegulatoryProductMatchRead
 from app.schemas.regulatory import RegulatorySourceCreate
 from app.schemas.regulatory import RegulatorySourceListResponse
 from app.schemas.regulatory import RegulatorySourceRead
+from app.schemas.regulatory_ingestion import (
+    RegulatoryIngestionRunDetailResponse,
+)
+from app.schemas.regulatory_ingestion import RegulatoryIngestionRunListResponse
+from app.schemas.regulatory_ingestion import RegulatoryIngestionTriggerRequest
 from app.services import regulatory as svc
+from app.services import regulatory_ingestion as ingestion_svc
 
 
 router = APIRouter(prefix="/admin/regulatory", tags=["admin-regulatory"])
@@ -272,3 +278,64 @@ def resolve_alert_endpoint(
     return svc.resolve_compliance_alert(
         db, alert_id, payload, actor_user_id=actor.id
     )
+
+
+# --------------------------------------------------------------------- #
+# Source ingestion — manual trigger + run observability (F2.27.7.C)
+# --------------------------------------------------------------------- #
+#
+# Admin-only acquisition surface. The trigger drives the existing idempotent
+# pipeline (ingest -> detect-matches -> create-alerts) and records a run +
+# per-item ledger; it applies NO compliance change and runs NO alert
+# lifecycle. A real fetch client is injected by the service layer (none ships
+# this subphase), so a trigger with no client resolvable records a failed run.
+
+
+@router.post(
+    "/sources/{source_id}/ingest",
+    response_model=RegulatoryIngestionRunDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def trigger_source_ingestion_endpoint(
+    source_id: UUID,
+    payload: RegulatoryIngestionTriggerRequest | None = None,
+    actor: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RegulatoryIngestionRunDetailResponse:
+    options = payload or RegulatoryIngestionTriggerRequest()
+    run = ingestion_svc.run_regulatory_source_ingestion(
+        db,
+        source_id,
+        actor_user_id=actor.id,
+        detect_matches=options.detect_matches,
+        create_alerts=options.create_alerts,
+    )
+    return ingestion_svc.get_regulatory_ingestion_run_detail(db, run.id)
+
+
+@router.get(
+    "/sources/{source_id}/ingestion-runs",
+    response_model=RegulatoryIngestionRunListResponse,
+)
+def list_source_ingestion_runs_endpoint(
+    source_id: UUID,
+    actor: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> RegulatoryIngestionRunListResponse:
+    return ingestion_svc.list_regulatory_ingestion_runs(
+        db, source_id=source_id, limit=limit, offset=offset
+    )
+
+
+@router.get(
+    "/ingestion-runs/{run_id}",
+    response_model=RegulatoryIngestionRunDetailResponse,
+)
+def get_ingestion_run_detail_endpoint(
+    run_id: UUID,
+    actor: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RegulatoryIngestionRunDetailResponse:
+    return ingestion_svc.get_regulatory_ingestion_run_detail(db, run_id)

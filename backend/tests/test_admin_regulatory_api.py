@@ -34,6 +34,8 @@ from app.db.models import ProductVariant
 from app.db.models import Store
 from app.db.models import User
 from app.db.models import UserRole
+from app.services import regulatory_ingestion as _ingestion_svc
+from app.services.regulatory_sources import StaticRegulatorySourceClient
 from tests.helpers.auth import auth_headers_for as _auth
 from tests.helpers.auth import make_user as central_make_user
 
@@ -912,3 +914,229 @@ def test_decisions_read_only_no_mutation_and_no_operational_audit(
     assert db_session.scalar(
         select(func.count()).select_from(ProductComplianceAuditLog)
     ) == 0
+
+
+# ===================================================================== #
+# Source ingestion — trigger + run observability (F2.27.7.C)
+# ===================================================================== #
+
+
+def _fda_raw(**over) -> dict:
+    item = {
+        "document_number": f"FDA-{uuid.uuid4().hex[:10]}",
+        "document_type": "enforcement_notice",
+        "title": "FDA enforcement notice",
+        "publication_date": "2024-09-15",
+        "url": "https://www.fda.gov/example",
+        "products": [
+            {
+                "product_name": "Example Vape",
+                "brand": "B",
+                "category": "ENDS",
+                "upc": "812345678901",
+                "item_number": "SKU-1",
+                "flavor": "Mint",
+            }
+        ],
+    }
+    item.update(over)
+    return item
+
+
+@pytest.fixture
+def inject_fda_client(monkeypatch):
+    """Patch the orchestrator's client resolver to a no-network static client.
+
+    API tests never perform real network: the admin trigger endpoint resolves
+    its client through `regulatory_ingestion.resolve_source_client`, which we
+    replace with an in-memory `StaticRegulatorySourceClient`.
+    """
+
+    def _install(items: list[dict]) -> None:
+        monkeypatch.setattr(
+            _ingestion_svc,
+            "resolve_source_client",
+            lambda source: StaticRegulatorySourceClient(items),
+        )
+
+    return _install
+
+
+def _fda_source(client: TestClient, admin: User, **over) -> dict:
+    return _make_source(client, admin, kind="fda_enforcement", **over)
+
+
+def test_admin_can_trigger_ingestion(
+    client: TestClient, admin: User, inject_fda_client
+):
+    inject_fda_client([_fda_raw()])
+    source = _fda_source(client, admin)
+    resp = client.post(
+        f"{BASE}/sources/{source['id']}/ingest", headers=_auth(admin)
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert set(body.keys()) == {"run", "items"}
+    run = body["run"]
+    assert run["source_id"] == source["id"]
+    assert run["trigger"] == "manual"
+    assert run["status"] == "succeeded"
+    assert run["items_seen"] == 1
+    assert run["items_created"] == 1
+    assert run["items_deduped"] == 0
+    assert run["items_failed"] == 0
+    assert run["actor_user_id"] == str(admin.id)
+    assert len(body["items"]) == 1
+    assert body["items"][0]["outcome"] == "created"
+
+
+def test_trigger_accepts_pipeline_flags(
+    client: TestClient, admin: User, inject_fda_client
+):
+    inject_fda_client([_fda_raw()])
+    source = _fda_source(client, admin)
+    resp = client.post(
+        f"{BASE}/sources/{source['id']}/ingest",
+        headers=_auth(admin),
+        json={"detect_matches": False, "create_alerts": False},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["run"]["matches_created"] == 0
+    assert resp.json()["run"]["alerts_created"] == 0
+
+
+@pytest.mark.parametrize("role", _NON_ADMIN_ROLES)
+def test_non_admin_cannot_trigger_ingestion(
+    client: TestClient, db_session: Session, admin: User, role: UserRole,
+    inject_fda_client,
+):
+    inject_fda_client([_fda_raw()])
+    source = _fda_source(client, admin)
+    user = central_make_user(db_session, role=role, store_id=None)
+    resp = client.post(
+        f"{BASE}/sources/{source['id']}/ingest", headers=_auth(user)
+    )
+    assert resp.status_code == 403
+
+
+def test_anonymous_cannot_trigger_ingestion(
+    client: TestClient, admin: User
+):
+    source = _fda_source(client, admin)
+    resp = client.post(f"{BASE}/sources/{source['id']}/ingest")
+    assert resp.status_code == 401
+
+
+def test_store_user_cannot_access_ingestion_endpoints(
+    client: TestClient, db_session: Session, admin: User, inject_fda_client
+):
+    inject_fda_client([_fda_raw()])
+    source = _fda_source(client, admin)
+    store = Store(name="Store", code=f"st-{uuid.uuid4().hex[:8]}")
+    db_session.add(store)
+    db_session.commit()
+    staff = central_make_user(
+        db_session, role=UserRole.staff, store_id=store.id
+    )
+
+    assert client.post(
+        f"{BASE}/sources/{source['id']}/ingest", headers=_auth(staff)
+    ).status_code == 403
+    assert client.get(
+        f"{BASE}/sources/{source['id']}/ingestion-runs",
+        headers=_auth(staff),
+    ).status_code == 403
+    assert client.get(
+        f"{BASE}/ingestion-runs/{uuid.uuid4()}", headers=_auth(staff)
+    ).status_code == 403
+
+
+def test_admin_can_list_ingestion_runs(
+    client: TestClient, admin: User, inject_fda_client
+):
+    inject_fda_client([_fda_raw()])
+    source = _fda_source(client, admin)
+    client.post(
+        f"{BASE}/sources/{source['id']}/ingest", headers=_auth(admin)
+    )
+    resp = client.get(
+        f"{BASE}/sources/{source['id']}/ingestion-runs", headers=_auth(admin)
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert {"items", "total", "limit", "offset"} <= body.keys()
+    assert body["total"] == 1
+    assert body["items"][0]["source_id"] == source["id"]
+
+
+def test_admin_can_read_ingestion_run_detail(
+    client: TestClient, admin: User, inject_fda_client
+):
+    inject_fda_client([_fda_raw()])
+    source = _fda_source(client, admin)
+    triggered = client.post(
+        f"{BASE}/sources/{source['id']}/ingest", headers=_auth(admin)
+    ).json()
+    run_id = triggered["run"]["id"]
+
+    resp = client.get(
+        f"{BASE}/ingestion-runs/{run_id}", headers=_auth(admin)
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["run"]["id"] == run_id
+    assert len(body["items"]) == 1
+    assert body["items"][0]["outcome"] == "created"
+
+
+def test_trigger_inactive_source_returns_409(
+    client: TestClient, admin: User, inject_fda_client
+):
+    inject_fda_client([_fda_raw()])
+    source = _fda_source(client, admin, is_active=False)
+    resp = client.post(
+        f"{BASE}/sources/{source['id']}/ingest", headers=_auth(admin)
+    )
+    assert resp.status_code == 409, resp.text
+
+
+def test_trigger_missing_source_returns_404(
+    client: TestClient, admin: User, inject_fda_client
+):
+    inject_fda_client([_fda_raw()])
+    resp = client.post(
+        f"{BASE}/sources/{uuid.uuid4()}/ingest", headers=_auth(admin)
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_run_detail_missing_returns_404(client: TestClient, admin: User):
+    resp = client.get(
+        f"{BASE}/ingestion-runs/{uuid.uuid4()}", headers=_auth(admin)
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_trigger_returns_409_when_run_already_running(
+    client: TestClient, db_session: Session, admin: User, inject_fda_client
+):
+    from datetime import UTC
+    from datetime import datetime
+
+    from app.db.models import RegulatoryIngestionRun
+
+    inject_fda_client([_fda_raw()])
+    source = _fda_source(client, admin)
+    running = RegulatoryIngestionRun(
+        source_id=uuid.UUID(source["id"]),
+        trigger="manual",
+        status="running",
+        started_at=datetime.now(UTC),
+    )
+    db_session.add(running)
+    db_session.commit()
+
+    resp = client.post(
+        f"{BASE}/sources/{source['id']}/ingest", headers=_auth(admin)
+    )
+    assert resp.status_code == 409, resp.text
