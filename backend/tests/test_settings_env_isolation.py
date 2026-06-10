@@ -106,3 +106,52 @@ def test_admin_editable_section_only_exposes_safe_fields() -> None:
         "default_locale",
         "default_timezone",
     }
+
+
+def test_quickbooks_settings_default_safe_and_empty() -> None:
+    """F2.27.9.A: with no QuickBooks process env set, settings must be safe.
+
+    If `backend/.env` were still being read (or a host shell leaked a value),
+    a real QUICKBOOKS_CLIENT_SECRET / QUICKBOOKS_TOKEN_ENCRYPTION_KEY would
+    appear here. The offline suite must start QuickBooks-unconfigured: blank
+    secrets, blank token-encryption key, sandbox environment.
+    """
+    from app.core.config import get_quickbooks_settings
+
+    get_quickbooks_settings.cache_clear()
+    settings = get_quickbooks_settings()
+
+    assert settings.quickbooks_client_id == ""
+    assert settings.quickbooks_client_secret == ""
+    assert settings.quickbooks_redirect_url == ""
+    assert settings.quickbooks_token_encryption_key == ""
+    # Safe defaults: sandbox environment, modest timeout / item cap.
+    assert settings.quickbooks_environment == "sandbox"
+    assert settings.quickbooks_timeout_seconds == 10.0
+    assert settings.quickbooks_max_items_per_run == 100
+
+
+def test_quickbooks_settings_can_opt_in_via_process_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A test that needs QuickBooks config opts in via process env.
+
+    Disabling the `.env` file must not break the opt-in path: setting the
+    QuickBooks vars in the process env (and clearing the cache) must flow
+    through. The secret values stay server-side — they are read here only to
+    prove the loader works, never serialized to a client.
+    """
+    from app.core.config import get_quickbooks_settings
+
+    monkeypatch.setenv("QUICKBOOKS_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("QUICKBOOKS_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("QUICKBOOKS_ENVIRONMENT", "production")
+    get_quickbooks_settings.cache_clear()
+    settings = get_quickbooks_settings()
+
+    assert settings.quickbooks_client_id == "test-client-id"
+    assert settings.quickbooks_client_secret == "test-client-secret"
+    assert settings.quickbooks_environment == "production"
+
+    # Leave no cached opt-in value behind for the next test.
+    get_quickbooks_settings.cache_clear()

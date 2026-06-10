@@ -143,6 +143,46 @@ class RegulatorySettings(CommonSettings):
     fda_regulatory_max_items_per_run: int = 100
 
 
+class QuickBooksSettings(CommonSettings):
+    """Server-only config for the QuickBooks / Intuit accounting integration
+    (F2.27.9.A — settings + storage foundation only).
+
+    This subphase ships configuration and storage ONLY: there is no OAuth flow,
+    QuickBooks client, mapping service, or sync orchestrator yet, and nothing
+    here calls Intuit or requires real credentials. All fields default
+    safe/empty so the app imports and starts with QuickBooks unconfigured, and
+    the offline test suite needs none of these set.
+
+    SERVER-ONLY SECRETS — keep on the backend, never expose to the frontend
+    (Vite would inline anything it can see), never put in web/.env.example,
+    never log:
+      - `quickbooks_client_secret` (the Intuit app client secret)
+      - `quickbooks_token_encryption_key` (the Fernet key that encrypts OAuth
+        access/refresh tokens at rest; see app.core.encryption)
+
+    `quickbooks_client_id` / `quickbooks_redirect_url` are non-secret app
+    config. `quickbooks_environment` selects the Intuit sandbox vs production
+    base URLs in a later subphase; it defaults to the safe `sandbox`.
+    """
+
+    quickbooks_client_id: str = ""
+    quickbooks_client_secret: str = ""
+    quickbooks_redirect_url: str = ""
+    quickbooks_environment: str = "sandbox"
+    quickbooks_token_encryption_key: str = ""
+    # F2.27.9.B: server-only HMAC secret used to sign the short-lived OAuth
+    # `state` (CSRF + tenant/actor binding). Never exposed to the frontend,
+    # never logged. Distinct from the token encryption key (domain separation:
+    # signing vs encryption). With it blank, the OAuth service raises a
+    # controlled config error rather than minting an unsigned/forgeable state.
+    quickbooks_oauth_state_secret: str = ""
+    # TTL (seconds) for a minted OAuth state. Short by design: the state is a
+    # one-shot CSRF/binding token, not a session.
+    quickbooks_oauth_state_ttl_seconds: int = 600
+    quickbooks_timeout_seconds: float = 10.0
+    quickbooks_max_items_per_run: int = 100
+
+
 @lru_cache
 def get_app_settings() -> AppSettings:
     return AppSettings()
@@ -166,3 +206,8 @@ def get_email_settings() -> EmailSettings:
 @lru_cache
 def get_regulatory_settings() -> RegulatorySettings:
     return RegulatorySettings()
+
+
+@lru_cache
+def get_quickbooks_settings() -> QuickBooksSettings:
+    return QuickBooksSettings()

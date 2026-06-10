@@ -1936,3 +1936,420 @@ class PlatformSettingsAuditLog(Base):
 
     settings: Mapped[PlatformSettings] = relationship()
     actor_user: Mapped[User] = relationship()
+
+
+# ===================================================================== #
+# F2.27.9.A — QuickBooks / accounting integration foundation (storage only).
+#
+# Backend-first foundation for connecting a store to an external accounting
+# provider (QuickBooks). This subphase introduces STORAGE ONLY: a per-store
+# integration row holding ENCRYPTED OAuth tokens, a variant <-> external-item
+# mapping, and an append-only sync ledger (run + per-item outcomes).
+#
+# Architectural guardrails baked in here (see the F2.27.9 diagnostic):
+#   - NubeRush stays authoritative for inventory; QuickBooks mirrors it. Nothing
+#     in this layer mutates inventory, products, or compliance — and no
+#     OAuth flow, QuickBooks client, mapping service, or sync orchestrator
+#     exists yet. These tables are inert data in F2.27.9.A.
+#   - Tokens are stored ENCRYPTED AT REST only: the columns are
+#     `access_token_encrypted` / `refresh_token_encrypted` (Fernet ciphertext
+#     via app.core.encryption). There is deliberately NO plaintext token,
+#     client secret, authorization header, or raw QuickBooks payload/body
+#     column anywhere in this section — that material lives in settings (the
+#     secret) or is never persisted (raw payloads).
+#   - `provider` / `status` / `environment` / `sync_type` / `direction` /
+#     `status` / `trigger` / `outcome` are `varchar` discriminators guarded by
+#     CHECK constraints (no PG enum, so new values never need an
+#     `ALTER TYPE`), matching the repo's audit/ledger convention
+#     (`RegulatoryIngestionRun.trigger/status`). The closed sets are mirrored
+#     as Pydantic enums in `app.schemas.accounting`.
+#   - Token-bearing tables are additionally protected by a Supabase deny-all
+#     FORCE-RLS migration (supabase/migrations); FastAPI reaches them only via
+#     the BYPASSRLS `nuberush_app` role.
+# ===================================================================== #
+
+
+class StoreAccountingIntegration(Base):
+    """A store's connection to an external accounting provider (QuickBooks).
+
+    One row per (store, provider). Holds the connection lifecycle `status`, the
+    `environment` (sandbox vs production), the Intuit `realm_id` (company id),
+    and the OAuth tokens — stored ENCRYPTED ONLY (`access_token_encrypted` /
+    `refresh_token_encrypted`). Token expiry timestamps and `scopes` are kept
+    for refresh bookkeeping; none of the token *material* is ever stored in
+    plaintext or returned by the API.
+
+    F2.27.9.A ships the table/model only: no OAuth flow, client, or sync writes
+    a token here yet.
+    """
+
+    __tablename__ = "store_accounting_integrations"
+    __table_args__ = (
+        UniqueConstraint(
+            "store_id",
+            "provider",
+            name="uq_store_accounting_integrations_store_provider",
+        ),
+        CheckConstraint(
+            "provider IN ('quickbooks')",
+            name="ck_store_accounting_integrations_provider_valid",
+        ),
+        CheckConstraint(
+            "status IN ('connected', 'disconnected', 'expired', 'error')",
+            name="ck_store_accounting_integrations_status_valid",
+        ),
+        CheckConstraint(
+            "environment IN ('sandbox', 'production')",
+            name="ck_store_accounting_integrations_environment_valid",
+        ),
+        Index(
+            "ix_store_accounting_integrations_store_id", "store_id"
+        ),
+        Index("ix_store_accounting_integrations_status", "status"),
+        Index(
+            "ix_store_accounting_integrations_connected_by_user_id",
+            "connected_by_user_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_store_accounting_integrations_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(
+        String(20),
+        server_default=text("'quickbooks'"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        server_default=text("'disconnected'"),
+        nullable=False,
+    )
+    environment: Mapped[str] = mapped_column(
+        String(20),
+        server_default=text("'sandbox'"),
+        nullable=False,
+    )
+    realm_id: Mapped[str | None] = mapped_column(String(64))
+    # OAuth tokens — ENCRYPTED AT REST ONLY (Fernet ciphertext). Never store
+    # plaintext token material here.
+    access_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    refresh_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    scopes: Mapped[str | None] = mapped_column(Text)
+    connected_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_store_accounting_integrations_connected_by_user_id",
+            ondelete="SET NULL",
+        ),
+    )
+    disconnected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+    # Forward-only relationships to existing tables (no back_populates) so the
+    # Store / User models stay untouched in this subphase.
+    store: Mapped[Store] = relationship()
+    connected_by_user: Mapped[User | None] = relationship()
+    mappings: Mapped[list[ProductVariantAccountingMapping]] = relationship(
+        back_populates="integration", cascade="all, delete-orphan"
+    )
+    sync_logs: Mapped[list[AccountingSyncLog]] = relationship(
+        back_populates="integration", cascade="all, delete-orphan"
+    )
+
+
+class ProductVariantAccountingMapping(Base):
+    """A 1:1 link between a NubeRush variant and an external accounting item.
+
+    Within one integration, one NubeRush variant maps to exactly one external
+    item and vice-versa (enforced by the two unique constraints). `store_id` is
+    denormalized for fast tenancy filtering and RLS clarity. `sync_enabled`
+    lets an operator opt a mapping out of a push without deleting it.
+
+    F2.27.9.A ships the table/model only: no mapping service writes rows yet.
+    """
+
+    __tablename__ = "product_variant_accounting_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "integration_id",
+            "variant_id",
+            name="uq_product_variant_accounting_mappings_integration_variant",
+        ),
+        UniqueConstraint(
+            "integration_id",
+            "external_item_id",
+            name="uq_product_variant_accounting_mappings_integration_external",
+        ),
+        CheckConstraint(
+            "provider IN ('quickbooks')",
+            name="ck_product_variant_accounting_mappings_provider_valid",
+        ),
+        Index(
+            "ix_product_variant_accounting_mappings_integration_id",
+            "integration_id",
+        ),
+        Index(
+            "ix_product_variant_accounting_mappings_variant_id",
+            "variant_id",
+        ),
+        Index(
+            "ix_product_variant_accounting_mappings_store_id",
+            "store_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    integration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "store_accounting_integrations.id",
+            name="fk_product_variant_accounting_mappings_integration_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_product_variant_accounting_mappings_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    variant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "product_variants.id",
+            name="fk_product_variant_accounting_mappings_variant_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(
+        String(20),
+        server_default=text("'quickbooks'"),
+        nullable=False,
+    )
+    external_item_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    external_item_name: Mapped[str | None] = mapped_column(String(255))
+    sync_enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("true"), nullable=False
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+    integration: Mapped[StoreAccountingIntegration] = relationship(
+        back_populates="mappings"
+    )
+    store: Mapped[Store] = relationship()
+    variant: Mapped[ProductVariant] = relationship()
+
+
+class AccountingSyncLog(Base):
+    """Append-only ledger header for one accounting sync run (F2.27.9.A).
+
+    Records WHAT kind of sync ran (`sync_type`), in which `direction`, its
+    terminal `status`, how it was triggered, when it ran, and rolled-up
+    counters. Observability only — a sync run NEVER mutates inventory,
+    products, or compliance. Mirrors `RegulatoryIngestionRun`: `varchar`
+    discriminators guarded by CHECK constraints, counters defaulting to 0, and
+    a redacted-only `error_summary` (never a raw payload/body).
+
+    Only `manual` is produced by F2.27.9; `scheduled` is a future-ready
+    discriminator value — NO automated scheduling exists or is implemented here.
+    `actor_user_id` is nullable (ON DELETE SET NULL): a future system-triggered
+    run has no human actor, and a deleted user must not erase the run's
+    history. The row is append-only (only `created_at`, no `updated_at`).
+    """
+
+    __tablename__ = "accounting_sync_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "sync_type IN ('item_discovery', 'mapping_pull', 'inventory_push')",
+            name="ck_accounting_sync_logs_sync_type_valid",
+        ),
+        CheckConstraint(
+            "direction IN ('pull', 'push')",
+            name="ck_accounting_sync_logs_direction_valid",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed', 'partial')",
+            name="ck_accounting_sync_logs_status_valid",
+        ),
+        CheckConstraint(
+            "trigger IN ('manual', 'scheduled')",
+            name="ck_accounting_sync_logs_trigger_valid",
+        ),
+        CheckConstraint(
+            "items_seen >= 0 AND items_created >= 0 AND items_updated >= 0 "
+            "AND items_skipped >= 0 AND items_failed >= 0",
+            name="ck_accounting_sync_logs_counts_non_negative",
+        ),
+        Index("ix_accounting_sync_logs_store_id", "store_id"),
+        Index("ix_accounting_sync_logs_integration_id", "integration_id"),
+        Index("ix_accounting_sync_logs_status", "status"),
+        Index("ix_accounting_sync_logs_started_at", "started_at"),
+        Index("ix_accounting_sync_logs_created_at", "created_at"),
+        Index("ix_accounting_sync_logs_actor_user_id", "actor_user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_accounting_sync_logs_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    integration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "store_accounting_integrations.id",
+            name="fk_accounting_sync_logs_integration_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    sync_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    direction: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    items_seen: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    items_created: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    items_updated: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    items_skipped: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    items_failed: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_accounting_sync_logs_actor_user_id",
+            ondelete="SET NULL",
+        ),
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    integration: Mapped[StoreAccountingIntegration] = relationship(
+        back_populates="sync_logs"
+    )
+    store: Mapped[Store] = relationship()
+    actor_user: Mapped[User | None] = relationship()
+    items: Mapped[list[AccountingSyncLogItem]] = relationship(
+        back_populates="sync_log", cascade="all, delete-orphan"
+    )
+
+
+class AccountingSyncLogItem(Base):
+    """A per-item outcome within an `AccountingSyncLog` (F2.27.9.A).
+
+    Append-only (only `created_at`): each row records what one item became
+    during a run — `created` / `updated` / `skipped` / `failed`. `variant_id`
+    is nullable with ON DELETE SET NULL so the ledger row survives variant
+    removal; an inbound-discovery item may have no NubeRush variant yet.
+
+    Security: this table NEVER stores a raw payload/body, a secret, a token, or
+    an auth header — only the stable `external_item_id` / `external_item_name`,
+    the `outcome`, and a short machine `error_code` + human `error_message`.
+    There is deliberately NO `raw_payload` / `body` column.
+    """
+
+    __tablename__ = "accounting_sync_log_items"
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('created', 'updated', 'skipped', 'failed')",
+            name="ck_accounting_sync_log_items_outcome_valid",
+        ),
+        Index("ix_accounting_sync_log_items_sync_log_id", "sync_log_id"),
+        Index("ix_accounting_sync_log_items_variant_id", "variant_id"),
+        Index("ix_accounting_sync_log_items_outcome", "outcome"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    sync_log_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "accounting_sync_logs.id",
+            name="fk_accounting_sync_log_items_sync_log_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "product_variants.id",
+            name="fk_accounting_sync_log_items_variant_id",
+            ondelete="SET NULL",
+        ),
+    )
+    external_item_id: Mapped[str | None] = mapped_column(String(255))
+    external_item_name: Mapped[str | None] = mapped_column(String(255))
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = timestamp_created_at()
+
+    sync_log: Mapped[AccountingSyncLog] = relationship(
+        back_populates="items"
+    )
+    variant: Mapped[ProductVariant | None] = relationship()

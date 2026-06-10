@@ -46,6 +46,21 @@ SETTINGS_ENV_VARS = (
     "FDA_REGULATORY_API_KEY",
     "FDA_REGULATORY_TIMEOUT_SECONDS",
     "FDA_REGULATORY_MAX_ITEMS_PER_RUN",
+    # F2.27.9.A: strip QuickBooks / accounting integration vars so
+    # QuickBooksSettings falls back to safe/empty defaults (no client id /
+    # secret, no token encryption key -> the encryption helper raises a
+    # controlled error, no real Intuit config) and a developer's populated
+    # backend/.env can never leak a real QUICKBOOKS_CLIENT_SECRET or
+    # QUICKBOOKS_TOKEN_ENCRYPTION_KEY into the offline test suite.
+    "QUICKBOOKS_CLIENT_ID",
+    "QUICKBOOKS_CLIENT_SECRET",
+    "QUICKBOOKS_REDIRECT_URL",
+    "QUICKBOOKS_ENVIRONMENT",
+    "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
+    "QUICKBOOKS_OAUTH_STATE_SECRET",
+    "QUICKBOOKS_OAUTH_STATE_TTL_SECONDS",
+    "QUICKBOOKS_TIMEOUT_SECONDS",
+    "QUICKBOOKS_MAX_ITEMS_PER_RUN",
 )
 
 
@@ -109,6 +124,7 @@ def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
         config.SupabaseAuthSettings,
         config.EmailSettings,
         config.RegulatorySettings,
+        config.QuickBooksSettings,
     ):
         monkeypatch.setitem(settings_cls.model_config, "env_file", None)
 
@@ -119,6 +135,7 @@ def _isolate_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     config.get_supabase_auth_settings.cache_clear()
     config.get_email_settings.cache_clear()
     config.get_regulatory_settings.cache_clear()
+    config.get_quickbooks_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
