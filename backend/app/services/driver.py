@@ -16,10 +16,13 @@ from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy import func
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
 from app.db.models import DriverApprovalStatus
+from app.db.models import DriverDeliveryOperationalState
+from app.db.models import DriverDeliveryOperationalStateValue
 from app.db.models import DriverProfile
 from app.db.models import DriverProfileStatus
 from app.db.models import OrderDriverAssignment
@@ -28,6 +31,7 @@ from app.db.models import User
 from app.db.models import UserRole
 from app.schemas.driver import DriverAssignmentListResponse
 from app.schemas.driver import DriverAssignmentRead
+from app.schemas.driver import DriverDeliveryOperationalStateRead
 from app.schemas.driver import DriverEligibilityBlocker
 from app.schemas.driver import DriverEligibilityBlockerCode
 from app.schemas.driver import DriverEligibilityBlockerSeverity
@@ -365,3 +369,143 @@ def get_driver_assignment(
         )
 
     return DriverAssignmentRead.model_validate(assignment)
+
+
+# --------------------------------------------------------------------- #
+# Delivery operational state reads (Dr.1.1.G.3)
+# --------------------------------------------------------------------- #
+#
+# Internal / read-safe foundation for the THIRD domain axis (physical driver
+# delivery flow). Both functions are self-scoped by `DriverProfile` and
+# store-bound by `current_user.store_id`, reusing the same anti-enumeration
+# 404 boundary as `get_driver_assignment`. There is NO transition logic here:
+# `ensure_*` only materializes the initial `not_started` row; it never accepts
+# an arbitrary state, never advances one, and never mutates the order, the
+# assignment, inventory, or any audit/event log. Neither function is wired to
+# an endpoint in G.3.
+
+
+def _resolve_owned_assignment(
+    db: Session,
+    driver_profile: DriverProfile,
+    current_user: User,
+    assignment_id: UUID,
+) -> OrderDriverAssignment:
+    """Return the assignment iff it belongs to this driver and store.
+
+    Raises 404 "Driver assignment not found" otherwise — a non-existent
+    assignment, another driver's, or another store's are indistinguishable so
+    existence never leaks across the scope boundary.
+    """
+    assignment = db.scalar(
+        select(OrderDriverAssignment).where(
+            OrderDriverAssignment.id == assignment_id,
+            OrderDriverAssignment.driver_profile_id == driver_profile.id,
+            OrderDriverAssignment.store_id == current_user.store_id,
+        )
+    )
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Driver assignment not found",
+        )
+    return assignment
+
+
+def get_driver_delivery_operational_state(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+) -> DriverDeliveryOperationalStateRead:
+    """Return the operational state of one of the driver's own assignments.
+
+    Read-only and self-scoped (Dr.1.1.G.3). The assignment is resolved under
+    the driver + store scope first; if it is not the driver's own, a generic
+    404 "Driver assignment not found" is raised (anti-enumeration). If the
+    assignment IS the driver's own but has no operational-state row yet, a
+    distinct 404 "Driver delivery operational state not found" is raised — a
+    pure `get_*` never materializes state. Never mutates, commits, or flushes.
+    """
+    driver_profile = get_driver_profile_for_user(db, current_user)
+    assignment = _resolve_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState).where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id,
+            DriverDeliveryOperationalState.driver_profile_id
+            == driver_profile.id,
+            DriverDeliveryOperationalState.store_id == current_user.store_id,
+        )
+    )
+    if operational_state is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Driver delivery operational state not found",
+        )
+
+    return DriverDeliveryOperationalStateRead.model_validate(
+        operational_state
+    )
+
+
+def ensure_driver_delivery_operational_state(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+) -> DriverDeliveryOperationalStateRead:
+    """Return (creating if absent) the assignment's initial operational state.
+
+    Self-scoped (Dr.1.1.G.3): the assignment must belong to the current driver
+    and store, else 404 "Driver assignment not found" (anti-enumeration). If a
+    state row already exists it is returned unchanged; otherwise exactly one
+    row is created with `state = not_started` and anchors copied from the
+    assignment.
+
+    Idempotent: concurrent first-calls are guarded by the UNIQUE(assignment_id)
+    constraint — on a race the IntegrityError is swallowed and the now-existing
+    row is returned. This is the ONLY write in the operational-state layer for
+    G.3; it never accepts an external state, advances a state, or mutates the
+    order, the assignment, inventory, or any audit log.
+    """
+    driver_profile = get_driver_profile_for_user(db, current_user)
+    assignment = _resolve_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+
+    existing = db.scalar(
+        select(DriverDeliveryOperationalState).where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id
+        )
+    )
+    if existing is not None:
+        return DriverDeliveryOperationalStateRead.model_validate(existing)
+
+    operational_state = DriverDeliveryOperationalState(
+        assignment_id=assignment.id,
+        order_id=assignment.order_id,
+        driver_profile_id=assignment.driver_profile_id,
+        store_id=assignment.store_id,
+        state=DriverDeliveryOperationalStateValue.not_started.value,
+    )
+    db.add(operational_state)
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent caller won the UNIQUE(assignment_id) race; return the
+        # row they created instead of duplicating or failing.
+        db.rollback()
+        existing = db.scalar(
+            select(DriverDeliveryOperationalState).where(
+                DriverDeliveryOperationalState.assignment_id == assignment.id
+            )
+        )
+        if existing is None:
+            raise
+        return DriverDeliveryOperationalStateRead.model_validate(existing)
+
+    db.refresh(operational_state)
+    return DriverDeliveryOperationalStateRead.model_validate(
+        operational_state
+    )

@@ -173,3 +173,32 @@ class DriverAssignmentListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# --------------------------------------------------------------------- #
+# Delivery operational state read model (Dr.1.1.G.3)
+# --------------------------------------------------------------------- #
+#
+# Internal / read-safe view of a `DriverDeliveryOperationalState` row — the
+# THIRD domain axis (physical driver flow), distinct from OrderStatus and the
+# assignment lifecycle. G.3 is FOUNDATION only: this schema exists for service
+# returns, but is deliberately NOT yet wired into `DriverAssignmentRead` or any
+# endpoint. There is no transition request schema (pickup / proof / fail /
+# return / ID-verification) — those belong to future action subphases.
+
+
+class DriverDeliveryOperationalStateRead(BaseModel):
+    """Self-scoped view of an assignment's delivery operational state."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    assignment_id: UUID
+    order_id: UUID
+    driver_profile_id: UUID
+    store_id: UUID
+    state: str
+    state_started_at: datetime
+    last_transition_at: datetime
+    created_at: datetime
+    updated_at: datetime
