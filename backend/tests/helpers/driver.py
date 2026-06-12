@@ -1,8 +1,9 @@
-"""Test helper for driver profiles (Dr.1.1.C).
+"""Test helpers for the driver domain (Dr.1.1.C / Dr.1.1.E).
 
-Single chokepoint for building `DriverProfile` rows in tests. It persists the
-minimal profile only — no documents, vehicles, assignments, delivery state,
-eligibility data, payout, or earnings (none of which exist in Dr.1.1.C).
+Chokepoints for building `DriverProfile` (Dr.1.1.C) and
+`OrderDriverAssignment` (Dr.1.1.E) rows in tests. They persist the minimal
+foundation rows only — no documents, vehicles, delivery state, dispatch
+logic, eligibility data, payout, or earnings.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.db.models import DriverProfile
+from app.db.models import Order
+from app.db.models import OrderDriverAssignment
 from app.db.models import Store
 from app.db.models import User
 
@@ -45,3 +48,30 @@ def make_driver_profile(
     db.commit()
     db.refresh(profile)
     return profile
+
+
+def make_order_driver_assignment(
+    db: Session,
+    *,
+    order: Order,
+    driver_profile: DriverProfile,
+    store: Store,
+    status: str = "assigned",
+) -> OrderDriverAssignment:
+    """Persist and return an ``OrderDriverAssignment`` for tests (Dr.1.1.E).
+
+    The caller passes explicit order / driver_profile / store so tenancy
+    setup stays visible in the test. This builds ONLY the assignment row: it
+    runs no dispatch logic, mutates no order status, and triggers no driver
+    actions. Commits and refreshes so server-side defaults are populated.
+    """
+    assignment = OrderDriverAssignment(
+        order_id=order.id,
+        driver_profile_id=driver_profile.id,
+        store_id=store.id,
+        status=status,
+    )
+    db.add(assignment)
+    db.commit()
+    db.refresh(assignment)
+    return assignment

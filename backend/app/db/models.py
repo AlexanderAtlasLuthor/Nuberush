@@ -165,6 +165,9 @@ class Store(Base):
     driver_profiles: Mapped[list[DriverProfile]] = relationship(
         back_populates="store"
     )
+    driver_assignments: Mapped[list[OrderDriverAssignment]] = relationship(
+        back_populates="store"
+    )
 
 
 class User(Base):
@@ -583,6 +586,9 @@ class Order(Base):
     items: Mapped[list[OrderItem]] = relationship(back_populates="order")
     audit_logs: Mapped[list[OrderAuditLog]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
+    )
+    driver_assignments: Mapped[list[OrderDriverAssignment]] = relationship(
+        back_populates="order"
     )
 
 
@@ -2457,3 +2463,117 @@ class DriverProfile(Base):
 
     user: Mapped[User] = relationship(back_populates="driver_profile")
     store: Mapped[Store] = relationship(back_populates="driver_profiles")
+    assignments: Mapped[list[OrderDriverAssignment]] = relationship(
+        back_populates="driver_profile"
+    )
+
+
+class OrderDriverAssignmentStatus(str, enum.Enum):
+    """Lifecycle of a driver<->order assignment (Dr.1.1.A §10, frozen).
+
+    Stored as a VARCHAR + CHECK discriminator (not a PG enum), matching the
+    recent convention. This is the ASSIGNMENT lifecycle only — delivery
+    operational micro-states (pickup_confirmed, en_route_to_customer, …)
+    belong to a separate future contract (§11) and must never appear here.
+    """
+
+    offered = "offered"
+    accepted = "accepted"
+    declined = "declined"
+    expired = "expired"
+    assigned = "assigned"
+    started = "started"
+    completed = "completed"
+    canceled = "canceled"
+
+
+class OrderDriverAssignment(Base):
+    """Dedicated driver<->order assignment record (Dr.1.1.E).
+
+    The assignment is its OWN entity, deliberately NOT an `assigned_driver_id`
+    column on `orders` (Dr.1.1.A §10). It carries its own lifecycle `status`
+    (the frozen §10 vocabulary) and lifecycle timestamps. It does NOT alter
+    inventory, complete orders, or overload `OrderStatus`, and it never holds
+    delivery operational micro-states (those are a separate future contract,
+    §11).
+
+    This is a MODEL FOUNDATION only: there is no dispatch, no accept/decline,
+    no read endpoint, and no service in Dr.1.1.E. Status transitions, the
+    user/store match invariant (assignment.store_id == order.store_id ==
+    driver_profile.store_id), and any uniqueness rule (e.g. one active
+    assignment per order) are deferred to Dr.1.1.F — no unique/partial-unique
+    constraint is created here because offer fan-out semantics are not frozen.
+    """
+
+    __tablename__ = "order_driver_assignments"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('offered', 'accepted', 'declined', 'expired', "
+            "'assigned', 'started', 'completed', 'canceled')",
+            name="ck_order_driver_assignments_status_valid",
+        ),
+        Index("ix_order_driver_assignments_order_id", "order_id"),
+        Index(
+            "ix_order_driver_assignments_driver_profile_id",
+            "driver_profile_id",
+        ),
+        Index("ix_order_driver_assignments_store_id", "store_id"),
+        Index("ix_order_driver_assignments_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "orders.id",
+            name="fk_order_driver_assignments_order_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    driver_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "driver_profiles.id",
+            name="fk_order_driver_assignments_driver_profile_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_order_driver_assignments_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    assigned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    declined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    canceled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+    order: Mapped[Order] = relationship(back_populates="driver_assignments")
+    driver_profile: Mapped[DriverProfile] = relationship(
+        back_populates="assignments"
+    )
+    store: Mapped[Store] = relationship(back_populates="driver_assignments")
