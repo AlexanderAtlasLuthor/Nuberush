@@ -509,3 +509,137 @@ def ensure_driver_delivery_operational_state(
     return DriverDeliveryOperationalStateRead.model_validate(
         operational_state
     )
+
+
+# --------------------------------------------------------------------- #
+# Assignment accept / decline (Dr.1.1.I)
+# --------------------------------------------------------------------- #
+#
+# The first driver-side MUTATIONS. A driver accepts or declines one of their
+# OWN offered assignments. These are self-scoped + store-bound, reuse the same
+# anti-enumeration 404 boundary, and mutate ONLY the assignment's `status` and
+# its `accepted_at` / `declined_at` timestamp. They never touch Order.status,
+# inventory, the operational-state row (no `ensure_*`), `assigned_at` /
+# `canceled_at` / `completed_at`, or any audit log.
+#
+# Only `offered` is a valid source: offered -> accepted (accept) and
+# offered -> declined (decline). Repeating the SAME decision is idempotent
+# (200, timestamp not rewritten). The OPPOSITE terminal decision is a 409
+# conflict. Every other source status (expired / canceled / completed /
+# started / assigned) is a 422 invalid transition — mirroring the
+# 422-for-transition / 409-for-conflict convention in `services.orders`.
+
+
+def _decide_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+    *,
+    accept: bool,
+) -> DriverAssignmentRead:
+    """Shared accept/decline core. `accept=True` accepts, else declines.
+
+    The assignment is loaded under a row lock (`with_for_update`) so the
+    status is re-checked against fresh state before mutating — two concurrent
+    decisions cannot both win. Mutates only `status` + the decision's
+    timestamp; commits once.
+    """
+    driver_profile = get_driver_profile_for_user(db, current_user)
+
+    assignment = db.scalar(
+        select(OrderDriverAssignment)
+        .where(
+            OrderDriverAssignment.id == assignment_id,
+            OrderDriverAssignment.driver_profile_id == driver_profile.id,
+            OrderDriverAssignment.store_id == current_user.store_id,
+        )
+        .with_for_update()
+    )
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Driver assignment not found",
+        )
+
+    offered = OrderDriverAssignmentStatus.offered.value
+    target = (
+        OrderDriverAssignmentStatus.accepted.value
+        if accept
+        else OrderDriverAssignmentStatus.declined.value
+    )
+    opposite = (
+        OrderDriverAssignmentStatus.declined.value
+        if accept
+        else OrderDriverAssignmentStatus.accepted.value
+    )
+    verb = "accepted" if accept else "declined"
+    current = assignment.status
+
+    if current == offered:
+        assignment.status = target
+        now = datetime.now(timezone.utc)
+        if accept:
+            assignment.accepted_at = now
+        else:
+            assignment.declined_at = now
+        db.commit()
+        db.refresh(assignment)
+    elif current == target:
+        # Idempotent repeat of the same decision: return unchanged, never
+        # rewrite the timestamp. Release the row lock.
+        db.commit()
+    elif current == opposite:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Assignment already {opposite}",
+        )
+    else:
+        # expired / canceled / completed / started / assigned.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Assignment cannot be {verb} from status '{current}'"
+            ),
+        )
+
+    return DriverAssignmentRead.model_validate(assignment)
+
+
+def accept_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+) -> DriverAssignmentRead:
+    """Accept one of the current driver's own offered assignments (Dr.1.1.I).
+
+    offered -> accepted (sets `accepted_at`). An already-accepted assignment
+    is returned idempotently (200, `accepted_at` unchanged). An already-
+    declined assignment is a 409 conflict. Any other source status is a 422
+    invalid transition. Self-scoped + store-bound; a non-own/foreign/missing
+    assignment is a 404 "Driver assignment not found". Mutates only the
+    assignment's status/`accepted_at`; touches nothing else.
+    """
+    return _decide_driver_assignment(
+        db, current_user, assignment_id, accept=True
+    )
+
+
+def decline_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+) -> DriverAssignmentRead:
+    """Decline one of the current driver's own offered assignments (Dr.1.1.I).
+
+    offered -> declined (sets `declined_at`). An already-declined assignment
+    is returned idempotently (200, `declined_at` unchanged). An already-
+    accepted assignment is a 409 conflict. Any other source status is a 422
+    invalid transition. Self-scoped + store-bound; a non-own/foreign/missing
+    assignment is a 404 "Driver assignment not found". Mutates only the
+    assignment's status/`declined_at`; touches nothing else.
+    """
+    return _decide_driver_assignment(
+        db, current_user, assignment_id, accept=False
+    )

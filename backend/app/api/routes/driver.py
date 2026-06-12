@@ -1,22 +1,25 @@
-"""Driver-facing routes (Dr.1.1.C / Dr.1.1.D / Dr.1.1.F / Dr.1.1.H).
+"""Driver-facing routes (Dr.1.1.C / Dr.1.1.D / Dr.1.1.F / Dr.1.1.H / Dr.1.1.I).
 
 Every endpoint is gated by `require_store_bound_driver` (Dr.1.1.B), so only
 an exact, store-bound driver reaches it; staff/manager/owner/admin and
 storeless drivers are rejected upstream with 403.
 
-The driver runtime surface is five self-scoped, read-only GETs:
-  - GET /driver/me                                       (Dr.1.1.C)
-  - GET /driver/eligibility                              (Dr.1.1.D)
-  - GET /driver/assignments                              (Dr.1.1.F)
-  - GET /driver/assignments/{id}                         (Dr.1.1.F)
-  - GET /driver/assignments/{id}/delivery-state          (Dr.1.1.H)
+The driver runtime surface is five self-scoped, read-only GETs plus the first
+two driver-side mutations (Dr.1.1.I accept/decline):
+  - GET  /driver/me                                       (Dr.1.1.C)
+  - GET  /driver/eligibility                              (Dr.1.1.D)
+  - GET  /driver/assignments                              (Dr.1.1.F)
+  - GET  /driver/assignments/{id}                         (Dr.1.1.F)
+  - GET  /driver/assignments/{id}/delivery-state          (Dr.1.1.H)
+  - POST /driver/assignments/{id}/accept                  (Dr.1.1.I)
+  - POST /driver/assignments/{id}/decline                 (Dr.1.1.I)
 
-Dispatch, accept/decline, go-online/go-offline, active delivery, proof of
-delivery, and any mutating action are later Dr.1.1 subphases and must not be
-added here. There is no POST/PATCH/DELETE on the /driver surface. The
-delivery-state read (Dr.1.1.H) is read-only: it returns the persisted
-operational state if present and never materializes one (that is a future
-action subphase, via `ensure_*` — not used here).
+accept/decline mutate ONLY the assignment's status + accepted_at/declined_at
+(offered -> accepted/declined). Start/pickup/proof/complete/fail/return,
+go-online/go-offline, dispatch, GPS, and ID verification are later subphases
+and must not be added here. There is no PATCH/PUT/DELETE on the /driver
+surface, and no POST beyond accept/decline. The delivery-state read (Dr.1.1.H)
+never materializes state (`ensure_*` is not used here).
 """
 
 from __future__ import annotations
@@ -37,6 +40,8 @@ from app.schemas.driver import DriverAssignmentRead
 from app.schemas.driver import DriverDeliveryOperationalStateRead
 from app.schemas.driver import DriverEligibilityRead
 from app.schemas.driver import DriverProfileRead
+from app.services.driver import accept_driver_assignment
+from app.services.driver import decline_driver_assignment
 from app.services.driver import evaluate_driver_eligibility
 from app.services.driver import get_driver_assignment
 from app.services.driver import get_driver_delivery_operational_state
@@ -134,3 +139,41 @@ def read_current_driver_delivery_state(
     return get_driver_delivery_operational_state(
         db=db, current_user=current_user, assignment_id=assignment_id
     )
+
+
+@router.post(
+    "/assignments/{assignment_id}/accept",
+    response_model=DriverAssignmentRead,
+)
+def accept_current_driver_assignment(
+    assignment_id: UUID,
+    current_user: User = Depends(require_store_bound_driver),
+    db: Session = Depends(get_db),
+) -> DriverAssignmentRead:
+    """Accept one of the current driver's own offered assignments (Dr.1.1.I).
+
+    offered -> accepted; idempotent on an already-accepted assignment (200,
+    `accepted_at` unchanged); 409 if already declined; 422 from any other
+    status; 404 (anti-enumeration) for a non-own / foreign / missing
+    assignment. Mutates only the assignment's status + `accepted_at`.
+    """
+    return accept_driver_assignment(db, current_user, assignment_id)
+
+
+@router.post(
+    "/assignments/{assignment_id}/decline",
+    response_model=DriverAssignmentRead,
+)
+def decline_current_driver_assignment(
+    assignment_id: UUID,
+    current_user: User = Depends(require_store_bound_driver),
+    db: Session = Depends(get_db),
+) -> DriverAssignmentRead:
+    """Decline one of the current driver's own offered assignments (Dr.1.1.I).
+
+    offered -> declined; idempotent on an already-declined assignment (200,
+    `declined_at` unchanged); 409 if already accepted; 422 from any other
+    status; 404 (anti-enumeration) for a non-own / foreign / missing
+    assignment. Mutates only the assignment's status + `declined_at`.
+    """
+    return decline_driver_assignment(db, current_user, assignment_id)

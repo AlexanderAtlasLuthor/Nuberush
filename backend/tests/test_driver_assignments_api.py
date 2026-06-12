@@ -407,7 +407,9 @@ def test_response_contains_no_pii_or_money(
 # --------------------------------------------------------------------- #
 
 
-def test_driver_route_surface_is_four_read_only_routes() -> None:
+def test_driver_route_surface_is_reads_plus_accept_decline() -> None:
+    """After Dr.1.1.I the /driver surface is five read-only GETs plus exactly
+    two mutations: POST .../accept and POST .../decline."""
     from app.main import app
 
     driver_routes = [
@@ -415,22 +417,29 @@ def test_driver_route_surface_is_four_read_only_routes() -> None:
         for route in app.router.routes
         if getattr(route, "path", "").startswith("/driver")
     ]
-    paths = {route.path for route in driver_routes}
-    assert paths == {
-        "/driver/me",
-        "/driver/eligibility",
-        "/driver/assignments",
-        "/driver/assignments/{assignment_id}",
-        "/driver/assignments/{assignment_id}/delivery-state",
+    surface = {
+        (
+            next(m for m in route.methods if m not in ("HEAD", "OPTIONS")),
+            route.path,
+        )
+        for route in driver_routes
+    }
+    assert surface == {
+        ("GET", "/driver/me"),
+        ("GET", "/driver/eligibility"),
+        ("GET", "/driver/assignments"),
+        ("GET", "/driver/assignments/{assignment_id}"),
+        ("GET", "/driver/assignments/{assignment_id}/delivery-state"),
+        ("POST", "/driver/assignments/{assignment_id}/accept"),
+        ("POST", "/driver/assignments/{assignment_id}/decline"),
     }
 
+    # No PATCH/PUT/DELETE anywhere on the /driver surface.
     for route in driver_routes:
         methods = set(route.methods)
-        assert "POST" not in methods
         assert "PATCH" not in methods
-        assert "DELETE" not in methods
         assert "PUT" not in methods
-        assert "GET" in methods
+        assert "DELETE" not in methods
 
 
 def test_no_mutative_or_operational_driver_routes() -> None:
@@ -441,15 +450,27 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         for route in app.router.routes
         if getattr(route, "path", "").startswith("/driver")
     }
-    # None of the deferred operational surfaces exist yet.
+    # accept/decline may appear ONLY in their two approved exact paths.
+    approved_decisions = {
+        "/driver/assignments/{assignment_id}/accept",
+        "/driver/assignments/{assignment_id}/decline",
+    }
+    for p in driver_paths:
+        if "accept" in p or "decline" in p:
+            assert p in approved_decisions, p
+    # None of the deferred operational / mutative surfaces exist yet.
     for banned_substr in (
-        "accept",
-        "decline",
         "online",
         "offline",
         "active-delivery",
         "active_delivery",
         "dispatch",
         "proof",
+        "pickup",
+        "dropoff",
+        "complete",
+        "fail",
+        "return-to-store",
+        "start",
     ):
         assert not any(banned_substr in p for p in driver_paths), banned_substr

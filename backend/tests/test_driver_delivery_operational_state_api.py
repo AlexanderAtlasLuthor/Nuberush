@@ -286,7 +286,7 @@ def test_get_state_anonymous_401(client: TestClient) -> None:
 # --------------------------------------------------------------------- #
 
 
-def test_driver_route_surface_is_five_read_only_routes() -> None:
+def test_driver_route_surface_reads_plus_accept_decline() -> None:
     from app.main import app
 
     driver_routes = [
@@ -294,19 +294,29 @@ def test_driver_route_surface_is_five_read_only_routes() -> None:
         for route in app.router.routes
         if getattr(route, "path", "").startswith("/driver")
     ]
-    paths = {route.path for route in driver_routes}
-    assert paths == {
-        "/driver/me",
-        "/driver/eligibility",
-        "/driver/assignments",
-        "/driver/assignments/{assignment_id}",
-        "/driver/assignments/{assignment_id}/delivery-state",
+    surface = {
+        (
+            next(m for m in route.methods if m not in ("HEAD", "OPTIONS")),
+            route.path,
+        )
+        for route in driver_routes
+    }
+    assert surface == {
+        ("GET", "/driver/me"),
+        ("GET", "/driver/eligibility"),
+        ("GET", "/driver/assignments"),
+        ("GET", "/driver/assignments/{assignment_id}"),
+        ("GET", "/driver/assignments/{assignment_id}/delivery-state"),
+        ("POST", "/driver/assignments/{assignment_id}/accept"),
+        ("POST", "/driver/assignments/{assignment_id}/decline"),
     }
 
+    # The delivery-state read stays GET-only; no mutative method leaks onto it.
     for route in driver_routes:
         methods = set(route.methods)
-        assert "POST" not in methods
         assert "PATCH" not in methods
-        assert "DELETE" not in methods
         assert "PUT" not in methods
-        assert "GET" in methods
+        assert "DELETE" not in methods
+        if route.path.endswith("/delivery-state"):
+            assert methods >= {"GET"}
+            assert "POST" not in methods

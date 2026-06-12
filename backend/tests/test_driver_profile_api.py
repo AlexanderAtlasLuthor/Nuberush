@@ -189,7 +189,8 @@ def test_anonymous_401(client: TestClient) -> None:
 def test_no_other_driver_routes_exist() -> None:
     """The driver runtime routes are GET /driver/me (Dr.1.1.C),
     GET /driver/eligibility (Dr.1.1.D), the two assignment reads (Dr.1.1.F),
-    and the delivery-state read (Dr.1.1.H) — nothing else."""
+    the delivery-state read (Dr.1.1.H), and the accept/decline mutations
+    (Dr.1.1.I) — nothing else."""
     from app.main import app
 
     driver_paths = {
@@ -203,4 +204,6 @@ def test_no_other_driver_routes_exist() -> None:
         "/driver/assignments",
         "/driver/assignments/{assignment_id}",
         "/driver/assignments/{assignment_id}/delivery-state",
+        "/driver/assignments/{assignment_id}/accept",
+        "/driver/assignments/{assignment_id}/decline",
     }

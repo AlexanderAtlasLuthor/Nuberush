@@ -241,9 +241,9 @@ def test_response_and_blocker_shape(
 
 
 def test_driver_runtime_route_surface() -> None:
-    """The only /driver runtime routes are the five self-scoped reads
-    GET /driver/me, /eligibility, /assignments, /assignments/{id} and
-    /assignments/{id}/delivery-state — nothing else, no write methods."""
+    """The /driver runtime routes are the five self-scoped reads plus the two
+    accept/decline mutations (Dr.1.1.I) — nothing else. The only write methods
+    are POST on .../accept and .../decline; no PATCH/PUT/DELETE anywhere."""
     from app.main import app
 
     driver_routes = {
@@ -258,12 +258,23 @@ def test_driver_runtime_route_surface() -> None:
         "/driver/assignments",
         "/driver/assignments/{assignment_id}",
         "/driver/assignments/{assignment_id}/delivery-state",
+        "/driver/assignments/{assignment_id}/accept",
+        "/driver/assignments/{assignment_id}/decline",
     }
 
+    _decision_paths = {
+        "/driver/assignments/{assignment_id}/accept",
+        "/driver/assignments/{assignment_id}/decline",
+    }
     for path, methods in driver_routes:
-        # Read-only surface: GET (plus HEAD/OPTIONS that FastAPI adds).
-        assert "POST" not in methods
+        # PATCH/PUT/DELETE never appear on the /driver surface.
         assert "PATCH" not in methods
         assert "DELETE" not in methods
         assert "PUT" not in methods
-        assert "GET" in methods
+        if path in _decision_paths:
+            assert "POST" in methods
+            assert "GET" not in methods
+        else:
+            # Read-only surface: GET (plus HEAD/OPTIONS that FastAPI adds).
+            assert "GET" in methods
+            assert "POST" not in methods
