@@ -14,6 +14,7 @@ from app.api.routes.admin_store_applications import (
 )
 from app.api.routes.audit import router as audit_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.driver import router as driver_router
 from app.api.routes.inventory import router as inventory_router
 from app.api.routes.orders import router as orders_router
 from app.api.routes.products import router as products_router
@@ -45,6 +46,7 @@ app.add_middleware(
 
 app.include_router(public_router)
 app.include_router(auth_router)
+app.include_router(driver_router)
 app.include_router(users_router)
 app.include_router(products_router)
 app.include_router(variants_router)

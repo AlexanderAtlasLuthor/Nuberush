@@ -162,6 +162,9 @@ class Store(Base):
     inventory_items: Mapped[list[InventoryItem]] = relationship(back_populates="store")
     inventory_logs: Mapped[list[InventoryLog]] = relationship(back_populates="store")
     orders: Mapped[list[Order]] = relationship(back_populates="store")
+    driver_profiles: Mapped[list[DriverProfile]] = relationship(
+        back_populates="store"
+    )
 
 
 class User(Base):
@@ -214,6 +217,11 @@ class User(Base):
     verified_orders: Mapped[list[Order]] = relationship(
         back_populates="age_verified_by_user",
         foreign_keys="Order.age_verified_by_user_id",
+    )
+    # Dr.1.1.C — a driver user has at most one operational driver profile.
+    driver_profile: Mapped[DriverProfile | None] = relationship(
+        back_populates="user",
+        uselist=False,
     )
 
 
@@ -2353,3 +2361,99 @@ class AccountingSyncLogItem(Base):
         back_populates="items"
     )
     variant: Mapped[ProductVariant | None] = relationship()
+
+
+class DriverProfileStatus(str, enum.Enum):
+    """Operational lifecycle of a driver profile (Dr.1.1.C).
+
+    Stored as a VARCHAR + CHECK discriminator (not a PG enum), matching the
+    recent F2.27 convention. `suspended` is deliberately NOT modelled in
+    Dr.1.1.C; if introduced later it belongs HERE (operational lifecycle),
+    never in `DriverApprovalStatus`.
+    """
+
+    active = "active"
+    inactive = "inactive"
+
+
+class DriverApprovalStatus(str, enum.Enum):
+    """Onboarding approval gate of a driver profile (Dr.1.1.C).
+
+    A monotonic decision (pending -> approved/rejected). Kept separate from
+    `DriverProfileStatus` so "was this driver ever approved" never conflates
+    with "is this driver currently operational".
+    """
+
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+
+
+class DriverProfile(Base):
+    """Minimal operational identity for a driver user (Dr.1.1.C).
+
+    One row per driver `User`, bound to a `Store` (store-bound driver
+    tenancy, Dr.1.1.A §4). This is the foundation only: it carries lifecycle
+    `status` and onboarding `approval_status` plus their timestamps, and
+    nothing else. Documents, vehicles, training, background checks, payout,
+    assignments, availability, eligibility, and audit are explicitly out of
+    scope here and arrive in later Dr.1.1 subphases.
+
+    The user/store match invariant (a profile's `store_id` must equal its
+    user's `store_id`) is enforced in the service layer and tests, not at the
+    DB level — it is a cross-table rule a CHECK constraint cannot express.
+    """
+
+    __tablename__ = "driver_profiles"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_driver_profiles_user_id"),
+        CheckConstraint(
+            "status IN ('active', 'inactive')",
+            name="ck_driver_profiles_status_valid",
+        ),
+        CheckConstraint(
+            "approval_status IN ('pending', 'approved', 'rejected')",
+            name="ck_driver_profiles_approval_status_valid",
+        ),
+        Index("ix_driver_profiles_store_id", "store_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_driver_profiles_user_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_driver_profiles_store_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    approval_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+    activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    deactivated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    user: Mapped[User] = relationship(back_populates="driver_profile")
+    store: Mapped[Store] = relationship(back_populates="driver_profiles")
