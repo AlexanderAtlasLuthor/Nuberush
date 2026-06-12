@@ -98,3 +98,78 @@ class DriverEligibilityRead(BaseModel):
     user_active: bool
     store_active: bool | None
     evaluated_at: datetime
+
+
+# --------------------------------------------------------------------- #
+# Assigned-delivery read model (Dr.1.1.F)
+# --------------------------------------------------------------------- #
+#
+# GET /driver/assignments and GET /driver/assignments/{id} are read-only,
+# self-scoped views of a driver's own `OrderDriverAssignment` rows. They are
+# deliberately NOT `OrderRead`: the driver app must never see customer PII,
+# money, line items, addresses, compliance internals, or audit data. These
+# schemas surface ONLY the assignment lifecycle plus a deliberately thin
+# order/store summary. Dispatch, accept/decline, delivery operational state,
+# proof of delivery, and GPS are all later subphases and absent here.
+
+
+class DriverAssignmentStoreSummary(BaseModel):
+    """Minimal store context for a driver-facing assignment view."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    code: str
+    timezone: str
+
+
+class DriverAssignmentOrderSummary(BaseModel):
+    """Thin, PII-free order summary for a driver-facing assignment view.
+
+    Carries only the order's lifecycle status and timestamps. It deliberately
+    omits customer identity, notes, money (subtotal/tax/total), items,
+    address, idempotency key, cancel reason, and every compliance/audit
+    internal.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    accepted_at: datetime | None
+    canceled_at: datetime | None
+    delivered_at: datetime | None
+    returned_at: datetime | None
+
+
+class DriverAssignmentRead(BaseModel):
+    """Self-scoped view of one of the driver's own order assignments."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    order_id: UUID
+    store_id: UUID
+    driver_profile_id: UUID
+    status: str
+    assigned_at: datetime | None
+    accepted_at: datetime | None
+    declined_at: datetime | None
+    canceled_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    order: DriverAssignmentOrderSummary
+    store: DriverAssignmentStoreSummary
+
+
+class DriverAssignmentListResponse(BaseModel):
+    """Paginated envelope for a driver's own assignments."""
+
+    items: list[DriverAssignmentRead]
+    total: int
+    limit: int
+    offset: int

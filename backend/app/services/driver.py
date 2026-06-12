@@ -10,22 +10,41 @@ from __future__ import annotations
 
 from datetime import datetime
 from datetime import timezone
+from uuid import UUID
 
 from fastapi import HTTPException
 from fastapi import status
+from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import selectinload
 
 from app.db.models import DriverApprovalStatus
 from app.db.models import DriverProfile
 from app.db.models import DriverProfileStatus
+from app.db.models import OrderDriverAssignment
+from app.db.models import OrderDriverAssignmentStatus
 from app.db.models import User
 from app.db.models import UserRole
+from app.schemas.driver import DriverAssignmentListResponse
+from app.schemas.driver import DriverAssignmentRead
 from app.schemas.driver import DriverEligibilityBlocker
 from app.schemas.driver import DriverEligibilityBlockerCode
 from app.schemas.driver import DriverEligibilityBlockerSeverity
 from app.schemas.driver import DriverEligibilityBlockerSource
 from app.schemas.driver import DriverEligibilityRead
+
+# Assignment statuses that count as "active" for a driver's default list view
+# (Dr.1.1.F). Terminal/dead states (declined, expired, completed, canceled)
+# are excluded by default but remain explicitly queryable via the `status`
+# filter. This is the ASSIGNMENT lifecycle (Dr.1.1.A §10) — never delivery
+# operational micro-states.
+_DEFAULT_ACTIVE_ASSIGNMENT_STATUSES: tuple[OrderDriverAssignmentStatus, ...] = (
+    OrderDriverAssignmentStatus.offered,
+    OrderDriverAssignmentStatus.accepted,
+    OrderDriverAssignmentStatus.assigned,
+    OrderDriverAssignmentStatus.started,
+)
 
 
 def get_driver_profile_for_user(
@@ -227,3 +246,122 @@ def evaluate_driver_eligibility(
         store_active=store_active,
         evaluated_at=datetime.now(timezone.utc),
     )
+
+
+# --------------------------------------------------------------------- #
+# Assigned-delivery reads (Dr.1.1.F)
+# --------------------------------------------------------------------- #
+#
+# Read-only, self-scoped, store-bound views of the driver's own
+# `OrderDriverAssignment` rows. Every query is double-scoped:
+#   driver_profile_id == the current user's own profile  AND
+#   store_id          == current_user.store_id
+# so a driver can never see another driver's or another store's assignments.
+# Neither function mutates, flushes, or commits, and neither reads the
+# customer `User` — no PII ever leaves this layer.
+
+
+def list_driver_assignments(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int,
+    offset: int,
+    status: OrderDriverAssignmentStatus | None = None,
+) -> DriverAssignmentListResponse:
+    """List the current driver's own assignments (Dr.1.1.F).
+
+    Self-scoped by `DriverProfile` and store-bound by `current_user.store_id`.
+    With no `status` filter, returns only the active lifecycle states
+    (offered / accepted / assigned / started); terminal states are excluded
+    by default but can be requested explicitly via `status`.
+
+    Ordered by `created_at` desc, then `id` desc as a stable tiebreaker.
+    Returns the page plus the total count of matching rows. Read-only: it
+    never mutates, flushes, or commits, and never consults customer data.
+
+    A driver with no provisioned profile raises 404 via
+    `get_driver_profile_for_user`. An `inactive` profile or `pending` /
+    `rejected` approval does NOT block these reads.
+    """
+    driver_profile = get_driver_profile_for_user(db, current_user)
+
+    filters = [
+        OrderDriverAssignment.driver_profile_id == driver_profile.id,
+        OrderDriverAssignment.store_id == current_user.store_id,
+    ]
+    if status is None:
+        filters.append(
+            OrderDriverAssignment.status.in_(
+                [s.value for s in _DEFAULT_ACTIVE_ASSIGNMENT_STATUSES]
+            )
+        )
+    else:
+        filters.append(OrderDriverAssignment.status == status.value)
+
+    total = db.scalar(
+        select(func.count())
+        .select_from(OrderDriverAssignment)
+        .where(*filters)
+    )
+
+    rows = db.scalars(
+        select(OrderDriverAssignment)
+        .where(*filters)
+        .order_by(
+            OrderDriverAssignment.created_at.desc(),
+            OrderDriverAssignment.id.desc(),
+        )
+        .options(
+            selectinload(OrderDriverAssignment.order),
+            selectinload(OrderDriverAssignment.store),
+        )
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+    return DriverAssignmentListResponse(
+        items=[DriverAssignmentRead.model_validate(row) for row in rows],
+        total=int(total or 0),
+        limit=limit,
+        offset=offset,
+    )
+
+
+def get_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+) -> DriverAssignmentRead:
+    """Return one of the current driver's own assignments (Dr.1.1.F).
+
+    Self-scoped by `DriverProfile` and store-bound by `current_user.store_id`.
+    An assignment that does not exist, or belongs to another driver or
+    another store, is indistinguishable from the driver's perspective: all
+    three raise 404 "Driver assignment not found" so existence is never
+    leaked across the scope boundary. Read-only — never mutates.
+
+    A driver with no provisioned profile raises 404 via
+    `get_driver_profile_for_user`.
+    """
+    driver_profile = get_driver_profile_for_user(db, current_user)
+
+    assignment = db.scalar(
+        select(OrderDriverAssignment)
+        .where(
+            OrderDriverAssignment.id == assignment_id,
+            OrderDriverAssignment.driver_profile_id == driver_profile.id,
+            OrderDriverAssignment.store_id == current_user.store_id,
+        )
+        .options(
+            selectinload(OrderDriverAssignment.order),
+            selectinload(OrderDriverAssignment.store),
+        )
+    )
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Driver assignment not found",
+        )
+
+    return DriverAssignmentRead.model_validate(assignment)

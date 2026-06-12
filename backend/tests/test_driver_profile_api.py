@@ -187,8 +187,9 @@ def test_anonymous_401(client: TestClient) -> None:
 
 
 def test_no_other_driver_routes_exist() -> None:
-    """The driver runtime routes are GET /driver/me (Dr.1.1.C) and
-    GET /driver/eligibility (Dr.1.1.D) — nothing else."""
+    """The driver runtime routes are GET /driver/me (Dr.1.1.C),
+    GET /driver/eligibility (Dr.1.1.D), and the two assignment reads
+    (Dr.1.1.F) — nothing else."""
     from app.main import app
 
     driver_paths = {
@@ -196,4 +197,9 @@ def test_no_other_driver_routes_exist() -> None:
         for route in app.router.routes
         if getattr(route, "path", "").startswith("/driver")
     }
-    assert driver_paths == {"/driver/me", "/driver/eligibility"}
+    assert driver_paths == {
+        "/driver/me",
+        "/driver/eligibility",
+        "/driver/assignments",
+        "/driver/assignments/{assignment_id}",
+    }

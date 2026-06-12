@@ -241,8 +241,9 @@ def test_response_and_blocker_shape(
 
 
 def test_driver_runtime_route_surface() -> None:
-    """The only /driver runtime routes are GET /driver/me and
-    GET /driver/eligibility — nothing else, no write methods."""
+    """The only /driver runtime routes are the four self-scoped reads
+    GET /driver/me, /eligibility, /assignments and /assignments/{id} —
+    nothing else, no write methods."""
     from app.main import app
 
     driver_routes = {
@@ -251,7 +252,12 @@ def test_driver_runtime_route_surface() -> None:
         if getattr(route, "path", "").startswith("/driver")
     }
     paths = {path for path, _ in driver_routes}
-    assert paths == {"/driver/me", "/driver/eligibility"}
+    assert paths == {
+        "/driver/me",
+        "/driver/eligibility",
+        "/driver/assignments",
+        "/driver/assignments/{assignment_id}",
+    }
 
     for path, methods in driver_routes:
         # Read-only surface: GET (plus HEAD/OPTIONS that FastAPI adds).
