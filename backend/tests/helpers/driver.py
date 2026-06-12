@@ -1,10 +1,11 @@
-"""Test helpers for the driver domain (Dr.1.1.C / Dr.1.1.E / Dr.1.1.F).
+"""Test helpers for the driver domain (Dr.1.1.C / Dr.1.1.E / Dr.1.1.F / G.2).
 
 Chokepoints for building `DriverProfile` (Dr.1.1.C) and
 `OrderDriverAssignment` (Dr.1.1.E) rows in tests, plus a minimal `Order`
-(Dr.1.1.F, for assignment-read tests). They persist the minimal foundation
-rows only — no documents, vehicles, delivery state, dispatch logic,
-eligibility data, payout, or earnings.
+(Dr.1.1.F, for assignment-read tests) and a `DriverDeliveryOperationalState`
+row (Dr.1.1.G.2, for operational-state model tests). They persist the minimal
+foundation rows only — no documents, vehicles, dispatch logic, eligibility
+data, transition logic, payout, or earnings.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.db.models import DriverDeliveryOperationalState
+from app.db.models import DriverDeliveryOperationalStateValue
 from app.db.models import DriverProfile
 from app.db.models import Order
 from app.db.models import OrderDriverAssignment
@@ -108,3 +111,47 @@ def make_order_driver_assignment(
     db.commit()
     db.refresh(assignment)
     return assignment
+
+
+def make_driver_delivery_operational_state(
+    db: Session,
+    *,
+    assignment: OrderDriverAssignment,
+    state: str = DriverDeliveryOperationalStateValue.not_started.value,
+    state_started_at: datetime | None = None,
+    last_transition_at: datetime | None = None,
+) -> DriverDeliveryOperationalState:
+    """Persist and return a ``DriverDeliveryOperationalState`` (Dr.1.1.G.2).
+
+    The state's anchors are derived from the assignment so tenancy/self-scope
+    stay consistent by construction:
+      assignment_id / order_id / driver_profile_id / store_id all come from
+      ``assignment``.
+
+    This builds ONLY the operational-state row. It runs no transition logic,
+    mutates no ``Order.status`` and no ``OrderDriverAssignment.status``, and
+    touches no inventory — G.2 is storage/coverage only. Commits and refreshes
+    so server-side defaults (``id``, ``state_started_at``,
+    ``last_transition_at``, timestamps) are populated.
+
+    ``state`` accepts the raw string value; pass
+    ``DriverDeliveryOperationalStateValue.<member>.value`` for a checked value.
+    ``state_started_at`` / ``last_transition_at`` may be set explicitly when a
+    test needs deterministic timestamps; otherwise the server-side defaults
+    apply.
+    """
+    operational_state = DriverDeliveryOperationalState(
+        assignment_id=assignment.id,
+        order_id=assignment.order_id,
+        driver_profile_id=assignment.driver_profile_id,
+        store_id=assignment.store_id,
+        state=state,
+    )
+    if state_started_at is not None:
+        operational_state.state_started_at = state_started_at
+    if last_transition_at is not None:
+        operational_state.last_transition_at = last_transition_at
+    db.add(operational_state)
+    db.commit()
+    db.refresh(operational_state)
+    return operational_state
