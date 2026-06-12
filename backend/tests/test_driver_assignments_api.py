@@ -421,6 +421,7 @@ def test_driver_route_surface_is_four_read_only_routes() -> None:
         "/driver/eligibility",
         "/driver/assignments",
         "/driver/assignments/{assignment_id}",
+        "/driver/assignments/{assignment_id}/delivery-state",
     }
 
     for route in driver_routes:

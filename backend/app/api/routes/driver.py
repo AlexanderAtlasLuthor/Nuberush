@@ -1,18 +1,22 @@
-"""Driver-facing routes (Dr.1.1.C / Dr.1.1.D / Dr.1.1.F).
+"""Driver-facing routes (Dr.1.1.C / Dr.1.1.D / Dr.1.1.F / Dr.1.1.H).
 
 Every endpoint is gated by `require_store_bound_driver` (Dr.1.1.B), so only
 an exact, store-bound driver reaches it; staff/manager/owner/admin and
 storeless drivers are rejected upstream with 403.
 
-The driver runtime surface is four self-scoped, read-only GETs:
-  - GET /driver/me                      (Dr.1.1.C)
-  - GET /driver/eligibility             (Dr.1.1.D)
-  - GET /driver/assignments             (Dr.1.1.F)
-  - GET /driver/assignments/{id}        (Dr.1.1.F)
+The driver runtime surface is five self-scoped, read-only GETs:
+  - GET /driver/me                                       (Dr.1.1.C)
+  - GET /driver/eligibility                              (Dr.1.1.D)
+  - GET /driver/assignments                              (Dr.1.1.F)
+  - GET /driver/assignments/{id}                         (Dr.1.1.F)
+  - GET /driver/assignments/{id}/delivery-state          (Dr.1.1.H)
 
 Dispatch, accept/decline, go-online/go-offline, active delivery, proof of
 delivery, and any mutating action are later Dr.1.1 subphases and must not be
-added here. There is no POST/PATCH/DELETE on the /driver surface.
+added here. There is no POST/PATCH/DELETE on the /driver surface. The
+delivery-state read (Dr.1.1.H) is read-only: it returns the persisted
+operational state if present and never materializes one (that is a future
+action subphase, via `ensure_*` — not used here).
 """
 
 from __future__ import annotations
@@ -30,10 +34,12 @@ from app.db.models import User
 from app.db.session import get_db
 from app.schemas.driver import DriverAssignmentListResponse
 from app.schemas.driver import DriverAssignmentRead
+from app.schemas.driver import DriverDeliveryOperationalStateRead
 from app.schemas.driver import DriverEligibilityRead
 from app.schemas.driver import DriverProfileRead
 from app.services.driver import evaluate_driver_eligibility
 from app.services.driver import get_driver_assignment
+from app.services.driver import get_driver_delivery_operational_state
 from app.services.driver import get_driver_profile_for_user
 from app.services.driver import list_driver_assignments
 
@@ -104,3 +110,27 @@ def read_current_driver_assignment(
     the scope boundary. Exposes no customer PII.
     """
     return get_driver_assignment(db, current_user, assignment_id)
+
+
+@router.get(
+    "/assignments/{assignment_id}/delivery-state",
+    response_model=DriverDeliveryOperationalStateRead,
+)
+def read_current_driver_delivery_state(
+    assignment_id: UUID,
+    current_user: User = Depends(require_store_bound_driver),
+    db: Session = Depends(get_db),
+) -> DriverDeliveryOperationalStateRead:
+    """Read the persisted delivery operational state of an own assignment.
+
+    Read-only and self-scoped (Dr.1.1.H). The assignment must belong to the
+    current driver and store, else 404 "Driver assignment not found"
+    (anti-enumeration). If the assignment IS the driver's own but has no
+    operational-state row yet, a distinct 404 "Driver delivery operational
+    state not found" is raised — this endpoint never materializes state
+    (`ensure_*` belongs to a future action subphase and is not used here).
+    Exposes no customer PII.
+    """
+    return get_driver_delivery_operational_state(
+        db=db, current_user=current_user, assignment_id=assignment_id
+    )
