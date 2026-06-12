@@ -168,6 +168,10 @@ class Store(Base):
     driver_assignments: Mapped[list[OrderDriverAssignment]] = relationship(
         back_populates="store"
     )
+    # Dr.1.1.G.1 — store-bound read anchor for delivery operational state.
+    delivery_operational_states: Mapped[
+        list[DriverDeliveryOperationalState]
+    ] = relationship(back_populates="store")
 
 
 class User(Base):
@@ -590,6 +594,10 @@ class Order(Base):
     driver_assignments: Mapped[list[OrderDriverAssignment]] = relationship(
         back_populates="order"
     )
+    # Dr.1.1.G.1 — read anchor only; never mutated through this relationship.
+    delivery_operational_states: Mapped[
+        list[DriverDeliveryOperationalState]
+    ] = relationship(back_populates="order")
 
 
 class OrderItem(Base):
@@ -2466,6 +2474,10 @@ class DriverProfile(Base):
     assignments: Mapped[list[OrderDriverAssignment]] = relationship(
         back_populates="driver_profile"
     )
+    # Dr.1.1.G.1 — self-scope read anchor for delivery operational state.
+    delivery_operational_states: Mapped[
+        list[DriverDeliveryOperationalState]
+    ] = relationship(back_populates="driver_profile")
 
 
 class OrderDriverAssignmentStatus(str, enum.Enum):
@@ -2577,3 +2589,183 @@ class OrderDriverAssignment(Base):
         back_populates="assignments"
     )
     store: Mapped[Store] = relationship(back_populates="driver_assignments")
+    # Dr.1.1.G.1 — at most one operational-state row per assignment (the
+    # assignment is the anchor; uselist=False makes this a scalar / 1:1).
+    operational_state: Mapped[DriverDeliveryOperationalState | None] = (
+        relationship(
+            back_populates="assignment",
+            uselist=False,
+        )
+    )
+
+
+class DriverDeliveryOperationalStateValue(str, enum.Enum):
+    """Physical operational state of the driver's delivery flow (Dr.1.1.G.1).
+
+    A THIRD, separate axis from the two existing ones, frozen by the Dr.1.1.G
+    domain contract:
+
+      - `OrderStatus`                    = commercial/logistics state of the
+                                           order.
+      - `OrderDriverAssignmentStatus`    = lifecycle of the driver<->order
+                                           assignment (offer/accept/...).
+      - `DriverDeliveryOperationalState` = physical operational state of the
+                                           driver's delivery flow (THIS enum).
+
+    Stored as a VARCHAR + CHECK discriminator (not a PG enum), matching the
+    `OrderDriverAssignmentStatus` convention — new states never require an
+    `ALTER TYPE`. G.1 is STORAGE ONLY: this enumerates the vocabulary, but no
+    transition logic, no action endpoint, and no service writes or advances a
+    state in this subphase. Several values (id_verification_pending /
+    id_verified, delivery_completed, delivery_failed, returning/returned) are
+    forward-declared here for the schema but are only reachable through future
+    action phases (pickup / proof / ID-verification / complete / fail /
+    return), which are explicitly out of scope for G.1.
+    """
+
+    not_started = "not_started"
+    en_route_to_store = "en_route_to_store"
+    arrived_at_store = "arrived_at_store"
+    pickup_started = "pickup_started"
+    picked_up = "picked_up"
+    en_route_to_customer = "en_route_to_customer"
+    arrived_at_customer = "arrived_at_customer"
+    id_verification_pending = "id_verification_pending"
+    id_verified = "id_verified"
+    delivery_completed = "delivery_completed"
+    delivery_failed = "delivery_failed"
+    returning_to_store = "returning_to_store"
+    returned_to_store = "returned_to_store"
+    canceled = "canceled"
+
+
+class DriverDeliveryOperationalState(Base):
+    """Dedicated delivery operational-state record (Dr.1.1.G.1).
+
+    The operational state is its OWN entity, anchored 1:1 on an
+    `OrderDriverAssignment` (UNIQUE `assignment_id`). It is deliberately NOT a
+    column on `orders` or on `order_driver_assignments`: the physical driver
+    flow is a third axis that must never overload `OrderStatus` or the
+    assignment lifecycle (Dr.1.1.G domain contract).
+
+    `order_id`, `driver_profile_id`, and `store_id` are denormalized off the
+    assignment purely so future self-scoped, store-bound reads can filter
+    without an extra join — they are read anchors, NOT a license to mutate the
+    order. This is a MODEL FOUNDATION only (G.1): there is no service, schema,
+    endpoint, or transition logic, and nothing here mutates orders, inventory,
+    `OrderStatus`, or the assignment. Proof of delivery, ID verification, GPS,
+    and the pickup/complete/fail/return actions are later subphases.
+
+    FK semantics mirror `OrderDriverAssignment`: order_id / store_id CASCADE
+    (the state is meaningless without them), driver_profile_id RESTRICT
+    (preserve operational history; a profile with state rows is not
+    hard-deletable), assignment_id CASCADE (the state is owned by its
+    assignment). Mutable, so it carries the shared `set_updated_at` trigger.
+    """
+
+    __tablename__ = "driver_delivery_operational_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "assignment_id",
+            name="uq_driver_delivery_operational_states_assignment_id",
+        ),
+        CheckConstraint(
+            "state IN ('not_started', 'en_route_to_store', "
+            "'arrived_at_store', 'pickup_started', 'picked_up', "
+            "'en_route_to_customer', 'arrived_at_customer', "
+            "'id_verification_pending', 'id_verified', "
+            "'delivery_completed', 'delivery_failed', "
+            "'returning_to_store', 'returned_to_store', 'canceled')",
+            name="ck_driver_delivery_operational_states_state_valid",
+        ),
+        # No separate index on assignment_id: the UNIQUE constraint above
+        # already creates a unique btree index sufficient for lookups.
+        Index(
+            "ix_driver_delivery_operational_states_order_id",
+            "order_id",
+        ),
+        Index(
+            "ix_driver_delivery_operational_states_driver_profile_id",
+            "driver_profile_id",
+        ),
+        Index(
+            "ix_driver_delivery_operational_states_store_id",
+            "store_id",
+        ),
+        Index(
+            "ix_driver_delivery_operational_states_state",
+            "state",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "order_driver_assignments.id",
+            name="fk_driver_delivery_operational_states_assignment_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "orders.id",
+            name="fk_driver_delivery_operational_states_order_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    driver_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "driver_profiles.id",
+            name="fk_driver_delivery_operational_states_driver_profile_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_driver_delivery_operational_states_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    state: Mapped[str] = mapped_column(
+        String(40),
+        server_default=text("'not_started'"),
+        nullable=False,
+    )
+    state_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    last_transition_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+    assignment: Mapped[OrderDriverAssignment] = relationship(
+        back_populates="operational_state"
+    )
+    order: Mapped[Order] = relationship(
+        back_populates="delivery_operational_states"
+    )
+    driver_profile: Mapped[DriverProfile] = relationship(
+        back_populates="delivery_operational_states"
+    )
+    store: Mapped[Store] = relationship(
+        back_populates="delivery_operational_states"
+    )
