@@ -195,6 +195,25 @@ def test_wrong_store_user_is_blocked(
     assert resp.status_code == 403
 
 
+def test_driver_is_blocked_even_on_own_store(
+    client: TestClient, db_session: Session, store_with_alert
+):
+    """Dr.1.1.B: a driver assigned to THIS store still gets 403.
+
+    The store-member tenancy gate passes for a same-store driver, so this
+    proves the role gate (`require_staff_or_above`) — not tenancy — is what
+    keeps drivers out of the store regulatory surface.
+    """
+    store, _product, _alert = store_with_alert
+    driver = central_make_user(
+        db_session, role=UserRole.driver, store_id=store.id
+    )
+
+    resp = client.get(_alerts_url(store.id), headers=_auth(driver))
+
+    assert resp.status_code == 403
+
+
 def test_anonymous_is_blocked(client: TestClient, store_with_alert):
     store, _product, _alert = store_with_alert
     assert client.get(_alerts_url(store.id)).status_code == 401

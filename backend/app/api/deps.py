@@ -144,6 +144,44 @@ def require_driver_or_above(
     return _enforce_roles(_DRIVER_OR_ABOVE, current_user)
 
 
+# Exact-driver gate (Dr.1.1.B). Distinct from `require_driver_or_above`:
+# that alias admits management (admin/owner/manager) alongside drivers for
+# oversight-style endpoints. `require_driver` admits ONLY UserRole.driver,
+# so a future /driver/* surface can gate on "driver and nobody else"
+# without accidentally letting a manager or admin drive. It is intentionally
+# NOT wired to any route in Dr.1.1.B — it only prepares the contract.
+_DRIVER_ONLY = frozenset({UserRole.driver})
+
+
+def require_driver(current_user: User = Depends(get_current_user)) -> User:
+    return _enforce_roles(_DRIVER_ONLY, current_user)
+
+
+def require_store_bound_driver(
+    current_user: User = Depends(require_driver),
+) -> User:
+    """Validate that the actor is a driver bound to a store (Dr.1.1.B).
+
+    Future-facing foundation for /driver/* routes under the store-bound
+    driver tenancy decision (Dr.1.1.A §4). It asserts ONLY two things:
+
+      - the actor is exactly a driver (via `require_driver`), and
+      - the driver carries a store_id (non-admins are store-bound).
+
+    It deliberately does NOT authorize a delivery or an assignment, and
+    does NOT consult DriverProfile or OrderDriverAssignment — neither
+    exists yet (those arrive in Dr.1.1.C / Dr.1.1.E). It is a role+tenancy
+    actor check, not a resource-ownership check. Per-assignment binding is
+    a later contract (Dr.1.1.F).
+    """
+    if current_user.store_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Driver is not bound to a store.",
+        )
+    return current_user
+
+
 def require_store_member(
     store_id: UUID,
     current_user: User = Depends(get_current_user),
