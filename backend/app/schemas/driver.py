@@ -13,6 +13,7 @@ metadata. No Create/Update schema exists in this subphase: the driver app
 cannot mutate its own profile, and provisioning is a future backend concern.
 """
 
+import enum
 from datetime import datetime
 from uuid import UUID
 
@@ -35,3 +36,65 @@ class DriverProfileRead(BaseModel):
     activated_at: datetime | None
     deactivated_at: datetime | None
     approved_at: datetime | None
+
+
+# --------------------------------------------------------------------- #
+# Eligibility read model (Dr.1.1.D)
+# --------------------------------------------------------------------- #
+#
+# GET /driver/eligibility is a backend-authoritative, read-only computation
+# of whether the current driver may go online. It is a SKELETON: it reads the
+# user, store, and driver-profile state that already exists and reports
+# structured `blockers`. It never mutates anything and never decides an
+# actual go-online transition (that is a later subphase).
+
+
+class DriverEligibilityBlockerCode(str, enum.Enum):
+    """Why a driver cannot currently go online."""
+
+    driver_profile_missing = "driver_profile_missing"
+    user_inactive = "user_inactive"
+    store_missing = "store_missing"
+    store_inactive = "store_inactive"
+    driver_profile_inactive = "driver_profile_inactive"
+    driver_approval_pending = "driver_approval_pending"
+    driver_approval_rejected = "driver_approval_rejected"
+
+
+class DriverEligibilityBlockerSource(str, enum.Enum):
+    """Which domain the blocker originates from."""
+
+    user = "user"
+    store = "store"
+    driver_profile = "driver_profile"
+
+
+class DriverEligibilityBlockerSeverity(str, enum.Enum):
+    """Severity of an eligibility finding.
+
+    Only `blocker` exists in Dr.1.1.D — every finding hard-blocks going
+    online. A softer `warning` tier may be added in a later subphase.
+    """
+
+    blocker = "blocker"
+
+
+class DriverEligibilityBlocker(BaseModel):
+    """A single reason the driver cannot go online."""
+
+    code: DriverEligibilityBlockerCode
+    message: str
+    source: DriverEligibilityBlockerSource
+    severity: DriverEligibilityBlockerSeverity
+
+
+class DriverEligibilityRead(BaseModel):
+    """Backend-computed go-online eligibility for the current driver."""
+
+    can_go_online: bool
+    blockers: list[DriverEligibilityBlocker]
+    driver_status: str | None
+    driver_approval_status: str | None
+    user_active: bool
+    store_active: bool | None
+    evaluated_at: datetime
