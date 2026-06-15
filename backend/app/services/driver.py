@@ -1011,3 +1011,154 @@ def arrive_driver_assignment(
         )
 
     return _apply_arrive_to_existing_state(db, operational_state)
+
+
+# --------------------------------------------------------------------- #
+# Pickup at store (Dr.1.1.L — operational-only / L-mínima)
+# --------------------------------------------------------------------- #
+#
+# The next physical step after Dr.1.1.K's arrival. A driver who has arrived at
+# the store confirms PICKUP of the order: the operational state advances
+# `arrived_at_store -> picked_up`. Self-scoped + store-bound, same anti-
+# enumeration 404 boundary. Per the approved L-mínima scope this is OPERATIONAL
+# STATE ONLY: it NEVER touches Order.status (no ready -> out_for_delivery, no
+# OrderAuditLog), inventory, the assignment's `status` (which stays `started`),
+# or any assignment timestamp. Order/OrderAuditLog/transition_order_status are
+# deliberately NOT imported here — out_for_delivery is a future, dedicated phase
+# (orders_rules §6/§8: driver<->orders bridging is staff-or-above + audited).
+#
+# Like arrive-store, pickup NEVER creates the operational-state row — start is
+# the only materializer. A missing row (or any state before arrived_at_store)
+# means the delivery has not yet arrived, so pickup is a 422 precondition
+# failure.
+#
+# Assignment source: only `started` is valid; every other status is a 422.
+# Operational state: arrived_at_store -> picked_up (real); picked_up ->
+# idempotent (no timestamp rewrite); not_started / en_route_to_store /
+# pickup_started / missing -> 422 (not yet arrived); a later non-terminal
+# physical state -> 409 (never regress); a terminal state -> 422.
+
+# Physical states strictly after picked_up but NOT terminal — picking up again
+# would regress the flow, so they are a 409 conflict.
+_PICKED_UP_PAST_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.en_route_to_customer.value,
+        DriverDeliveryOperationalStateValue.arrived_at_customer.value,
+        DriverDeliveryOperationalStateValue.id_verification_pending.value,
+        DriverDeliveryOperationalStateValue.id_verified.value,
+        DriverDeliveryOperationalStateValue.returning_to_store.value,
+    }
+)
+
+# Physical states at or before arrived_at_store's successor that are NOT yet a
+# valid pickup source — the delivery has not (validly) arrived at the store.
+# `pickup_started` is included: it is a finer-grained handoff state that L does
+# not produce, and pickup advances arrived_at_store -> picked_up directly.
+_BEFORE_PICKUP_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.not_started.value,
+        DriverDeliveryOperationalStateValue.en_route_to_store.value,
+        DriverDeliveryOperationalStateValue.pickup_started.value,
+    }
+)
+
+
+def _apply_pickup_to_existing_state(
+    db: Session,
+    operational_state: DriverDeliveryOperationalState,
+) -> DriverDeliveryOperationalStateRead:
+    """Advance a row-locked operational state for a pickup (Dr.1.1.L).
+
+    The caller has already validated and locked the assignment (status
+    `started`) and locked this state row. Like arrive-store, this NEVER creates
+    a row and NEVER mutates the assignment, Order.status, or inventory. Mutates
+    within the caller's transaction and commits once.
+    """
+    arrived = DriverDeliveryOperationalStateValue.arrived_at_store.value
+    picked_up = DriverDeliveryOperationalStateValue.picked_up.value
+    current_state = operational_state.state
+
+    if current_state == arrived:
+        now = datetime.now(timezone.utc)
+        operational_state.state = picked_up
+        operational_state.state_started_at = now
+        operational_state.last_transition_at = now
+        db.commit()
+        db.refresh(operational_state)
+    elif current_state == picked_up:
+        # Idempotent: never rewrite the physical-flow timestamps.
+        db.commit()
+        db.refresh(operational_state)
+    elif current_state in _BEFORE_PICKUP_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet arrived at store",
+        )
+    elif current_state in _TERMINAL_OPERATIONAL_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery already ended",
+        )
+    else:
+        # en_route_to_customer and later non-terminal physical states.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery already past picked_up",
+        )
+
+    return DriverDeliveryOperationalStateRead.model_validate(
+        operational_state
+    )
+
+
+def pickup_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+) -> DriverDeliveryOperationalStateRead:
+    """Confirm pickup of the order at the store for a started assignment (L).
+
+    The operational state advances `arrived_at_store -> picked_up`. Idempotent
+    once `picked_up` (timestamps preserved). A state before arrived_at_store
+    (not_started / en_route_to_store / pickup_started) or a missing state row is
+    a 422 "Delivery not yet arrived at store" (pickup never materializes state).
+    A later non-terminal physical state is a 409 (never regress); a terminal
+    state, or an assignment status other than `started`, is a 422. Self-scoped +
+    store-bound; a non-own/foreign/missing assignment is a 404. Returns the
+    operational state. Never touches Order.status, inventory, the assignment's
+    status, or any assignment timestamp.
+    """
+    started = OrderDriverAssignmentStatus.started.value
+
+    driver_profile = get_driver_profile_for_user(db, current_user)
+    assignment = _resolve_locked_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+    if assignment.status != started:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Assignment cannot pickup from status "
+                f"'{assignment.status}'"
+            ),
+        )
+
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState)
+        .where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id
+        )
+        .with_for_update()
+    )
+    if operational_state is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet arrived at store",
+        )
+
+    return _apply_pickup_to_existing_state(db, operational_state)

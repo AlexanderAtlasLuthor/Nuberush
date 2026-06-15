@@ -311,6 +311,7 @@ def test_driver_route_surface_reads_plus_accept_decline() -> None:
         ("POST", "/driver/assignments/{assignment_id}/decline"),
         ("POST", "/driver/assignments/{assignment_id}/start"),
         ("POST", "/driver/assignments/{assignment_id}/arrive-store"),
+        ("POST", "/driver/assignments/{assignment_id}/pickup"),
     }
 
     # The delivery-state read stays GET-only; no mutative method leaks onto it.
