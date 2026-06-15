@@ -408,9 +408,10 @@ def test_response_contains_no_pii_or_money(
 
 
 def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
-    """After Dr.1.1.N the /driver surface is five read-only GETs plus exactly
-    seven mutations: POST .../accept, .../decline, .../start, .../arrive-store,
-    .../pickup, .../depart-to-customer and .../arrive-customer."""
+    """After Dr.1.2.C the /driver surface is five read-only GETs plus exactly
+    eight mutations: POST .../accept, .../decline, .../start, .../arrive-store,
+    .../pickup, .../depart-to-customer, .../arrive-customer and
+    .../verify-age."""
     from app.main import app
 
     driver_routes = [
@@ -438,6 +439,7 @@ def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
         ("POST", "/driver/assignments/{assignment_id}/pickup"),
         ("POST", "/driver/assignments/{assignment_id}/depart-to-customer"),
         ("POST", "/driver/assignments/{assignment_id}/arrive-customer"),
+        ("POST", "/driver/assignments/{assignment_id}/verify-age"),
     }
 
     # No PATCH/PUT/DELETE anywhere on the /driver surface.
@@ -457,7 +459,8 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         if getattr(route, "path", "").startswith("/driver")
     }
     # accept/decline/start/arrive-store/pickup/depart-to-customer/
-    # arrive-customer may appear ONLY in their seven approved exact paths.
+    # arrive-customer/verify-age may appear ONLY in their eight approved exact
+    # paths.
     approved_actions = {
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
@@ -466,6 +469,7 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "/driver/assignments/{assignment_id}/pickup",
         "/driver/assignments/{assignment_id}/depart-to-customer",
         "/driver/assignments/{assignment_id}/arrive-customer",
+        "/driver/assignments/{assignment_id}/verify-age",
     }
     for p in driver_paths:
         if (
@@ -475,12 +479,13 @@ def test_no_mutative_or_operational_driver_routes() -> None:
             or "arrive" in p
             or "pickup" in p
             or "depart" in p
+            or "verify" in p
         ):
             assert p in approved_actions, p
     # None of the deferred operational / mutative surfaces exist yet.
-    # Arrive-customer (en_route_to_customer -> arrived_at_customer) is approved
-    # in N, but the arrived_at_customer successor states (ID verification and
-    # everything downstream of it) remain banned.
+    # Verify-age (arrived_at_customer -> id_verified on pass) is approved in
+    # Dr.1.2.C, but proof / complete / fail / return-to-store and any
+    # vendor/scan ID-verification surface downstream of it remain banned.
     for banned_substr in (
         "online",
         "offline",
@@ -492,7 +497,6 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "picked_up",
         "en-route-to-customer",
         "en_route_to_customer",
-        "verify-age",
         "verify-id",
         "id-verification",
         "id_verification",

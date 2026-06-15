@@ -23,6 +23,9 @@ from sqlalchemy.orm import selectinload
 from app.db.models import DriverApprovalStatus
 from app.db.models import DriverDeliveryOperationalState
 from app.db.models import DriverDeliveryOperationalStateValue
+from app.db.models import DriverDeliveryVerification
+from app.db.models import DriverDeliveryVerificationMethod
+from app.db.models import DriverDeliveryVerificationOutcome
 from app.db.models import DriverProfile
 from app.db.models import DriverProfileStatus
 from app.db.models import OrderDriverAssignment
@@ -32,11 +35,13 @@ from app.db.models import UserRole
 from app.schemas.driver import DriverAssignmentListResponse
 from app.schemas.driver import DriverAssignmentRead
 from app.schemas.driver import DriverDeliveryOperationalStateRead
+from app.schemas.driver import DriverDeliveryVerificationRead
 from app.schemas.driver import DriverEligibilityBlocker
 from app.schemas.driver import DriverEligibilityBlockerCode
 from app.schemas.driver import DriverEligibilityBlockerSeverity
 from app.schemas.driver import DriverEligibilityBlockerSource
 from app.schemas.driver import DriverEligibilityRead
+from app.schemas.driver import DriverVerifyAgeRequest
 
 # Assignment statuses that count as "active" for a driver's default list view
 # (Dr.1.1.F). Terminal/dead states (declined, expired, completed, canceled)
@@ -1443,4 +1448,201 @@ def arrive_customer_driver_assignment(
 
     return _apply_arrive_customer_to_existing_state(
         db, operational_state
+    )
+
+
+# ===================================================================== #
+# Dr.1.2.C — delivery-time 21+ / age verification
+# ===================================================================== #
+#
+# POST /driver/assignments/{id}/verify-age records a backend-authorized,
+# redaction-safe manual 21+ checklist result on the arrived-at-customer
+# assignment and, on a `pass`, advances the operational state
+# arrived_at_customer -> id_verified. A `fail` / `manual_review` records the
+# attempt but leaves the state at arrived_at_customer (routing a failed
+# verification to delivery_failed / return-to-store is Dr.1.2.F/G, NOT here).
+# This never touches Order.status, Order.age_verified_at, OrderAuditLog, or
+# inventory, and never materializes the operational-state row.
+
+# Physical states strictly before arrived_at_customer: age verification is not
+# available yet from any of these (422).
+_BEFORE_VERIFY_AGE_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.not_started.value,
+        DriverDeliveryOperationalStateValue.en_route_to_store.value,
+        DriverDeliveryOperationalStateValue.arrived_at_store.value,
+        DriverDeliveryOperationalStateValue.pickup_started.value,
+        DriverDeliveryOperationalStateValue.picked_up.value,
+        DriverDeliveryOperationalStateValue.en_route_to_customer.value,
+    }
+)
+
+# Non-terminal physical states past arrived_at_customer that verify-age does
+# not handle — never regress the flow, so they are a 409 conflict.
+_VERIFY_AGE_LATER_NONTERMINAL_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.id_verification_pending.value,
+        DriverDeliveryOperationalStateValue.returning_to_store.value,
+    }
+)
+
+
+def _build_verification(
+    *,
+    assignment: OrderDriverAssignment,
+    current_user: User,
+    payload: DriverVerifyAgeRequest,
+) -> DriverDeliveryVerification:
+    """Build a redaction-safe verification row from the payload.
+
+    Anchors are derived from the assignment (consistent tenancy), the actor is
+    the current driver, and `method` is server-set to `manual_checklist`. Only
+    redaction-safe metadata is persisted — never raw ID / OCR / barcode /
+    biometric / signature / photo data.
+    """
+    failure_reason_code = (
+        payload.failure_reason_code.value
+        if payload.failure_reason_code is not None
+        else None
+    )
+    return DriverDeliveryVerification(
+        assignment_id=assignment.id,
+        order_id=assignment.order_id,
+        driver_profile_id=assignment.driver_profile_id,
+        store_id=assignment.store_id,
+        performed_by_user_id=current_user.id,
+        outcome=payload.outcome.value,
+        failure_reason_code=failure_reason_code,
+        method=DriverDeliveryVerificationMethod.manual_checklist.value,
+        age_over_21_confirmed=payload.age_over_21_confirmed,
+        id_expiration_checked=payload.id_expiration_checked,
+        id_not_expired=payload.id_not_expired,
+        note=payload.note,
+    )
+
+
+def _latest_verification_for_assignment(
+    db: Session, assignment_id: UUID
+) -> DriverDeliveryVerification | None:
+    return db.scalar(
+        select(DriverDeliveryVerification)
+        .where(DriverDeliveryVerification.assignment_id == assignment_id)
+        .order_by(DriverDeliveryVerification.created_at.desc())
+        .limit(1)
+    )
+
+
+def verify_age_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+    payload: DriverVerifyAgeRequest,
+) -> DriverDeliveryVerificationRead:
+    """Record a delivery-time 21+ verification for a started assignment (C).
+
+    From `arrived_at_customer`: insert a `DriverDeliveryVerification`; a `pass`
+    advances the operational state to `id_verified`, while `fail` /
+    `manual_review` record the attempt and leave the state at
+    `arrived_at_customer`. Re-issuing a `pass` once `id_verified` is idempotent
+    (no new row, no timestamp rewrite); a `fail` / `manual_review` once
+    `id_verified` is a 409. A state before `arrived_at_customer` (or a missing
+    state row) is a 422 (verify-age never materializes state); a terminal state
+    or an assignment status other than `started` is a 422; any other
+    non-terminal later state is a 409. Self-scoped + store-bound; a non-own /
+    foreign / missing assignment is a 404. Returns the verification record.
+    Never touches Order.status, Order.age_verified_at, OrderAuditLog, or
+    inventory.
+    """
+    arrived_customer = (
+        DriverDeliveryOperationalStateValue.arrived_at_customer.value
+    )
+    id_verified = DriverDeliveryOperationalStateValue.id_verified.value
+    started = OrderDriverAssignmentStatus.started.value
+    is_pass = payload.outcome == DriverDeliveryVerificationOutcome.pass_
+
+    driver_profile = get_driver_profile_for_user(db, current_user)
+    assignment = _resolve_locked_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+    if assignment.status != started:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Assignment cannot verify-age from status "
+                f"'{assignment.status}'"
+            ),
+        )
+
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState)
+        .where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id
+        )
+        .with_for_update()
+    )
+    if operational_state is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet arrived at customer",
+        )
+
+    current_state = operational_state.state
+
+    if current_state == arrived_customer:
+        verification = _build_verification(
+            assignment=assignment,
+            current_user=current_user,
+            payload=payload,
+        )
+        db.add(verification)
+        if is_pass:
+            now = datetime.now(timezone.utc)
+            operational_state.state = id_verified
+            operational_state.state_started_at = now
+            operational_state.last_transition_at = now
+        db.commit()
+        db.refresh(verification)
+        return DriverDeliveryVerificationRead.model_validate(verification)
+
+    if current_state == id_verified:
+        if is_pass:
+            # Idempotent: never insert a duplicate row or rewrite timestamps.
+            existing = _latest_verification_for_assignment(
+                db, assignment.id
+            )
+            db.rollback()
+            if existing is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Delivery already age-verified",
+                )
+            return DriverDeliveryVerificationRead.model_validate(existing)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery already age-verified",
+        )
+
+    if current_state in _BEFORE_VERIFY_AGE_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet arrived at customer",
+        )
+
+    if current_state in _TERMINAL_OPERATIONAL_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery already ended",
+        )
+
+    # id_verification_pending / returning_to_store and any other unexpected
+    # non-terminal state: never regress, never silently pass through.
+    db.rollback()
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Delivery past age verification",
     )

@@ -19,6 +19,10 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import model_validator
+
+from app.db.models import DriverDeliveryVerificationFailureReason
+from app.db.models import DriverDeliveryVerificationOutcome
 
 
 class DriverProfileRead(BaseModel):
@@ -200,5 +204,77 @@ class DriverDeliveryOperationalStateRead(BaseModel):
     state: str
     state_started_at: datetime
     last_transition_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------- #
+# Delivery-time 21+ / age verification (Dr.1.2.C)
+# --------------------------------------------------------------------- #
+#
+# POST /driver/assignments/{id}/verify-age submits a backend-authorized,
+# redaction-safe manual 21+ checklist result. The MVP is a manual checklist
+# only — no OCR, scan, vendor, or liveness. The request and response carry
+# ONLY redaction-safe metadata: outcome, a structured failure reason, boolean
+# checklist flags, a safe note, the method (server-set to `manual_checklist`),
+# timestamps, and association IDs. They never carry a raw ID image, full ID
+# number, OCR/barcode payload, biometric data, signature, customer photo, or
+# any artifact path/URL — and never `Order.status`, `Order.age_verified_at`,
+# inventory, proof, or customer PII.
+
+
+class DriverVerifyAgeRequest(BaseModel):
+    """Body for POST /driver/assignments/{id}/verify-age.
+
+    `outcome` is required. `failure_reason_code` is required when the outcome
+    is `fail` and must be null when the outcome is `pass`; for `manual_review`
+    it is optional. `method` is NOT accepted from the client — the backend
+    sets it to `manual_checklist`. No sensitive field is accepted.
+    """
+
+    outcome: DriverDeliveryVerificationOutcome
+    failure_reason_code: DriverDeliveryVerificationFailureReason | None = None
+    age_over_21_confirmed: bool | None = None
+    id_expiration_checked: bool | None = None
+    id_not_expired: bool | None = None
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_failure_reason(self) -> "DriverVerifyAgeRequest":
+        if (
+            self.outcome == DriverDeliveryVerificationOutcome.fail
+            and self.failure_reason_code is None
+        ):
+            raise ValueError(
+                "failure_reason_code is required when outcome is 'fail'"
+            )
+        if (
+            self.outcome == DriverDeliveryVerificationOutcome.pass_
+            and self.failure_reason_code is not None
+        ):
+            raise ValueError(
+                "failure_reason_code must be null when outcome is 'pass'"
+            )
+        return self
+
+
+class DriverDeliveryVerificationRead(BaseModel):
+    """Redaction-safe view of a recorded 21+ verification (Dr.1.2.C)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    assignment_id: UUID
+    order_id: UUID
+    driver_profile_id: UUID
+    store_id: UUID
+    performed_by_user_id: UUID | None
+    outcome: str
+    failure_reason_code: str | None
+    method: str
+    age_over_21_confirmed: bool | None
+    id_expiration_checked: bool | None
+    id_not_expired: bool | None
+    note: str | None
     created_at: datetime
     updated_at: datetime
