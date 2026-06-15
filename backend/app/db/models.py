@@ -2769,3 +2769,518 @@ class DriverDeliveryOperationalState(Base):
     store: Mapped[Store] = relationship(
         back_populates="delivery_operational_states"
     )
+
+
+# ===================================================================== #
+# Dr.1.2.B — Driver compliance storage foundation
+# ===================================================================== #
+#
+# Four storage-only records that the Dr.1.2.C–H action subphases will later
+# populate: the delivery-time 21+ verification result, the proof-of-delivery
+# metadata, the failed-delivery record, and the return-to-store custody
+# record. They mirror the Dr.1.1.G driver convention exactly:
+#
+#   - enum-like vocabularies are stored as VARCHAR + CHECK (no PostgreSQL
+#     ENUM), so new outcomes / reason codes never need an `ALTER TYPE`;
+#   - each row anchors on an `OrderDriverAssignment` and denormalizes
+#     `order_id` / `driver_profile_id` / `store_id` as read anchors (never a
+#     license to mutate the order);
+#   - FK semantics follow the operational-state table: assignment / order /
+#     store CASCADE, driver_profile RESTRICT (preserve driver history), every
+#     actor `*_by_user_id` SET NULL;
+#   - mutable rows carry the shared `set_updated_at` trigger.
+#
+# This is a MODEL/STORAGE FOUNDATION only (Dr.1.2.B). There is NO service,
+# schema, route, transition logic, `Order.status` bridge, inventory mutation,
+# idempotency ledger, or compliance audit sink here — those are later
+# subphases. Per the Dr.1.2 contract redaction policy (§18), these tables
+# hold ONLY redaction-safe metadata, boolean checklist flags, reason codes,
+# safe notes, timestamps, and association IDs — never a raw ID image, full ID
+# number, OCR/barcode payload, biometric data, signature, customer photo, or
+# any artifact path/URL.
+
+
+class DriverDeliveryVerificationOutcome(str, enum.Enum):
+    """Outcome of a delivery-time 21+ / age verification (Dr.1.2.B)."""
+
+    pass_ = "pass"
+    fail = "fail"
+    manual_review = "manual_review"
+
+
+class DriverDeliveryVerificationFailureReason(str, enum.Enum):
+    """Structured reason a 21+ verification did not pass (Dr.1.2.B)."""
+
+    customer_underage = "customer_underage"
+    id_invalid = "id_invalid"
+    id_expired = "id_expired"
+    id_not_available = "id_not_available"
+    customer_refused = "customer_refused"
+    manual_review_required = "manual_review_required"
+    other_manual_review = "other_manual_review"
+
+
+class DriverDeliveryVerificationMethod(str, enum.Enum):
+    """How the 21+ verification was performed (Dr.1.2.B).
+
+    MVP is a manual visual checklist only — no OCR, scan, or vendor.
+    """
+
+    manual_checklist = "manual_checklist"
+
+
+class DriverDeliveryProofMethod(str, enum.Enum):
+    """How proof of delivery was captured (Dr.1.2.B).
+
+    MVP is a manual checklist of a compliant handoff — no photo or signature.
+    """
+
+    manual_checklist = "manual_checklist"
+
+
+class DriverDeliveryFailureReason(str, enum.Enum):
+    """Structured reason a delivery failed (Dr.1.2.B)."""
+
+    customer_unavailable = "customer_unavailable"
+    customer_underage = "customer_underage"
+    id_invalid = "id_invalid"
+    id_expired = "id_expired"
+    customer_refused = "customer_refused"
+    unsafe_location = "unsafe_location"
+    restricted_product_issue = "restricted_product_issue"
+    store_issue = "store_issue"
+    driver_emergency = "driver_emergency"
+    other_manual_review = "other_manual_review"
+
+
+class DriverDeliveryReturnState(str, enum.Enum):
+    """Custody lifecycle of a return-to-store record (Dr.1.2.B).
+
+    `returning`                     -> driver is bringing product back.
+    `returned_pending_confirmation` -> driver asserts hand-back; awaits store.
+    `confirmed`                     -> store confirmed receipt (closes custody).
+
+    The store-confirmation runtime and any inventory replenish are NOT in
+    Dr.1.2.B; this record only stores the custody state and confirmation
+    stamps. A driver-side state never auto-replenishes stock.
+    """
+
+    returning = "returning"
+    returned_pending_confirmation = "returned_pending_confirmation"
+    confirmed = "confirmed"
+
+
+def _in_list(enum_cls: type[enum.Enum]) -> str:
+    """Render an enum's values as a SQL `IN (...)` member list.
+
+    Single source of truth for the CHECK constraints below, so a model value
+    and its DB CHECK can never drift apart.
+    """
+    return ", ".join(f"'{member.value}'" for member in enum_cls)
+
+
+class DriverDeliveryVerification(Base):
+    """Redaction-safe delivery-time 21+ / age verification result (Dr.1.2.B).
+
+    Append-only per assignment (NO `UNIQUE(assignment_id)`): a delivery may
+    record more than one verification attempt. This is the delivery-handoff
+    21+ check performed by the driver; it is distinct from the order-level
+    `Order.age_verified_at` (a separate staff/pre-delivery concept) and never
+    writes it. Storage only — no service, schema, route, or gate logic here.
+    """
+
+    __tablename__ = "driver_delivery_verifications"
+    __table_args__ = (
+        CheckConstraint(
+            f"outcome IN ({_in_list(DriverDeliveryVerificationOutcome)})",
+            name="ck_driver_delivery_verifications_outcome_valid",
+        ),
+        CheckConstraint(
+            f"method IN ({_in_list(DriverDeliveryVerificationMethod)})",
+            name="ck_driver_delivery_verifications_method_valid",
+        ),
+        CheckConstraint(
+            "method <> ''",
+            name="ck_driver_delivery_verifications_method_non_empty",
+        ),
+        CheckConstraint(
+            "failure_reason_code IS NULL OR failure_reason_code IN ("
+            f"{_in_list(DriverDeliveryVerificationFailureReason)})",
+            name="ck_driver_delivery_verifications_failure_reason_valid",
+        ),
+        CheckConstraint(
+            "outcome <> 'fail' OR failure_reason_code IS NOT NULL",
+            name="ck_driver_delivery_verifications_fail_requires_reason",
+        ),
+        Index(
+            "ix_driver_delivery_verifications_assignment_id",
+            "assignment_id",
+        ),
+        Index("ix_driver_delivery_verifications_order_id", "order_id"),
+        Index(
+            "ix_driver_delivery_verifications_driver_profile_id",
+            "driver_profile_id",
+        ),
+        Index("ix_driver_delivery_verifications_store_id", "store_id"),
+        Index("ix_driver_delivery_verifications_created_at", "created_at"),
+        Index("ix_driver_delivery_verifications_outcome", "outcome"),
+        Index(
+            "ix_driver_delivery_verifications_failure_reason_code",
+            "failure_reason_code",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "order_driver_assignments.id",
+            name="fk_driver_delivery_verifications_assignment_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "orders.id",
+            name="fk_driver_delivery_verifications_order_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    driver_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "driver_profiles.id",
+            name="fk_driver_delivery_verifications_driver_profile_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_driver_delivery_verifications_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    performed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_driver_delivery_verifications_performed_by_user_id",
+            ondelete="SET NULL",
+        ),
+    )
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    failure_reason_code: Mapped[str | None] = mapped_column(String(40))
+    method: Mapped[str] = mapped_column(
+        String(40),
+        server_default=text("'manual_checklist'"),
+        nullable=False,
+    )
+    age_over_21_confirmed: Mapped[bool | None] = mapped_column(Boolean)
+    id_expiration_checked: Mapped[bool | None] = mapped_column(Boolean)
+    id_not_expired: Mapped[bool | None] = mapped_column(Boolean)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+
+class DriverDeliveryProof(Base):
+    """Redaction-safe proof-of-delivery metadata (Dr.1.2.B).
+
+    Append-only per assignment (NO `UNIQUE(assignment_id)`). Records that a
+    compliant in-person handoff occurred — never the identity document, a
+    photo, or a signature. Storage only.
+    """
+
+    __tablename__ = "driver_delivery_proofs"
+    __table_args__ = (
+        CheckConstraint(
+            f"method IN ({_in_list(DriverDeliveryProofMethod)})",
+            name="ck_driver_delivery_proofs_method_valid",
+        ),
+        CheckConstraint(
+            "method <> ''",
+            name="ck_driver_delivery_proofs_method_non_empty",
+        ),
+        Index("ix_driver_delivery_proofs_assignment_id", "assignment_id"),
+        Index("ix_driver_delivery_proofs_order_id", "order_id"),
+        Index(
+            "ix_driver_delivery_proofs_driver_profile_id",
+            "driver_profile_id",
+        ),
+        Index("ix_driver_delivery_proofs_store_id", "store_id"),
+        Index("ix_driver_delivery_proofs_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "order_driver_assignments.id",
+            name="fk_driver_delivery_proofs_assignment_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "orders.id",
+            name="fk_driver_delivery_proofs_order_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    driver_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "driver_profiles.id",
+            name="fk_driver_delivery_proofs_driver_profile_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_driver_delivery_proofs_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    submitted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_driver_delivery_proofs_submitted_by_user_id",
+            ondelete="SET NULL",
+        ),
+    )
+    method: Mapped[str] = mapped_column(
+        String(40),
+        server_default=text("'manual_checklist'"),
+        nullable=False,
+    )
+    recipient_present_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False
+    )
+    handoff_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    restricted_not_left_unattended: Mapped[bool] = mapped_column(
+        Boolean, nullable=False
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+
+class DriverDeliveryFailure(Base):
+    """Structured failed-delivery record (Dr.1.2.B).
+
+    Append-only per assignment (NO `UNIQUE(assignment_id)`). Records that a
+    delivery failed and why. A failed delivery is an operational fact only —
+    it does NOT mutate `Order.status` or inventory and is never automatically
+    a commercial `canceled`. Storage only.
+    """
+
+    __tablename__ = "driver_delivery_failures"
+    __table_args__ = (
+        CheckConstraint(
+            f"reason_code IN ({_in_list(DriverDeliveryFailureReason)})",
+            name="ck_driver_delivery_failures_reason_code_valid",
+        ),
+        CheckConstraint(
+            "reason_code <> ''",
+            name="ck_driver_delivery_failures_reason_code_non_empty",
+        ),
+        Index("ix_driver_delivery_failures_assignment_id", "assignment_id"),
+        Index("ix_driver_delivery_failures_order_id", "order_id"),
+        Index(
+            "ix_driver_delivery_failures_driver_profile_id",
+            "driver_profile_id",
+        ),
+        Index("ix_driver_delivery_failures_store_id", "store_id"),
+        Index("ix_driver_delivery_failures_created_at", "created_at"),
+        Index("ix_driver_delivery_failures_reason_code", "reason_code"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "order_driver_assignments.id",
+            name="fk_driver_delivery_failures_assignment_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "orders.id",
+            name="fk_driver_delivery_failures_order_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    driver_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "driver_profiles.id",
+            name="fk_driver_delivery_failures_driver_profile_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_driver_delivery_failures_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    reported_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_driver_delivery_failures_reported_by_user_id",
+            ondelete="SET NULL",
+        ),
+    )
+    reason_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
+
+
+class DriverDeliveryReturn(Base):
+    """Return-to-store custody / confirmation record (Dr.1.2.B).
+
+    1:1 per assignment (`UNIQUE(assignment_id)`): a single return-to-store
+    custody record per assignment. The driver can advance the custody state up
+    to `returned_pending_confirmation`, but only a store confirmation (a later
+    runtime subphase) closes it to `confirmed`. Creating or advancing this row
+    never restocks inventory; a driver-returned state must not auto-replenish.
+    Storage only.
+    """
+
+    __tablename__ = "driver_delivery_returns"
+    __table_args__ = (
+        UniqueConstraint(
+            "assignment_id",
+            name="uq_driver_delivery_returns_assignment_id",
+        ),
+        CheckConstraint(
+            f"return_state IN ({_in_list(DriverDeliveryReturnState)})",
+            name="ck_driver_delivery_returns_return_state_valid",
+        ),
+        CheckConstraint(
+            "return_state <> ''",
+            name="ck_driver_delivery_returns_return_state_non_empty",
+        ),
+        CheckConstraint(
+            "(confirmed_at IS NULL) = (confirmed_by_user_id IS NULL)",
+            name="ck_driver_delivery_returns_confirmation_pair_consistent",
+        ),
+        CheckConstraint(
+            "return_state <> 'confirmed' OR "
+            "(confirmed_at IS NOT NULL AND confirmed_by_user_id IS NOT NULL)",
+            name="ck_driver_delivery_returns_confirmed_requires_confirmation",
+        ),
+        # No separate index on assignment_id: the UNIQUE constraint above
+        # already creates a sufficient unique btree index.
+        Index("ix_driver_delivery_returns_order_id", "order_id"),
+        Index(
+            "ix_driver_delivery_returns_driver_profile_id",
+            "driver_profile_id",
+        ),
+        Index("ix_driver_delivery_returns_store_id", "store_id"),
+        Index("ix_driver_delivery_returns_created_at", "created_at"),
+        Index("ix_driver_delivery_returns_return_state", "return_state"),
+        Index("ix_driver_delivery_returns_confirmed_at", "confirmed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "order_driver_assignments.id",
+            name="fk_driver_delivery_returns_assignment_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "orders.id",
+            name="fk_driver_delivery_returns_order_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    driver_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "driver_profiles.id",
+            name="fk_driver_delivery_returns_driver_profile_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_driver_delivery_returns_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    driver_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_driver_delivery_returns_driver_user_id",
+            ondelete="SET NULL",
+        ),
+    )
+    confirmed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_driver_delivery_returns_confirmed_by_user_id",
+            ondelete="SET NULL",
+        ),
+    )
+    return_state: Mapped[str] = mapped_column(String(40), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = timestamp_created_at()
+    updated_at: Mapped[datetime] = timestamp_updated_at()
