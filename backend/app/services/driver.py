@@ -1301,3 +1301,146 @@ def depart_driver_assignment(
     return _apply_depart_to_customer_to_existing_state(
         db, operational_state
     )
+
+
+# Physical states strictly after arrived_at_customer but NOT terminal —
+# arriving again would regress the flow, so they are a 409 conflict.
+_ARRIVED_CUSTOMER_PAST_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.id_verification_pending.value,
+        DriverDeliveryOperationalStateValue.id_verified.value,
+        DriverDeliveryOperationalStateValue.returning_to_store.value,
+    }
+)
+
+# Physical states at or before en_route_to_customer's predecessor that are NOT
+# yet a valid arrive-customer source — the delivery is not (validly) en route
+# to the customer. `pickup_started` is included: it is a finer-grained handoff
+# state that N does not produce, and arrive-customer advances
+# en_route_to_customer -> arrived_at_customer directly.
+_BEFORE_ARRIVE_CUSTOMER_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.not_started.value,
+        DriverDeliveryOperationalStateValue.en_route_to_store.value,
+        DriverDeliveryOperationalStateValue.arrived_at_store.value,
+        DriverDeliveryOperationalStateValue.pickup_started.value,
+        DriverDeliveryOperationalStateValue.picked_up.value,
+    }
+)
+
+
+def _apply_arrive_customer_to_existing_state(
+    db: Session,
+    operational_state: DriverDeliveryOperationalState,
+) -> DriverDeliveryOperationalStateRead:
+    """Advance a row-locked operational state for an arrive-customer (Dr.1.1.N).
+
+    The caller has already validated and locked the assignment (status
+    `started`) and locked this state row. Like depart-to-customer, this NEVER
+    creates a row and NEVER mutates the assignment, Order.status, OrderAuditLog,
+    or inventory, and NEVER starts ID verification. Mutates within the caller's
+    transaction and commits once.
+    """
+    en_route_customer = (
+        DriverDeliveryOperationalStateValue.en_route_to_customer.value
+    )
+    arrived_customer = (
+        DriverDeliveryOperationalStateValue.arrived_at_customer.value
+    )
+    current_state = operational_state.state
+
+    if current_state == en_route_customer:
+        now = datetime.now(timezone.utc)
+        operational_state.state = arrived_customer
+        operational_state.state_started_at = now
+        operational_state.last_transition_at = now
+        db.commit()
+        db.refresh(operational_state)
+    elif current_state == arrived_customer:
+        # Idempotent: never rewrite the physical-flow timestamps.
+        db.commit()
+        db.refresh(operational_state)
+    elif current_state in _BEFORE_ARRIVE_CUSTOMER_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet en route to customer",
+        )
+    elif current_state in _TERMINAL_OPERATIONAL_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery already ended",
+        )
+    elif current_state in _ARRIVED_CUSTOMER_PAST_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery already past arrived_at_customer",
+        )
+    else:
+        # Defensive: any unexpected/unknown state is a non-permissive 409,
+        # never a silent pass-through (mirrors depart/pickup/start/arrive).
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery already past arrived_at_customer",
+        )
+
+    return DriverDeliveryOperationalStateRead.model_validate(
+        operational_state
+    )
+
+
+def arrive_customer_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+) -> DriverDeliveryOperationalStateRead:
+    """Mark arrival at the customer for a started assignment (N).
+
+    The operational state advances `en_route_to_customer ->
+    arrived_at_customer`. Idempotent once `arrived_at_customer` (timestamps
+    preserved). A state before en_route_to_customer (not_started /
+    en_route_to_store / arrived_at_store / pickup_started / picked_up) or a
+    missing state row is a 422 "Delivery not yet en route to customer"
+    (arrive-customer never materializes state). A later non-terminal physical
+    state is a 409 (never regress); a terminal state, or an assignment status
+    other than `started`, is a 422. Self-scoped + store-bound; a non-own/
+    foreign/missing assignment is a 404. Returns the operational state. Never
+    touches Order.status, OrderAuditLog, inventory, the assignment's status,
+    any assignment timestamp, and never starts ID verification.
+    """
+    started = OrderDriverAssignmentStatus.started.value
+
+    driver_profile = get_driver_profile_for_user(db, current_user)
+    assignment = _resolve_locked_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+    if assignment.status != started:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Assignment cannot arrive-customer from status "
+                f"'{assignment.status}'"
+            ),
+        )
+
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState)
+        .where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id
+        )
+        .with_for_update()
+    )
+    if operational_state is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet en route to customer",
+        )
+
+    return _apply_arrive_customer_to_existing_state(
+        db, operational_state
+    )
