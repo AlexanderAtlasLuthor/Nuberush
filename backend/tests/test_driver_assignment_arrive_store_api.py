@@ -1,10 +1,10 @@
-"""Dr.1.1.J — driver start-delivery API tests.
+"""Dr.1.1.K — driver arrive-at-store API tests.
 
-Confirms POST /driver/assignments/{id}/start: the 200 happy path and response
-shape (DriverDeliveryOperationalStateRead, no PII), idempotency with preserved
-timestamps, the anti-enumeration 404s, the role/store/auth gates, the 409/422
-guards, and that the /driver surface is now exactly five GETs plus three POSTs
-(accept/decline/start).
+Confirms POST /driver/assignments/{id}/arrive-store: the 200 happy path and
+response shape (DriverDeliveryOperationalStateRead, no PII), idempotency with
+preserved timestamps, the anti-enumeration 404s, the role/store/auth gates, the
+409/422 guards, and that the /driver surface is now exactly five GETs plus four
+POSTs (accept/decline/start/arrive-store).
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from tests.helpers.driver import make_order
 from tests.helpers.driver import make_order_driver_assignment
 
 
-def _start_url(assignment_id) -> str:
-    return f"/driver/assignments/{assignment_id}/start"
+def _arrive_url(assignment_id) -> str:
+    return f"/driver/assignments/{assignment_id}/arrive-store"
 
 
 _STATE_KEYS = {
@@ -49,8 +49,8 @@ _STATE_KEYS = {
 
 @pytest.fixture
 def make_store(db_session: Session) -> Callable[..., Store]:
-    def _create(name: str = "DST-Api") -> Store:
-        store = Store(name=name, code=f"dsta-{uuid.uuid4().hex[:8]}")
+    def _create(name: str = "DAS-Api") -> Store:
+        store = Store(name=name, code=f"dasa-{uuid.uuid4().hex[:8]}")
         db_session.add(store)
         db_session.commit()
         db_session.refresh(store)
@@ -66,7 +66,7 @@ def _driver(db_session: Session, store: Store) -> User:
 
 
 def _owned_assignment(
-    db_session: Session, store: Store, user: User, status: str = "accepted"
+    db_session: Session, store: Store, user: User, status: str = "started"
 ):
     profile = make_driver_profile(db_session, user=user, store=store)
     order = make_order(db_session, store=store)
@@ -85,32 +85,40 @@ def _owned_assignment(
 # --------------------------------------------------------------------- #
 
 
-def test_start_200_shape(
+def test_arrive_200_shape(
     client: TestClient, db_session: Session, make_store
 ) -> None:
     store = make_store()
     user = _driver(db_session, store)
     profile, order, assignment = _owned_assignment(db_session, store, user)
+    make_driver_delivery_operational_state(
+        db_session, assignment=assignment, state="en_route_to_store"
+    )
 
-    resp = client.post(_start_url(assignment.id), headers=_auth(user))
+    resp = client.post(_arrive_url(assignment.id), headers=_auth(user))
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert set(body.keys()) == _STATE_KEYS
-    assert body["state"] == "en_route_to_store"
+    assert body["state"] == "arrived_at_store"
     assert body["assignment_id"] == str(assignment.id)
     assert body["order_id"] == str(order.id)
     assert body["driver_profile_id"] == str(profile.id)
     assert body["store_id"] == str(store.id)
 
 
-def test_start_response_no_pii(
+def test_arrive_response_no_pii(
     client: TestClient, db_session: Session, make_store
 ) -> None:
     store = make_store()
     user = _driver(db_session, store)
     _profile, _order, assignment = _owned_assignment(db_session, store, user)
+    make_driver_delivery_operational_state(
+        db_session, assignment=assignment, state="en_route_to_store"
+    )
 
-    body = client.post(_start_url(assignment.id), headers=_auth(user)).json()
+    body = client.post(
+        _arrive_url(assignment.id), headers=_auth(user)
+    ).json()
     for forbidden in (
         "user",
         "email",
@@ -137,29 +145,27 @@ def test_start_response_no_pii(
 # --------------------------------------------------------------------- #
 
 
-def test_start_idempotent_preserves_timestamps(
+def test_arrive_idempotent_preserves_timestamps(
     client: TestClient, db_session: Session, make_store
 ) -> None:
     store = make_store()
     user = _driver(db_session, store)
-    _profile, _order, assignment = _owned_assignment(
-        db_session, store, user, status="started"
-    )
+    _profile, _order, assignment = _owned_assignment(db_session, store, user)
     started_at = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
     transition_at = datetime(2026, 6, 1, 9, 1, tzinfo=timezone.utc)
     make_driver_delivery_operational_state(
         db_session,
         assignment=assignment,
-        state="en_route_to_store",
+        state="arrived_at_store",
         state_started_at=started_at,
         last_transition_at=transition_at,
     )
 
-    first = client.post(_start_url(assignment.id), headers=_auth(user))
-    second = client.post(_start_url(assignment.id), headers=_auth(user))
+    first = client.post(_arrive_url(assignment.id), headers=_auth(user))
+    second = client.post(_arrive_url(assignment.id), headers=_auth(user))
     assert first.status_code == 200
     assert second.status_code == 200
-    assert first.json()["state"] == "en_route_to_store"
+    assert first.json()["state"] == "arrived_at_store"
     assert (
         first.json()["state_started_at"] == second.json()["state_started_at"]
     )
@@ -176,9 +182,10 @@ def test_start_idempotent_preserves_timestamps(
 
 @pytest.mark.parametrize(
     "bad_status",
-    ["offered", "declined", "expired", "canceled", "completed", "assigned"],
+    ["offered", "accepted", "declined", "expired", "canceled",
+     "completed", "assigned"],
 )
-def test_start_invalid_status_422(
+def test_arrive_invalid_status_422(
     client: TestClient, db_session: Session, make_store, bad_status: str
 ) -> None:
     store = make_store()
@@ -186,38 +193,62 @@ def test_start_invalid_status_422(
     _profile, _order, assignment = _owned_assignment(
         db_session, store, user, status=bad_status
     )
-    resp = client.post(_start_url(assignment.id), headers=_auth(user))
+    make_driver_delivery_operational_state(
+        db_session, assignment=assignment, state="en_route_to_store"
+    )
+    resp = client.post(_arrive_url(assignment.id), headers=_auth(user))
     assert resp.status_code == 422, resp.text
 
 
-def test_start_past_en_route_409(
+def test_arrive_without_state_422(
     client: TestClient, db_session: Session, make_store
 ) -> None:
     store = make_store()
     user = _driver(db_session, store)
-    _profile, _order, assignment = _owned_assignment(
-        db_session, store, user, status="started"
-    )
+    _profile, _order, assignment = _owned_assignment(db_session, store, user)
+    resp = client.post(_arrive_url(assignment.id), headers=_auth(user))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "Delivery not yet en route to store"
+
+
+def test_arrive_not_started_422(
+    client: TestClient, db_session: Session, make_store
+) -> None:
+    store = make_store()
+    user = _driver(db_session, store)
+    _profile, _order, assignment = _owned_assignment(db_session, store, user)
     make_driver_delivery_operational_state(
-        db_session, assignment=assignment, state="arrived_at_store"
+        db_session, assignment=assignment, state="not_started"
     )
-    resp = client.post(_start_url(assignment.id), headers=_auth(user))
-    assert resp.status_code == 409, resp.text
-    assert resp.json()["detail"] == "Delivery already past en_route_to_store"
+    resp = client.post(_arrive_url(assignment.id), headers=_auth(user))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "Delivery not yet en route to store"
 
 
-def test_start_terminal_state_422(
+def test_arrive_past_store_409(
     client: TestClient, db_session: Session, make_store
 ) -> None:
     store = make_store()
     user = _driver(db_session, store)
-    _profile, _order, assignment = _owned_assignment(
-        db_session, store, user, status="started"
+    _profile, _order, assignment = _owned_assignment(db_session, store, user)
+    make_driver_delivery_operational_state(
+        db_session, assignment=assignment, state="picked_up"
     )
+    resp = client.post(_arrive_url(assignment.id), headers=_auth(user))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "Delivery already past arrived_at_store"
+
+
+def test_arrive_terminal_state_422(
+    client: TestClient, db_session: Session, make_store
+) -> None:
+    store = make_store()
+    user = _driver(db_session, store)
+    _profile, _order, assignment = _owned_assignment(db_session, store, user)
     make_driver_delivery_operational_state(
         db_session, assignment=assignment, state="delivery_completed"
     )
-    resp = client.post(_start_url(assignment.id), headers=_auth(user))
+    resp = client.post(_arrive_url(assignment.id), headers=_auth(user))
     assert resp.status_code == 422, resp.text
 
 
@@ -226,32 +257,35 @@ def test_start_terminal_state_422(
 # --------------------------------------------------------------------- #
 
 
-def test_start_404_nonexistent(
+def test_arrive_404_nonexistent(
     client: TestClient, db_session: Session, make_store
 ) -> None:
     store = make_store()
     user = _driver(db_session, store)
     make_driver_profile(db_session, user=user, store=store)
-    resp = client.post(_start_url(uuid.uuid4()), headers=_auth(user))
+    resp = client.post(_arrive_url(uuid.uuid4()), headers=_auth(user))
     assert resp.status_code == 404, resp.text
     assert resp.json()["detail"] == "Driver assignment not found"
 
 
-def test_start_404_other_driver(
+def test_arrive_404_other_driver(
     client: TestClient, db_session: Session, make_store
 ) -> None:
     store = make_store()
     owner = _driver(db_session, store)
     _profile, _order, assignment = _owned_assignment(db_session, store, owner)
+    make_driver_delivery_operational_state(
+        db_session, assignment=assignment, state="en_route_to_store"
+    )
 
     other = _driver(db_session, store)
     make_driver_profile(db_session, user=other, store=store)
 
-    resp = client.post(_start_url(assignment.id), headers=_auth(other))
+    resp = client.post(_arrive_url(assignment.id), headers=_auth(other))
     assert resp.status_code == 404, resp.text
 
 
-def test_start_404_other_store(
+def test_arrive_404_other_store(
     client: TestClient, db_session: Session, make_store
 ) -> None:
     store_a = make_store("store-a")
@@ -259,12 +293,15 @@ def test_start_404_other_store(
     _profile, _order, assignment = _owned_assignment(
         db_session, store_a, owner
     )
+    make_driver_delivery_operational_state(
+        db_session, assignment=assignment, state="en_route_to_store"
+    )
 
     store_b = make_store("store-b")
     other = _driver(db_session, store_b)
     make_driver_profile(db_session, user=other, store=store_b)
 
-    resp = client.post(_start_url(assignment.id), headers=_auth(other))
+    resp = client.post(_arrive_url(assignment.id), headers=_auth(other))
     assert resp.status_code == 404, resp.text
 
 
@@ -277,66 +314,24 @@ def test_start_404_other_store(
     "role",
     [UserRole.staff, UserRole.manager, UserRole.owner, UserRole.admin],
 )
-def test_start_non_driver_403(
+def test_arrive_non_driver_403(
     client: TestClient, db_session: Session, make_store, role: UserRole
 ) -> None:
     store_id = None if role == UserRole.admin else make_store().id
     user = central_make_user(db_session, role=role, store_id=store_id)
-    resp = client.post(_start_url(uuid.uuid4()), headers=_auth(user))
+    resp = client.post(_arrive_url(uuid.uuid4()), headers=_auth(user))
     assert resp.status_code == 403, resp.text
 
 
-def test_start_storeless_driver_403(
+def test_arrive_storeless_driver_403(
     client: TestClient, db_session: Session
 ) -> None:
     user = central_make_user(
         db_session, role=UserRole.driver, store_id=None
     )
-    resp = client.post(_start_url(uuid.uuid4()), headers=_auth(user))
+    resp = client.post(_arrive_url(uuid.uuid4()), headers=_auth(user))
     assert resp.status_code == 403, resp.text
 
 
-def test_start_anonymous_401(client: TestClient) -> None:
-    assert client.post(_start_url(uuid.uuid4())).status_code == 401
-
-
-# --------------------------------------------------------------------- #
-# Route surface — 5 GET + 3 POST
-# --------------------------------------------------------------------- #
-
-
-def test_route_surface_reads_plus_three_actions() -> None:
-    from app.main import app
-
-    driver_routes = [
-        route
-        for route in app.router.routes
-        if getattr(route, "path", "").startswith("/driver")
-    ]
-    surface = {
-        (
-            next(m for m in route.methods if m not in ("HEAD", "OPTIONS")),
-            route.path,
-        )
-        for route in driver_routes
-    }
-    assert surface == {
-        ("GET", "/driver/me"),
-        ("GET", "/driver/eligibility"),
-        ("GET", "/driver/assignments"),
-        ("GET", "/driver/assignments/{assignment_id}"),
-        ("GET", "/driver/assignments/{assignment_id}/delivery-state"),
-        ("POST", "/driver/assignments/{assignment_id}/accept"),
-        ("POST", "/driver/assignments/{assignment_id}/decline"),
-        ("POST", "/driver/assignments/{assignment_id}/start"),
-        ("POST", "/driver/assignments/{assignment_id}/arrive-store"),
-    }
-    gets = sum(1 for m, _ in surface if m == "GET")
-    posts = sum(1 for m, _ in surface if m == "POST")
-    assert gets == 5
-    assert posts == 4
-    for route in driver_routes:
-        methods = set(route.methods)
-        assert "PATCH" not in methods
-        assert "PUT" not in methods
-        assert "DELETE" not in methods
+def test_arrive_anonymous_401(client: TestClient) -> None:
+    assert client.post(_arrive_url(uuid.uuid4())).status_code == 401

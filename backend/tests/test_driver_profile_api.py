@@ -190,7 +190,8 @@ def test_no_other_driver_routes_exist() -> None:
     """The driver runtime routes are GET /driver/me (Dr.1.1.C),
     GET /driver/eligibility (Dr.1.1.D), the two assignment reads (Dr.1.1.F),
     the delivery-state read (Dr.1.1.H), the accept/decline mutations
-    (Dr.1.1.I), and the start mutation (Dr.1.1.J) — nothing else."""
+    (Dr.1.1.I), the start mutation (Dr.1.1.J), and the arrive-store mutation
+    (Dr.1.1.K) — nothing else."""
     from app.main import app
 
     driver_paths = {
@@ -207,4 +208,5 @@ def test_no_other_driver_routes_exist() -> None:
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
         "/driver/assignments/{assignment_id}/start",
+        "/driver/assignments/{assignment_id}/arrive-store",
     }

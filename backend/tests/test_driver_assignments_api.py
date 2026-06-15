@@ -408,8 +408,9 @@ def test_response_contains_no_pii_or_money(
 
 
 def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
-    """After Dr.1.1.J the /driver surface is five read-only GETs plus exactly
-    three mutations: POST .../accept, .../decline and .../start."""
+    """After Dr.1.1.K the /driver surface is five read-only GETs plus exactly
+    four mutations: POST .../accept, .../decline, .../start and
+    .../arrive-store."""
     from app.main import app
 
     driver_routes = [
@@ -433,6 +434,7 @@ def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
         ("POST", "/driver/assignments/{assignment_id}/accept"),
         ("POST", "/driver/assignments/{assignment_id}/decline"),
         ("POST", "/driver/assignments/{assignment_id}/start"),
+        ("POST", "/driver/assignments/{assignment_id}/arrive-store"),
     }
 
     # No PATCH/PUT/DELETE anywhere on the /driver surface.
@@ -451,16 +453,25 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         for route in app.router.routes
         if getattr(route, "path", "").startswith("/driver")
     }
-    # accept/decline/start may appear ONLY in their three approved exact paths.
+    # accept/decline/start/arrive-store may appear ONLY in their four approved
+    # exact paths.
     approved_actions = {
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
         "/driver/assignments/{assignment_id}/start",
+        "/driver/assignments/{assignment_id}/arrive-store",
     }
     for p in driver_paths:
-        if "accept" in p or "decline" in p or "start" in p:
+        if (
+            "accept" in p
+            or "decline" in p
+            or "start" in p
+            or "arrive" in p
+        ):
             assert p in approved_actions, p
-    # None of the deferred operational / mutative surfaces exist yet.
+    # None of the deferred operational / mutative surfaces exist yet. Arrival
+    # at the store (arrive-store) is approved in K, but pickup and everything
+    # downstream of it remain banned.
     for banned_substr in (
         "online",
         "offline",
@@ -469,7 +480,10 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "dispatch",
         "proof",
         "pickup",
-        "arrive",
+        "picked-up",
+        "picked_up",
+        "en-route-to-customer",
+        "en_route_to_customer",
         "dropoff",
         "complete",
         "fail",
