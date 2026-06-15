@@ -4,9 +4,9 @@ Every endpoint is gated by `require_store_bound_driver` (Dr.1.1.B), so only
 an exact, store-bound driver reaches it; staff/manager/owner/admin and
 storeless drivers are rejected upstream with 403.
 
-The driver runtime surface is five self-scoped, read-only GETs plus five
+The driver runtime surface is five self-scoped, read-only GETs plus six
 driver-side mutations (Dr.1.1.I accept/decline, Dr.1.1.J start, Dr.1.1.K
-arrive-store, Dr.1.1.L pickup):
+arrive-store, Dr.1.1.L pickup, Dr.1.1.M depart-to-customer):
   - GET  /driver/me                                       (Dr.1.1.C)
   - GET  /driver/eligibility                              (Dr.1.1.D)
   - GET  /driver/assignments                              (Dr.1.1.F)
@@ -17,6 +17,7 @@ arrive-store, Dr.1.1.L pickup):
   - POST /driver/assignments/{id}/start                   (Dr.1.1.J)
   - POST /driver/assignments/{id}/arrive-store            (Dr.1.1.K)
   - POST /driver/assignments/{id}/pickup                  (Dr.1.1.L)
+  - POST /driver/assignments/{id}/depart-to-customer      (Dr.1.1.M)
 
 accept/decline mutate ONLY the assignment's status + accepted_at/declined_at
 (offered -> accepted/declined). start moves the assignment accepted -> started
@@ -25,11 +26,14 @@ arrive-store advances ONLY the operational state en_route_to_store ->
 arrived_at_store (assignment stays started; no Order.status, no inventory).
 pickup advances ONLY the operational state arrived_at_store -> picked_up
 (assignment stays started; no Order.status, no OrderAuditLog, no inventory).
-proof/complete/fail/return, en_route_to_customer, go-online/go-offline,
+depart-to-customer advances ONLY the operational state picked_up ->
+en_route_to_customer (assignment stays started; no Order.status, no
+OrderAuditLog, no inventory).
+proof/complete/fail/return, arrive-customer, go-online/go-offline,
 dispatch, GPS, and ID verification are later subphases and must not be added
 here. There is no PATCH/PUT/DELETE on the /driver surface, and no POST beyond
-accept/decline/start/arrive-store/pickup. The delivery-state read (Dr.1.1.H)
-never materializes state.
+accept/decline/start/arrive-store/pickup/depart-to-customer. The
+delivery-state read (Dr.1.1.H) never materializes state.
 """
 
 from __future__ import annotations
@@ -53,6 +57,7 @@ from app.schemas.driver import DriverProfileRead
 from app.services.driver import accept_driver_assignment
 from app.services.driver import arrive_driver_assignment
 from app.services.driver import decline_driver_assignment
+from app.services.driver import depart_driver_assignment
 from app.services.driver import evaluate_driver_eligibility
 from app.services.driver import get_driver_assignment
 from app.services.driver import get_driver_delivery_operational_state
@@ -259,3 +264,28 @@ def pickup_current_driver_assignment(
     and no assignment timestamp. Pickup never materializes state.
     """
     return pickup_driver_assignment(db, current_user, assignment_id)
+
+
+@router.post(
+    "/assignments/{assignment_id}/depart-to-customer",
+    response_model=DriverDeliveryOperationalStateRead,
+)
+def depart_to_customer_current_driver_assignment(
+    assignment_id: UUID,
+    current_user: User = Depends(require_store_bound_driver),
+    db: Session = Depends(get_db),
+) -> DriverDeliveryOperationalStateRead:
+    """Depart the store toward the customer for a started assignment (M).
+
+    Advances ONLY the operational state picked_up -> en_route_to_customer.
+    Idempotent once en_route_to_customer (timestamps preserved); 409 if the
+    delivery is already past en_route_to_customer; 422 if the delivery has not
+    yet been picked up (not_started / en_route_to_store / arrived_at_store /
+    pickup_started / no state row), from a terminal operational state, or from
+    an assignment status other than started; 404 (anti-enumeration) for a
+    non-own / foreign / missing assignment. Returns the operational state. Per
+    the approved M-mínima scope, the assignment stays `started` and this
+    touches no Order.status, no OrderAuditLog, no inventory, and no assignment
+    timestamp. Depart never materializes state.
+    """
+    return depart_driver_assignment(db, current_user, assignment_id)

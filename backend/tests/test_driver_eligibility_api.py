@@ -242,9 +242,10 @@ def test_response_and_blocker_shape(
 
 def test_driver_runtime_route_surface() -> None:
     """The /driver runtime routes are the five self-scoped reads plus the
-    accept/decline (Dr.1.1.I), start (Dr.1.1.J), arrive-store (Dr.1.1.K) and
-    pickup (Dr.1.1.L) mutations — nothing else. The only write methods are POST
-    on .../accept, .../decline, .../start, .../arrive-store and .../pickup; no
+    accept/decline (Dr.1.1.I), start (Dr.1.1.J), arrive-store (Dr.1.1.K),
+    pickup (Dr.1.1.L) and depart-to-customer (Dr.1.1.M) mutations — nothing
+    else. The only write methods are POST on .../accept, .../decline,
+    .../start, .../arrive-store, .../pickup and .../depart-to-customer; no
     PATCH/PUT/DELETE anywhere."""
     from app.main import app
 
@@ -265,6 +266,7 @@ def test_driver_runtime_route_surface() -> None:
         "/driver/assignments/{assignment_id}/start",
         "/driver/assignments/{assignment_id}/arrive-store",
         "/driver/assignments/{assignment_id}/pickup",
+        "/driver/assignments/{assignment_id}/depart-to-customer",
     }
 
     _action_paths = {
@@ -273,6 +275,7 @@ def test_driver_runtime_route_surface() -> None:
         "/driver/assignments/{assignment_id}/start",
         "/driver/assignments/{assignment_id}/arrive-store",
         "/driver/assignments/{assignment_id}/pickup",
+        "/driver/assignments/{assignment_id}/depart-to-customer",
     }
     for path, methods in driver_routes:
         # PATCH/PUT/DELETE never appear on the /driver surface.

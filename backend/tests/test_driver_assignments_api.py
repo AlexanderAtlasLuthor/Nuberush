@@ -408,9 +408,9 @@ def test_response_contains_no_pii_or_money(
 
 
 def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
-    """After Dr.1.1.L the /driver surface is five read-only GETs plus exactly
-    five mutations: POST .../accept, .../decline, .../start, .../arrive-store
-    and .../pickup."""
+    """After Dr.1.1.M the /driver surface is five read-only GETs plus exactly
+    six mutations: POST .../accept, .../decline, .../start, .../arrive-store,
+    .../pickup and .../depart-to-customer."""
     from app.main import app
 
     driver_routes = [
@@ -436,6 +436,7 @@ def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
         ("POST", "/driver/assignments/{assignment_id}/start"),
         ("POST", "/driver/assignments/{assignment_id}/arrive-store"),
         ("POST", "/driver/assignments/{assignment_id}/pickup"),
+        ("POST", "/driver/assignments/{assignment_id}/depart-to-customer"),
     }
 
     # No PATCH/PUT/DELETE anywhere on the /driver surface.
@@ -454,14 +455,15 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         for route in app.router.routes
         if getattr(route, "path", "").startswith("/driver")
     }
-    # accept/decline/start/arrive-store/pickup may appear ONLY in their five
-    # approved exact paths.
+    # accept/decline/start/arrive-store/pickup/depart-to-customer may appear
+    # ONLY in their six approved exact paths.
     approved_actions = {
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
         "/driver/assignments/{assignment_id}/start",
         "/driver/assignments/{assignment_id}/arrive-store",
         "/driver/assignments/{assignment_id}/pickup",
+        "/driver/assignments/{assignment_id}/depart-to-customer",
     }
     for p in driver_paths:
         if (
@@ -470,11 +472,13 @@ def test_no_mutative_or_operational_driver_routes() -> None:
             or "start" in p
             or "arrive" in p
             or "pickup" in p
+            or "depart" in p
         ):
             assert p in approved_actions, p
-    # None of the deferred operational / mutative surfaces exist yet. Pickup
-    # (arrived_at_store -> picked_up) is approved in L, but the picked_up
-    # successor states and everything downstream of it remain banned.
+    # None of the deferred operational / mutative surfaces exist yet. Depart
+    # (picked_up -> en_route_to_customer) is approved in M, but the
+    # en_route_to_customer successor states and everything downstream of it
+    # remain banned.
     for banned_substr in (
         "online",
         "offline",
@@ -488,13 +492,14 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "en_route_to_customer",
         "arrive-customer",
         "arrived-at-customer",
+        "verify-age",
+        "verify-id",
+        "id-verification",
         "dropoff",
         "complete",
         "fail",
         "return-to-store",
         "returned-to-store",
-        "verify-id",
-        "id-verification",
         "location",
         "gps",
         "geofence",
