@@ -4,8 +4,8 @@ Every endpoint is gated by `require_store_bound_driver` (Dr.1.1.B), so only
 an exact, store-bound driver reaches it; staff/manager/owner/admin and
 storeless drivers are rejected upstream with 403.
 
-The driver runtime surface is five self-scoped, read-only GETs plus the first
-two driver-side mutations (Dr.1.1.I accept/decline):
+The driver runtime surface is five self-scoped, read-only GETs plus three
+driver-side mutations (Dr.1.1.I accept/decline, Dr.1.1.J start):
   - GET  /driver/me                                       (Dr.1.1.C)
   - GET  /driver/eligibility                              (Dr.1.1.D)
   - GET  /driver/assignments                              (Dr.1.1.F)
@@ -13,13 +13,15 @@ two driver-side mutations (Dr.1.1.I accept/decline):
   - GET  /driver/assignments/{id}/delivery-state          (Dr.1.1.H)
   - POST /driver/assignments/{id}/accept                  (Dr.1.1.I)
   - POST /driver/assignments/{id}/decline                 (Dr.1.1.I)
+  - POST /driver/assignments/{id}/start                   (Dr.1.1.J)
 
 accept/decline mutate ONLY the assignment's status + accepted_at/declined_at
-(offered -> accepted/declined). Start/pickup/proof/complete/fail/return,
-go-online/go-offline, dispatch, GPS, and ID verification are later subphases
-and must not be added here. There is no PATCH/PUT/DELETE on the /driver
-surface, and no POST beyond accept/decline. The delivery-state read (Dr.1.1.H)
-never materializes state (`ensure_*` is not used here).
+(offered -> accepted/declined). start moves the assignment accepted -> started
+and the operational state to en_route_to_store (no Order.status, no inventory).
+Pickup/arrive/proof/complete/fail/return, go-online/go-offline, dispatch, GPS,
+and ID verification are later subphases and must not be added here. There is no
+PATCH/PUT/DELETE on the /driver surface, and no POST beyond accept/decline/
+start. The delivery-state read (Dr.1.1.H) never materializes state.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from app.services.driver import get_driver_assignment
 from app.services.driver import get_driver_delivery_operational_state
 from app.services.driver import get_driver_profile_for_user
 from app.services.driver import list_driver_assignments
+from app.services.driver import start_driver_assignment
 
 router = APIRouter(prefix="/driver", tags=["driver"])
 
@@ -177,3 +180,25 @@ def decline_current_driver_assignment(
     assignment. Mutates only the assignment's status + `declined_at`.
     """
     return decline_driver_assignment(db, current_user, assignment_id)
+
+
+@router.post(
+    "/assignments/{assignment_id}/start",
+    response_model=DriverDeliveryOperationalStateRead,
+)
+def start_current_driver_assignment(
+    assignment_id: UUID,
+    current_user: User = Depends(require_store_bound_driver),
+    db: Session = Depends(get_db),
+) -> DriverDeliveryOperationalStateRead:
+    """Start the physical delivery of an accepted assignment (Dr.1.1.J).
+
+    Moves the assignment accepted -> started and the operational state to
+    `en_route_to_store` (creating it if absent), atomically. Idempotent once
+    started / en_route_to_store; 409 if the delivery is already past
+    en_route_to_store; 422 from any other assignment status or a terminal
+    operational state; 404 (anti-enumeration) for a non-own / foreign /
+    missing assignment. Returns the operational state; touches no Order.status
+    or inventory.
+    """
+    return start_driver_assignment(db, current_user, assignment_id)

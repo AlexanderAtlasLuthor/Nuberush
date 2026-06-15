@@ -241,9 +241,10 @@ def test_response_and_blocker_shape(
 
 
 def test_driver_runtime_route_surface() -> None:
-    """The /driver runtime routes are the five self-scoped reads plus the two
-    accept/decline mutations (Dr.1.1.I) — nothing else. The only write methods
-    are POST on .../accept and .../decline; no PATCH/PUT/DELETE anywhere."""
+    """The /driver runtime routes are the five self-scoped reads plus the
+    accept/decline (Dr.1.1.I) and start (Dr.1.1.J) mutations — nothing else.
+    The only write methods are POST on .../accept, .../decline and .../start;
+    no PATCH/PUT/DELETE anywhere."""
     from app.main import app
 
     driver_routes = {
@@ -260,18 +261,20 @@ def test_driver_runtime_route_surface() -> None:
         "/driver/assignments/{assignment_id}/delivery-state",
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
+        "/driver/assignments/{assignment_id}/start",
     }
 
-    _decision_paths = {
+    _action_paths = {
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
+        "/driver/assignments/{assignment_id}/start",
     }
     for path, methods in driver_routes:
         # PATCH/PUT/DELETE never appear on the /driver surface.
         assert "PATCH" not in methods
         assert "DELETE" not in methods
         assert "PUT" not in methods
-        if path in _decision_paths:
+        if path in _action_paths:
             assert "POST" in methods
             assert "GET" not in methods
         else:

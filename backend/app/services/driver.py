@@ -643,3 +643,229 @@ def decline_driver_assignment(
     return _decide_driver_assignment(
         db, current_user, assignment_id, accept=False
     )
+
+
+# --------------------------------------------------------------------- #
+# Start delivery / en route to store (Dr.1.1.J)
+# --------------------------------------------------------------------- #
+#
+# The bridge between the assignment lifecycle and the physical delivery flow.
+# A driver STARTS an accepted assignment: the assignment moves
+# accepted -> started AND the operational state is materialized/advanced to
+# `en_route_to_store`, atomically (one commit, both rows row-locked). Self-
+# scoped + store-bound, same anti-enumeration 404. It never touches
+# Order.status, inventory, `accepted_at` / `declined_at` / `assigned_at` /
+# `canceled_at` / `completed_at`, or any audit log, and it never adds an
+# `started_at` column (the physical-flow timing lives in the operational
+# state's `state_started_at` / `last_transition_at`).
+#
+# Valid assignment sources: `accepted` (real transition) and `started`
+# (idempotent). Every other status is a 422 invalid transition. Operational
+# state: none / not_started -> en_route_to_store (real); en_route_to_store ->
+# idempotent (no timestamp rewrite); a later non-terminal physical state ->
+# 409 (never regress); a terminal state -> 422.
+
+# Physical states strictly after en_route_to_store but NOT terminal — starting
+# again would regress the flow, so they are a 409 conflict.
+_STARTED_PAST_EN_ROUTE_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.arrived_at_store.value,
+        DriverDeliveryOperationalStateValue.pickup_started.value,
+        DriverDeliveryOperationalStateValue.picked_up.value,
+        DriverDeliveryOperationalStateValue.en_route_to_customer.value,
+        DriverDeliveryOperationalStateValue.arrived_at_customer.value,
+        DriverDeliveryOperationalStateValue.id_verification_pending.value,
+        DriverDeliveryOperationalStateValue.id_verified.value,
+        DriverDeliveryOperationalStateValue.returning_to_store.value,
+    }
+)
+
+# Terminal physical states — a finished/failed/returned/canceled delivery can
+# never be (re)started; a 422 invalid transition.
+_TERMINAL_OPERATIONAL_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.delivery_completed.value,
+        DriverDeliveryOperationalStateValue.delivery_failed.value,
+        DriverDeliveryOperationalStateValue.returned_to_store.value,
+        DriverDeliveryOperationalStateValue.canceled.value,
+    }
+)
+
+
+def _apply_start_to_existing_state(
+    db: Session,
+    assignment: OrderDriverAssignment,
+    operational_state: DriverDeliveryOperationalState,
+) -> DriverDeliveryOperationalStateRead:
+    """Advance a row-locked operational state for a start (Dr.1.1.J).
+
+    The caller has already validated and locked the assignment (status in
+    {accepted, started}) and locked this state row. Mutates within the
+    caller's transaction and commits once.
+    """
+    en_route = DriverDeliveryOperationalStateValue.en_route_to_store.value
+    not_started = DriverDeliveryOperationalStateValue.not_started.value
+    started = OrderDriverAssignmentStatus.started.value
+    current_state = operational_state.state
+
+    if current_state == not_started:
+        now = datetime.now(timezone.utc)
+        operational_state.state = en_route
+        operational_state.state_started_at = now
+        operational_state.last_transition_at = now
+        assignment.status = started
+        db.commit()
+        db.refresh(operational_state)
+    elif current_state == en_route:
+        # Idempotent: never rewrite the physical-flow timestamps. Keep the
+        # assignment consistent (it should already be `started`).
+        if assignment.status != started:
+            assignment.status = started
+        db.commit()
+        db.refresh(operational_state)
+    elif current_state in _TERMINAL_OPERATIONAL_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Assignment cannot be started from operational state "
+                f"'{current_state}'"
+            ),
+        )
+    else:
+        # arrived_at_store and later non-terminal physical states.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery already past en_route_to_store",
+        )
+
+    return DriverDeliveryOperationalStateRead.model_validate(
+        operational_state
+    )
+
+
+def _resolve_locked_owned_assignment(
+    db: Session,
+    driver_profile: DriverProfile,
+    current_user: User,
+    assignment_id: UUID,
+) -> OrderDriverAssignment:
+    """Load the own assignment FOR UPDATE, or raise the 404 scope boundary."""
+    assignment = db.scalar(
+        select(OrderDriverAssignment)
+        .where(
+            OrderDriverAssignment.id == assignment_id,
+            OrderDriverAssignment.driver_profile_id == driver_profile.id,
+            OrderDriverAssignment.store_id == current_user.store_id,
+        )
+        .with_for_update()
+    )
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Driver assignment not found",
+        )
+    return assignment
+
+
+def start_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+) -> DriverDeliveryOperationalStateRead:
+    """Start the physical delivery of an accepted assignment (Dr.1.1.J).
+
+    accepted -> started on the assignment, and the operational state is
+    created (or advanced from not_started) to `en_route_to_store`, atomically.
+    Idempotent once `started` / `en_route_to_store`. A later non-terminal
+    physical state is a 409 (never regress); a terminal state, or an
+    assignment status other than accepted/started, is a 422. Self-scoped +
+    store-bound; a non-own/foreign/missing assignment is a 404. Returns the
+    operational state. Never touches Order.status, inventory, or any other
+    assignment timestamp.
+    """
+    accepted = OrderDriverAssignmentStatus.accepted.value
+    started = OrderDriverAssignmentStatus.started.value
+    en_route = DriverDeliveryOperationalStateValue.en_route_to_store.value
+
+    driver_profile = get_driver_profile_for_user(db, current_user)
+
+    # One retry to absorb a concurrent first-start that wins the
+    # UNIQUE(assignment_id) race on the operational-state insert.
+    for _attempt in range(2):
+        assignment = _resolve_locked_owned_assignment(
+            db, driver_profile, current_user, assignment_id
+        )
+        if assignment.status not in (accepted, started):
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Assignment cannot be started from status "
+                    f"'{assignment.status}'"
+                ),
+            )
+
+        operational_state = db.scalar(
+            select(DriverDeliveryOperationalState)
+            .where(
+                DriverDeliveryOperationalState.assignment_id
+                == assignment.id
+            )
+            .with_for_update()
+        )
+        if operational_state is not None:
+            return _apply_start_to_existing_state(
+                db, assignment, operational_state
+            )
+
+        # No state yet — create it directly as en_route_to_store and move the
+        # assignment to started in the same transaction.
+        operational_state = DriverDeliveryOperationalState(
+            assignment_id=assignment.id,
+            order_id=assignment.order_id,
+            driver_profile_id=assignment.driver_profile_id,
+            store_id=assignment.store_id,
+            state=en_route,
+        )
+        db.add(operational_state)
+        assignment.status = started
+        try:
+            db.commit()
+        except IntegrityError:
+            # A concurrent caller created the state row first; retry the loop,
+            # which will now find and advance the existing row idempotently.
+            db.rollback()
+            continue
+        db.refresh(operational_state)
+        return DriverDeliveryOperationalStateRead.model_validate(
+            operational_state
+        )
+
+    # The retry observed a race; the row now exists — advance it.
+    assignment = _resolve_locked_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+    if assignment.status not in (accepted, started):
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Assignment cannot be started from status "
+                f"'{assignment.status}'"
+            ),
+        )
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState)
+        .where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id
+        )
+        .with_for_update()
+    )
+    if operational_state is None:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not start delivery; please retry.",
+        )
+    return _apply_start_to_existing_state(db, assignment, operational_state)

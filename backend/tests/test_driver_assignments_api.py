@@ -407,9 +407,9 @@ def test_response_contains_no_pii_or_money(
 # --------------------------------------------------------------------- #
 
 
-def test_driver_route_surface_is_reads_plus_accept_decline() -> None:
-    """After Dr.1.1.I the /driver surface is five read-only GETs plus exactly
-    two mutations: POST .../accept and POST .../decline."""
+def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
+    """After Dr.1.1.J the /driver surface is five read-only GETs plus exactly
+    three mutations: POST .../accept, .../decline and .../start."""
     from app.main import app
 
     driver_routes = [
@@ -432,6 +432,7 @@ def test_driver_route_surface_is_reads_plus_accept_decline() -> None:
         ("GET", "/driver/assignments/{assignment_id}/delivery-state"),
         ("POST", "/driver/assignments/{assignment_id}/accept"),
         ("POST", "/driver/assignments/{assignment_id}/decline"),
+        ("POST", "/driver/assignments/{assignment_id}/start"),
     }
 
     # No PATCH/PUT/DELETE anywhere on the /driver surface.
@@ -450,14 +451,15 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         for route in app.router.routes
         if getattr(route, "path", "").startswith("/driver")
     }
-    # accept/decline may appear ONLY in their two approved exact paths.
-    approved_decisions = {
+    # accept/decline/start may appear ONLY in their three approved exact paths.
+    approved_actions = {
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
+        "/driver/assignments/{assignment_id}/start",
     }
     for p in driver_paths:
-        if "accept" in p or "decline" in p:
-            assert p in approved_decisions, p
+        if "accept" in p or "decline" in p or "start" in p:
+            assert p in approved_actions, p
     # None of the deferred operational / mutative surfaces exist yet.
     for banned_substr in (
         "online",
@@ -467,10 +469,15 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "dispatch",
         "proof",
         "pickup",
+        "arrive",
         "dropoff",
         "complete",
         "fail",
         "return-to-store",
-        "start",
+        "verify-id",
+        "location",
+        "geofence",
+        "earnings",
+        "payout",
     ):
         assert not any(banned_substr in p for p in driver_paths), banned_substr

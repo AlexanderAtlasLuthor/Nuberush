@@ -377,7 +377,7 @@ def test_response_exposes_no_pii(
 # --------------------------------------------------------------------- #
 
 
-def test_route_surface_reads_plus_accept_decline() -> None:
+def test_route_surface_reads_plus_accept_decline_start() -> None:
     from app.main import app
 
     driver_routes = [
@@ -400,12 +400,14 @@ def test_route_surface_reads_plus_accept_decline() -> None:
         ("GET", "/driver/assignments/{assignment_id}/delivery-state"),
         ("POST", "/driver/assignments/{assignment_id}/accept"),
         ("POST", "/driver/assignments/{assignment_id}/decline"),
+        ("POST", "/driver/assignments/{assignment_id}/start"),
     }
 
     posts = {p for m, p in surface if m == "POST"}
     assert posts == {
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
+        "/driver/assignments/{assignment_id}/start",
     }
     for route in driver_routes:
         methods = set(route.methods)
