@@ -21,6 +21,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
 from app.db.models import DriverApprovalStatus
+from app.db.models import DriverDeliveryFailure
+from app.db.models import DriverDeliveryFailureReason
 from app.db.models import DriverDeliveryOperationalState
 from app.db.models import DriverDeliveryOperationalStateValue
 from app.db.models import DriverDeliveryProof
@@ -39,9 +41,11 @@ from app.db.models import UserRole
 from app.services.orders import complete_order_via_driver
 from app.schemas.driver import DriverAssignmentListResponse
 from app.schemas.driver import DriverAssignmentRead
+from app.schemas.driver import DriverDeliveryFailureRead
 from app.schemas.driver import DriverDeliveryOperationalStateRead
 from app.schemas.driver import DriverDeliveryProofRead
 from app.schemas.driver import DriverDeliveryVerificationRead
+from app.schemas.driver import DriverFailDeliveryRequest
 from app.schemas.driver import DriverEligibilityBlocker
 from app.schemas.driver import DriverEligibilityBlockerCode
 from app.schemas.driver import DriverEligibilityBlockerSeverity
@@ -2009,4 +2013,194 @@ def complete_delivery_driver_assignment(
     db.refresh(operational_state)
     return DriverDeliveryOperationalStateRead.model_validate(
         operational_state
+    )
+
+
+# ===================================================================== #
+# Dr.1.2.F — failed delivery foundation
+# ===================================================================== #
+#
+# POST /driver/assignments/{id}/fail records an operational-only failed
+# delivery. It is allowed only while the driver holds custody and the handoff
+# can still fail (picked_up .. id_verified). On success it inserts a
+# `DriverDeliveryFailure` and advances the operational state to
+# `delivery_failed`; the assignment stays `started`, and Order.status,
+# OrderAuditLog, and inventory are NEVER touched — the commercial/physical
+# resolution (return-to-store, store confirmation, cancel/return) is a later
+# subphase. The driver layer never writes Order.status, never imports/calls the
+# orders or inventory services.
+
+# Operational states in which the driver holds custody and a handoff can still
+# fail. A fail is permitted only from this band.
+_ALLOWED_FAIL_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.picked_up.value,
+        DriverDeliveryOperationalStateValue.en_route_to_customer.value,
+        DriverDeliveryOperationalStateValue.arrived_at_customer.value,
+        DriverDeliveryOperationalStateValue.id_verification_pending.value,
+        DriverDeliveryOperationalStateValue.id_verified.value,
+    }
+)
+
+# States strictly before custody: the delivery is not yet in a position to
+# fail a handoff (422).
+_BEFORE_FAIL_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.not_started.value,
+        DriverDeliveryOperationalStateValue.en_route_to_store.value,
+        DriverDeliveryOperationalStateValue.arrived_at_store.value,
+        DriverDeliveryOperationalStateValue.pickup_started.value,
+    }
+)
+
+
+def _latest_failure_for_assignment(
+    db: Session, assignment_id: UUID
+) -> DriverDeliveryFailure | None:
+    return db.scalar(
+        select(DriverDeliveryFailure)
+        .where(DriverDeliveryFailure.assignment_id == assignment_id)
+        .order_by(DriverDeliveryFailure.created_at.desc())
+        .limit(1)
+    )
+
+
+def _build_failure(
+    *,
+    assignment: OrderDriverAssignment,
+    current_user: User,
+    payload: DriverFailDeliveryRequest,
+) -> DriverDeliveryFailure:
+    """Build a redaction-safe failed-delivery row from the payload.
+
+    Anchors are derived from the assignment (consistent tenancy), the actor is
+    the current driver, and only redaction-safe metadata is persisted — a
+    structured reason code and a safe note, never a photo, signature, artifact,
+    ID/OCR/barcode data, or customer PII.
+    """
+    return DriverDeliveryFailure(
+        assignment_id=assignment.id,
+        order_id=assignment.order_id,
+        driver_profile_id=assignment.driver_profile_id,
+        store_id=assignment.store_id,
+        reported_by_user_id=current_user.id,
+        reason_code=payload.reason_code.value,
+        note=payload.note,
+    )
+
+
+def fail_delivery_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+    payload: DriverFailDeliveryRequest,
+) -> DriverDeliveryFailureRead:
+    """Record an operational-only failed delivery (Dr.1.2.F).
+
+    Requires `assignment.status == started` and an operational state in the
+    custody band (picked_up / en_route_to_customer / arrived_at_customer /
+    id_verification_pending / id_verified). On success: insert a
+    `DriverDeliveryFailure`, advance the operational state to `delivery_failed`,
+    and commit once. The assignment stays `started`; Order.status, OrderAuditLog,
+    and inventory are never touched.
+
+    Idempotent once failed: a repeat with the SAME reason_code returns the
+    existing latest failure (no new row); a DIFFERENT reason_code is a 409. A
+    state before custody (not_started / en_route_to_store / arrived_at_store /
+    pickup_started) or a missing state row is a 422; a terminal state
+    (delivery_completed / returned_to_store / canceled) or an assignment status
+    other than `started` is a 422; `returning_to_store` is a 409. Self-scoped +
+    store-bound; a non-own / foreign / missing assignment is a 404. Returns the
+    failure record (redaction-safe).
+    """
+    delivery_failed = (
+        DriverDeliveryOperationalStateValue.delivery_failed.value
+    )
+    started = OrderDriverAssignmentStatus.started.value
+
+    driver_profile = get_driver_profile_for_user(db, current_user)
+    assignment = _resolve_locked_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState)
+        .where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id
+        )
+        .with_for_update()
+    )
+    if operational_state is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet in a failable state",
+        )
+
+    current_state = operational_state.state
+
+    # Idempotent failure is checked BEFORE the started-status guard so a repeat
+    # call on an already-failed delivery resolves consistently.
+    if current_state == delivery_failed:
+        existing = _latest_failure_for_assignment(db, assignment.id)
+        if existing is not None and (
+            existing.reason_code == payload.reason_code.value
+        ):
+            # Idempotent: same reason — never insert a duplicate row.
+            result = DriverDeliveryFailureRead.model_validate(existing)
+            db.rollback()
+            return result
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery already failed with a different reason",
+        )
+
+    if assignment.status != started:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Assignment cannot fail from status "
+                f"'{assignment.status}'"
+            ),
+        )
+
+    if current_state in _ALLOWED_FAIL_STATES:
+        failure = _build_failure(
+            assignment=assignment,
+            current_user=current_user,
+            payload=payload,
+        )
+        db.add(failure)
+        now = datetime.now(timezone.utc)
+        operational_state.state = delivery_failed
+        operational_state.state_started_at = now
+        operational_state.last_transition_at = now
+        # assignment.status intentionally stays `started`; Order.status,
+        # OrderAuditLog, and inventory are intentionally untouched.
+        db.commit()
+        db.refresh(failure)
+        return DriverDeliveryFailureRead.model_validate(failure)
+
+    if current_state in _BEFORE_FAIL_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet in a failable state",
+        )
+
+    if current_state in _TERMINAL_OPERATIONAL_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery already ended",
+        )
+
+    # returning_to_store and any other unexpected non-terminal state: never
+    # regress, never silently pass through.
+    db.rollback()
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Delivery cannot be failed from its current state",
     )

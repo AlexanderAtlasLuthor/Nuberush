@@ -19,8 +19,10 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import Field
 from pydantic import model_validator
 
+from app.db.models import DriverDeliveryFailureReason
 from app.db.models import DriverDeliveryVerificationFailureReason
 from app.db.models import DriverDeliveryVerificationOutcome
 
@@ -339,6 +341,51 @@ class DriverDeliveryProofRead(BaseModel):
     recipient_present_confirmed: bool
     handoff_confirmed: bool
     restricted_not_left_unattended: bool
+    note: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------- #
+# Failed delivery (Dr.1.2.F)
+# --------------------------------------------------------------------- #
+#
+# POST /driver/assignments/{id}/fail records an operational-only failed
+# delivery on an in-custody assignment (picked_up .. id_verified). It records
+# a `DriverDeliveryFailure` and advances the operational state to
+# delivery_failed; it NEVER mutates Order.status, OrderAuditLog, the assignment
+# status, or inventory (the commercial/physical resolution — return-to-store,
+# store confirmation, cancel/return — is a later subphase). The request and
+# response carry ONLY redaction-safe metadata: a structured reason code, a safe
+# note, timestamps, and association IDs — never a photo, signature, artifact
+# path/URL, ID/OCR/barcode/biometric data, customer name/address, DOB, or any
+# other PII.
+
+
+class DriverFailDeliveryRequest(BaseModel):
+    """Body for POST /driver/assignments/{id}/fail.
+
+    `reason_code` is required and must be one of the existing
+    `DriverDeliveryFailureReason` codes. `note` is an optional safe note capped
+    at 500 chars. No sensitive field is accepted.
+    """
+
+    reason_code: DriverDeliveryFailureReason
+    note: str | None = Field(default=None, max_length=500)
+
+
+class DriverDeliveryFailureRead(BaseModel):
+    """Redaction-safe view of a recorded failed delivery (Dr.1.2.F)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    assignment_id: UUID
+    order_id: UUID
+    driver_profile_id: UUID
+    store_id: UUID
+    reported_by_user_id: UUID | None
+    reason_code: str
     note: str | None
     created_at: datetime
     updated_at: datetime

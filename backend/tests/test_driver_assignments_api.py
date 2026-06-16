@@ -442,6 +442,7 @@ def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
         ("POST", "/driver/assignments/{assignment_id}/verify-age"),
         ("POST", "/driver/assignments/{assignment_id}/proof"),
         ("POST", "/driver/assignments/{assignment_id}/complete"),
+        ("POST", "/driver/assignments/{assignment_id}/fail"),
     }
 
     # No PATCH/PUT/DELETE anywhere on the /driver surface.
@@ -474,6 +475,7 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "/driver/assignments/{assignment_id}/verify-age",
         "/driver/assignments/{assignment_id}/proof",
         "/driver/assignments/{assignment_id}/complete",
+        "/driver/assignments/{assignment_id}/fail",
     }
     for p in driver_paths:
         if (
@@ -486,13 +488,14 @@ def test_no_mutative_or_operational_driver_routes() -> None:
             or "verify" in p
             or "proof" in p
             or "complete" in p
+            or "fail" in p
         ):
             assert p in approved_actions, p
     # None of the deferred operational / mutative surfaces exist yet.
-    # Complete (Dr.1.2.E, id_verified -> delivery_completed via the orders
-    # authority bridge) is approved, but fail / return-to-store, store
-    # confirmation and any vendor/scan ID-verification surface downstream of it
-    # remain banned.
+    # Complete (Dr.1.2.E) and fail (Dr.1.2.F, operational-only ->
+    # delivery_failed) are approved, but return-to-store, store confirmation
+    # and any vendor/scan ID-verification surface downstream of them remain
+    # banned.
     for banned_substr in (
         "online",
         "offline",
@@ -507,9 +510,10 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "id-verification",
         "id_verification",
         "dropoff",
-        "fail",
         "return-to-store",
         "returned-to-store",
+        "store-confirmation",
+        "confirm-driver-return",
         "location",
         "gps",
         "geofence",

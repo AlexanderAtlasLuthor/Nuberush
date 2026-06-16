@@ -54,11 +54,16 @@ started -> completed, and promotes Order.status ready/out_for_delivery ->
 delivered EXCLUSIVELY through the orders authority bridge (which owns the
 inventory consume and the OrderAuditLog). The driver layer never writes
 Order.status or touches inventory directly.
-fail/return-to-store, store return confirmation, id-verification
+fail (Dr.1.2.F) records an operational-only failed delivery on an in-custody
+assignment (picked_up .. id_verified): it inserts a DriverDeliveryFailure and
+advances ONLY the operational state to delivery_failed (assignment stays
+started; no Order.status, no OrderAuditLog, no inventory). It is idempotent per
+reason_code and stores only a structured reason code plus a safe note.
+return-to-store, store return confirmation, id-verification
 (vendor/scan/OCR), go-online/go-offline, dispatch, GPS, and location are later
 subphases and must not be added here. There is no PATCH/PUT/DELETE on the
 /driver surface, and no POST beyond accept/decline/start/arrive-store/pickup/
-depart-to-customer/arrive-customer/verify-age/proof/complete. The
+depart-to-customer/arrive-customer/verify-age/proof/complete/fail. The
 delivery-state read (Dr.1.1.H) never materializes state.
 """
 
@@ -77,10 +82,12 @@ from app.db.models import User
 from app.db.session import get_db
 from app.schemas.driver import DriverAssignmentListResponse
 from app.schemas.driver import DriverAssignmentRead
+from app.schemas.driver import DriverDeliveryFailureRead
 from app.schemas.driver import DriverDeliveryOperationalStateRead
 from app.schemas.driver import DriverDeliveryProofRead
 from app.schemas.driver import DriverDeliveryVerificationRead
 from app.schemas.driver import DriverEligibilityRead
+from app.schemas.driver import DriverFailDeliveryRequest
 from app.schemas.driver import DriverProfileRead
 from app.schemas.driver import DriverProofSubmitRequest
 from app.schemas.driver import DriverVerifyAgeRequest
@@ -90,6 +97,7 @@ from app.services.driver import arrive_driver_assignment
 from app.services.driver import decline_driver_assignment
 from app.services.driver import depart_driver_assignment
 from app.services.driver import evaluate_driver_eligibility
+from app.services.driver import fail_delivery_driver_assignment
 from app.services.driver import get_driver_assignment
 from app.services.driver import get_driver_delivery_operational_state
 from app.services.driver import get_driver_profile_for_user
@@ -442,4 +450,35 @@ def complete_current_driver_assignment(
     """
     return complete_delivery_driver_assignment(
         db, current_user, assignment_id
+    )
+
+
+@router.post(
+    "/assignments/{assignment_id}/fail",
+    response_model=DriverDeliveryFailureRead,
+)
+def fail_current_driver_assignment(
+    assignment_id: UUID,
+    payload: DriverFailDeliveryRequest,
+    current_user: User = Depends(require_store_bound_driver),
+    db: Session = Depends(get_db),
+) -> DriverDeliveryFailureRead:
+    """Record an operational-only failed delivery (Dr.1.2.F).
+
+    Gated on assignment.status == started and an operational state in the
+    custody band (picked_up / en_route_to_customer / arrived_at_customer /
+    id_verification_pending / id_verified). On success it inserts a
+    `DriverDeliveryFailure` (structured reason_code + optional safe note) and
+    advances the operational state to delivery_failed; the assignment stays
+    started, and Order.status, OrderAuditLog, and inventory are never touched
+    (the commercial/physical resolution is a later subphase). Idempotent once
+    failed: a repeat with the same reason_code returns the existing failure, a
+    different reason_code is a 409. A state before custody / a missing state row
+    / a terminal state / an assignment status other than started is a 422;
+    returning_to_store is a 409; a non-own / foreign / missing assignment is a
+    404. Returns the failure record (redaction-safe; no PII, no Order.status,
+    no inventory).
+    """
+    return fail_delivery_driver_assignment(
+        db, current_user, assignment_id, payload
     )

@@ -272,6 +272,7 @@ def test_driver_runtime_route_surface() -> None:
         "/driver/assignments/{assignment_id}/verify-age",
         "/driver/assignments/{assignment_id}/proof",
         "/driver/assignments/{assignment_id}/complete",
+        "/driver/assignments/{assignment_id}/fail",
     }
 
     _action_paths = {
@@ -285,6 +286,7 @@ def test_driver_runtime_route_surface() -> None:
         "/driver/assignments/{assignment_id}/verify-age",
         "/driver/assignments/{assignment_id}/proof",
         "/driver/assignments/{assignment_id}/complete",
+        "/driver/assignments/{assignment_id}/fail",
     }
     for path, methods in driver_routes:
         # PATCH/PUT/DELETE never appear on the /driver surface.
