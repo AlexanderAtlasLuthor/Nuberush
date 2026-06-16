@@ -334,11 +334,12 @@ def test_route_surface_reads_plus_three_actions() -> None:
         ("POST", "/driver/assignments/{assignment_id}/depart-to-customer"),
         ("POST", "/driver/assignments/{assignment_id}/arrive-customer"),
         ("POST", "/driver/assignments/{assignment_id}/verify-age"),
+        ("POST", "/driver/assignments/{assignment_id}/proof"),
     }
     gets = sum(1 for m, _ in surface if m == "GET")
     posts = sum(1 for m, _ in surface if m == "POST")
     assert gets == 5
-    assert posts == 8
+    assert posts == 9
     for route in driver_routes:
         methods = set(route.methods)
         assert "PATCH" not in methods

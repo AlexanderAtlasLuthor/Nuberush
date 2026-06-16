@@ -406,6 +406,7 @@ def test_route_surface_reads_plus_accept_decline_start() -> None:
         ("POST", "/driver/assignments/{assignment_id}/depart-to-customer"),
         ("POST", "/driver/assignments/{assignment_id}/arrive-customer"),
         ("POST", "/driver/assignments/{assignment_id}/verify-age"),
+        ("POST", "/driver/assignments/{assignment_id}/proof"),
     }
 
     posts = {p for m, p in surface if m == "POST"}
@@ -418,6 +419,7 @@ def test_route_surface_reads_plus_accept_decline_start() -> None:
         "/driver/assignments/{assignment_id}/depart-to-customer",
         "/driver/assignments/{assignment_id}/arrive-customer",
         "/driver/assignments/{assignment_id}/verify-age",
+        "/driver/assignments/{assignment_id}/proof",
     }
     for route in driver_routes:
         methods = set(route.methods)

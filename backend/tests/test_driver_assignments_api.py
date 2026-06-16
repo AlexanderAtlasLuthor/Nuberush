@@ -440,6 +440,7 @@ def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
         ("POST", "/driver/assignments/{assignment_id}/depart-to-customer"),
         ("POST", "/driver/assignments/{assignment_id}/arrive-customer"),
         ("POST", "/driver/assignments/{assignment_id}/verify-age"),
+        ("POST", "/driver/assignments/{assignment_id}/proof"),
     }
 
     # No PATCH/PUT/DELETE anywhere on the /driver surface.
@@ -459,8 +460,8 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         if getattr(route, "path", "").startswith("/driver")
     }
     # accept/decline/start/arrive-store/pickup/depart-to-customer/
-    # arrive-customer/verify-age may appear ONLY in their eight approved exact
-    # paths.
+    # arrive-customer/verify-age/proof may appear ONLY in their nine approved
+    # exact paths.
     approved_actions = {
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
@@ -470,6 +471,7 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "/driver/assignments/{assignment_id}/depart-to-customer",
         "/driver/assignments/{assignment_id}/arrive-customer",
         "/driver/assignments/{assignment_id}/verify-age",
+        "/driver/assignments/{assignment_id}/proof",
     }
     for p in driver_paths:
         if (
@@ -480,19 +482,19 @@ def test_no_mutative_or_operational_driver_routes() -> None:
             or "pickup" in p
             or "depart" in p
             or "verify" in p
+            or "proof" in p
         ):
             assert p in approved_actions, p
     # None of the deferred operational / mutative surfaces exist yet.
-    # Verify-age (arrived_at_customer -> id_verified on pass) is approved in
-    # Dr.1.2.C, but proof / complete / fail / return-to-store and any
-    # vendor/scan ID-verification surface downstream of it remain banned.
+    # Proof (Dr.1.2.D, record-only on id_verified) is approved, but complete /
+    # fail / return-to-store, store confirmation and any vendor/scan
+    # ID-verification surface downstream of it remain banned.
     for banned_substr in (
         "online",
         "offline",
         "active-delivery",
         "active_delivery",
         "dispatch",
-        "proof",
         "picked-up",
         "picked_up",
         "en-route-to-customer",

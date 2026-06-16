@@ -21,6 +21,7 @@ arrive-customer):
   - POST /driver/assignments/{id}/depart-to-customer      (Dr.1.1.M)
   - POST /driver/assignments/{id}/arrive-customer         (Dr.1.1.N)
   - POST /driver/assignments/{id}/verify-age              (Dr.1.2.C)
+  - POST /driver/assignments/{id}/proof                   (Dr.1.2.D)
 
 accept/decline mutate ONLY the assignment's status + accepted_at/declined_at
 (offered -> accepted/declined). start moves the assignment accepted -> started
@@ -41,12 +42,17 @@ operational state arrived_at_customer -> id_verified (assignment stays started;
 no Order.status, no Order.age_verified_at, no OrderAuditLog, no inventory);
 `fail` / `manual_review` record the attempt and keep the state at
 arrived_at_customer.
-proof/complete/fail/return-to-store, id-verification (vendor/scan/OCR),
-go-online/go-offline, dispatch, GPS, and location are later subphases and must
-not be added here. There is no PATCH/PUT/DELETE on the /driver surface, and no
-POST beyond accept/decline/start/arrive-store/pickup/depart-to-customer/
-arrive-customer/verify-age. The delivery-state read (Dr.1.1.H) never
-materializes state.
+proof (Dr.1.2.D) records a redaction-safe manual proof-of-delivery checklist on
+an id_verified assignment (record-only: state stays id_verified; assignment
+stays started; no Order.status, no Order.age_verified_at, no OrderAuditLog, no
+inventory). It is idempotent per assignment and never stores a photo,
+signature, or uploaded artifact.
+complete/fail/return-to-store, store return confirmation, id-verification
+(vendor/scan/OCR), go-online/go-offline, dispatch, GPS, and location are later
+subphases and must not be added here. There is no PATCH/PUT/DELETE on the
+/driver surface, and no POST beyond accept/decline/start/arrive-store/pickup/
+depart-to-customer/arrive-customer/verify-age/proof. The delivery-state read
+(Dr.1.1.H) never materializes state.
 """
 
 from __future__ import annotations
@@ -65,9 +71,11 @@ from app.db.session import get_db
 from app.schemas.driver import DriverAssignmentListResponse
 from app.schemas.driver import DriverAssignmentRead
 from app.schemas.driver import DriverDeliveryOperationalStateRead
+from app.schemas.driver import DriverDeliveryProofRead
 from app.schemas.driver import DriverDeliveryVerificationRead
 from app.schemas.driver import DriverEligibilityRead
 from app.schemas.driver import DriverProfileRead
+from app.schemas.driver import DriverProofSubmitRequest
 from app.schemas.driver import DriverVerifyAgeRequest
 from app.services.driver import accept_driver_assignment
 from app.services.driver import arrive_customer_driver_assignment
@@ -81,6 +89,7 @@ from app.services.driver import get_driver_profile_for_user
 from app.services.driver import list_driver_assignments
 from app.services.driver import pickup_driver_assignment
 from app.services.driver import start_driver_assignment
+from app.services.driver import submit_proof_driver_assignment
 from app.services.driver import verify_age_driver_assignment
 
 router = APIRouter(prefix="/driver", tags=["driver"])
@@ -362,5 +371,37 @@ def verify_age_current_driver_assignment(
     operational state.
     """
     return verify_age_driver_assignment(
+        db, current_user, assignment_id, payload
+    )
+
+
+@router.post(
+    "/assignments/{assignment_id}/proof",
+    response_model=DriverDeliveryProofRead,
+)
+def submit_proof_current_driver_assignment(
+    assignment_id: UUID,
+    payload: DriverProofSubmitRequest,
+    current_user: User = Depends(require_store_bound_driver),
+    db: Session = Depends(get_db),
+) -> DriverDeliveryProofRead:
+    """Record a redaction-safe proof of delivery (Dr.1.2.D).
+
+    Submits a backend-authorized manual proof-of-delivery checklist on an
+    id_verified assignment (all three handoff confirmations required and must
+    be true). The first proof records a `DriverDeliveryProof`; a later proof on
+    the same assignment is idempotent (returns the existing latest proof, no
+    duplicate row). Proof is record-only: the operational state stays
+    `id_verified` (promotion to delivery_completed / Order.status delivered is
+    a later subphase). A state before id_verified (incl. arrived_at_customer /
+    id_verification_pending) / a missing state row / a terminal state / an
+    assignment status other than `started` is a 422; any other later
+    non-terminal state is a 409; a non-own / foreign / missing assignment is a
+    404. The MVP is a manual checklist only (no photo / signature / uploaded
+    artifact). Returns the proof record (redaction-safe; no PII, no
+    Order.status, no Order.age_verified_at, no inventory). Never materializes
+    operational state.
+    """
+    return submit_proof_driver_assignment(
         db, current_user, assignment_id, payload
     )

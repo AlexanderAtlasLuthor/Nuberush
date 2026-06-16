@@ -278,3 +278,67 @@ class DriverDeliveryVerificationRead(BaseModel):
     note: str | None
     created_at: datetime
     updated_at: datetime
+
+
+# --------------------------------------------------------------------- #
+# Proof of delivery (Dr.1.2.D)
+# --------------------------------------------------------------------- #
+#
+# POST /driver/assignments/{id}/proof submits a backend-authorized,
+# redaction-safe manual proof-of-delivery checklist on an id_verified
+# assignment. The MVP is a manual checklist of a compliant in-person handoff —
+# no photo, signature, or uploaded artifact. The request and response carry
+# ONLY redaction-safe metadata: the three handoff confirmation flags, a safe
+# note, the method (server-set to `manual_checklist`), timestamps, and
+# association IDs. They never carry a photo, signature, artifact path/URL,
+# customer name/address, ID/OCR/barcode/biometric data, or any other PII — and
+# never `Order.status`, `Order.age_verified_at`, or inventory.
+
+
+class DriverProofSubmitRequest(BaseModel):
+    """Body for POST /driver/assignments/{id}/proof.
+
+    All three handoff confirmations are required and must be `True` — a proof
+    asserts that a compliant in-person handoff occurred, so any missing or
+    `False` confirmation is a 422. `method` is NOT accepted from the client
+    (the backend sets it to `manual_checklist`). No sensitive field is
+    accepted.
+    """
+
+    recipient_present_confirmed: bool
+    handoff_confirmed: bool
+    restricted_not_left_unattended: bool
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _require_all_confirmations_true(self) -> "DriverProofSubmitRequest":
+        if not (
+            self.recipient_present_confirmed
+            and self.handoff_confirmed
+            and self.restricted_not_left_unattended
+        ):
+            raise ValueError(
+                "recipient_present_confirmed, handoff_confirmed, and "
+                "restricted_not_left_unattended must all be true"
+            )
+        return self
+
+
+class DriverDeliveryProofRead(BaseModel):
+    """Redaction-safe view of a recorded proof of delivery (Dr.1.2.D)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    assignment_id: UUID
+    order_id: UUID
+    driver_profile_id: UUID
+    store_id: UUID
+    submitted_by_user_id: UUID | None
+    method: str
+    recipient_present_confirmed: bool
+    handoff_confirmed: bool
+    restricted_not_left_unattended: bool
+    note: str | None
+    created_at: datetime
+    updated_at: datetime

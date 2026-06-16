@@ -215,4 +215,5 @@ def test_no_other_driver_routes_exist() -> None:
         "/driver/assignments/{assignment_id}/depart-to-customer",
         "/driver/assignments/{assignment_id}/arrive-customer",
         "/driver/assignments/{assignment_id}/verify-age",
+        "/driver/assignments/{assignment_id}/proof",
     }

@@ -23,6 +23,8 @@ from sqlalchemy.orm import selectinload
 from app.db.models import DriverApprovalStatus
 from app.db.models import DriverDeliveryOperationalState
 from app.db.models import DriverDeliveryOperationalStateValue
+from app.db.models import DriverDeliveryProof
+from app.db.models import DriverDeliveryProofMethod
 from app.db.models import DriverDeliveryVerification
 from app.db.models import DriverDeliveryVerificationMethod
 from app.db.models import DriverDeliveryVerificationOutcome
@@ -35,12 +37,14 @@ from app.db.models import UserRole
 from app.schemas.driver import DriverAssignmentListResponse
 from app.schemas.driver import DriverAssignmentRead
 from app.schemas.driver import DriverDeliveryOperationalStateRead
+from app.schemas.driver import DriverDeliveryProofRead
 from app.schemas.driver import DriverDeliveryVerificationRead
 from app.schemas.driver import DriverEligibilityBlocker
 from app.schemas.driver import DriverEligibilityBlockerCode
 from app.schemas.driver import DriverEligibilityBlockerSeverity
 from app.schemas.driver import DriverEligibilityBlockerSource
 from app.schemas.driver import DriverEligibilityRead
+from app.schemas.driver import DriverProofSubmitRequest
 from app.schemas.driver import DriverVerifyAgeRequest
 
 # Assignment statuses that count as "active" for a driver's default list view
@@ -1645,4 +1649,167 @@ def verify_age_driver_assignment(
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail="Delivery past age verification",
+    )
+
+
+# ===================================================================== #
+# Dr.1.2.D — proof of delivery
+# ===================================================================== #
+#
+# POST /driver/assignments/{id}/proof records a backend-authorized,
+# redaction-safe manual proof-of-delivery checklist on an id_verified
+# assignment. It is RECORD-ONLY: it never advances the operational state (the
+# enum has no proof_submitted state and Dr.1.2.D adds no model/migration), so
+# the state stays at id_verified. The proof asserts a compliant in-person
+# handoff occurred — never a photo, signature, or uploaded artifact. This
+# never touches Order.status, Order.age_verified_at, OrderAuditLog, or
+# inventory, and never materializes the operational-state row. Promotion to
+# delivery_completed / Order.status delivered is Dr.1.2.E, NOT here.
+
+# Operational states strictly before id_verified: proof requires a passed 21+
+# verification first (422).
+_BEFORE_PROOF_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.not_started.value,
+        DriverDeliveryOperationalStateValue.en_route_to_store.value,
+        DriverDeliveryOperationalStateValue.arrived_at_store.value,
+        DriverDeliveryOperationalStateValue.pickup_started.value,
+        DriverDeliveryOperationalStateValue.picked_up.value,
+        DriverDeliveryOperationalStateValue.en_route_to_customer.value,
+        DriverDeliveryOperationalStateValue.arrived_at_customer.value,
+        DriverDeliveryOperationalStateValue.id_verification_pending.value,
+    }
+)
+
+
+def _build_proof(
+    *,
+    assignment: OrderDriverAssignment,
+    current_user: User,
+    payload: DriverProofSubmitRequest,
+) -> DriverDeliveryProof:
+    """Build a redaction-safe proof row from the payload.
+
+    Anchors are derived from the assignment (consistent tenancy), the actor is
+    the current driver, and `method` is server-set to `manual_checklist`. Only
+    redaction-safe metadata is persisted — never a photo, signature, uploaded
+    artifact, or customer PII.
+    """
+    return DriverDeliveryProof(
+        assignment_id=assignment.id,
+        order_id=assignment.order_id,
+        driver_profile_id=assignment.driver_profile_id,
+        store_id=assignment.store_id,
+        submitted_by_user_id=current_user.id,
+        method=DriverDeliveryProofMethod.manual_checklist.value,
+        recipient_present_confirmed=payload.recipient_present_confirmed,
+        handoff_confirmed=payload.handoff_confirmed,
+        restricted_not_left_unattended=(
+            payload.restricted_not_left_unattended
+        ),
+        note=payload.note,
+    )
+
+
+def _latest_proof_for_assignment(
+    db: Session, assignment_id: UUID
+) -> DriverDeliveryProof | None:
+    return db.scalar(
+        select(DriverDeliveryProof)
+        .where(DriverDeliveryProof.assignment_id == assignment_id)
+        .order_by(DriverDeliveryProof.created_at.desc())
+        .limit(1)
+    )
+
+
+def submit_proof_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+    payload: DriverProofSubmitRequest,
+) -> DriverDeliveryProofRead:
+    """Record a proof of delivery for an id_verified assignment (D).
+
+    Requires `assignment.status == started` and operational state
+    `id_verified`. The first proof inserts a `DriverDeliveryProof`; a later
+    proof on the same assignment is idempotent — it returns the existing latest
+    proof without inserting a duplicate or rewriting timestamps. Proof is
+    record-only: the operational state stays `id_verified` (promotion to
+    delivery_completed is Dr.1.2.E). A state before `id_verified` (including
+    arrived_at_customer / id_verification_pending) or a missing state row is a
+    422; a terminal state or an assignment status other than `started` is a
+    422; any other later non-terminal state is a 409. Self-scoped + store-bound;
+    a non-own / foreign / missing assignment is a 404. Returns the proof record.
+    Never touches Order.status, Order.age_verified_at, OrderAuditLog, or
+    inventory.
+    """
+    id_verified = DriverDeliveryOperationalStateValue.id_verified.value
+    started = OrderDriverAssignmentStatus.started.value
+
+    driver_profile = get_driver_profile_for_user(db, current_user)
+    assignment = _resolve_locked_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+    if assignment.status != started:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Assignment cannot submit proof from status "
+                f"'{assignment.status}'"
+            ),
+        )
+
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState)
+        .where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id
+        )
+        .with_for_update()
+    )
+    if operational_state is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet age-verified",
+        )
+
+    current_state = operational_state.state
+
+    if current_state == id_verified:
+        existing = _latest_proof_for_assignment(db, assignment.id)
+        if existing is not None:
+            # Idempotent: never insert a duplicate row or rewrite timestamps.
+            db.rollback()
+            return DriverDeliveryProofRead.model_validate(existing)
+        proof = _build_proof(
+            assignment=assignment,
+            current_user=current_user,
+            payload=payload,
+        )
+        db.add(proof)
+        db.commit()
+        db.refresh(proof)
+        return DriverDeliveryProofRead.model_validate(proof)
+
+    if current_state in _BEFORE_PROOF_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet age-verified",
+        )
+
+    if current_state in _TERMINAL_OPERATIONAL_STATES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery already ended",
+        )
+
+    # returning_to_store and any other unexpected non-terminal state: never
+    # regress, never silently pass through.
+    db.rollback()
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Delivery past proof of delivery",
     )
