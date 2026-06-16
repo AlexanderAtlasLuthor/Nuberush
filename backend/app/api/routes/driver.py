@@ -59,7 +59,13 @@ assignment (picked_up .. id_verified): it inserts a DriverDeliveryFailure and
 advances ONLY the operational state to delivery_failed (assignment stays
 started; no Order.status, no OrderAuditLog, no inventory). It is idempotent per
 reason_code and stores only a structured reason code plus a safe note.
-return-to-store, store return confirmation, id-verification
+return-to-store (Dr.1.2.G) records the driver's operational return custody after
+a failed delivery: action=start advances delivery_failed -> returning_to_store
+(creating a DriverDeliveryReturn, return_state `returning`) and action=arrive
+advances returning_to_store -> returned_to_store (return_state
+`returned_pending_confirmation`). It is operational-only (assignment stays
+started; no Order.status, no OrderAuditLog, no inventory) and the driver NEVER
+confirms receipt. store return confirmation, id-verification
 (vendor/scan/OCR), go-online/go-offline, dispatch, GPS, and location are later
 subphases and must not be added here. There is no PATCH/PUT/DELETE on the
 /driver surface, and no POST beyond accept/decline/start/arrive-store/pickup/
@@ -85,11 +91,13 @@ from app.schemas.driver import DriverAssignmentRead
 from app.schemas.driver import DriverDeliveryFailureRead
 from app.schemas.driver import DriverDeliveryOperationalStateRead
 from app.schemas.driver import DriverDeliveryProofRead
+from app.schemas.driver import DriverDeliveryReturnRead
 from app.schemas.driver import DriverDeliveryVerificationRead
 from app.schemas.driver import DriverEligibilityRead
 from app.schemas.driver import DriverFailDeliveryRequest
 from app.schemas.driver import DriverProfileRead
 from app.schemas.driver import DriverProofSubmitRequest
+from app.schemas.driver import DriverReturnToStoreRequest
 from app.schemas.driver import DriverVerifyAgeRequest
 from app.services.driver import accept_driver_assignment
 from app.services.driver import arrive_customer_driver_assignment
@@ -98,6 +106,7 @@ from app.services.driver import decline_driver_assignment
 from app.services.driver import depart_driver_assignment
 from app.services.driver import evaluate_driver_eligibility
 from app.services.driver import fail_delivery_driver_assignment
+from app.services.driver import return_to_store_driver_assignment
 from app.services.driver import get_driver_assignment
 from app.services.driver import get_driver_delivery_operational_state
 from app.services.driver import get_driver_profile_for_user
@@ -480,5 +489,35 @@ def fail_current_driver_assignment(
     no inventory).
     """
     return fail_delivery_driver_assignment(
+        db, current_user, assignment_id, payload
+    )
+
+
+@router.post(
+    "/assignments/{assignment_id}/return-to-store",
+    response_model=DriverDeliveryReturnRead,
+)
+def return_to_store_current_driver_assignment(
+    assignment_id: UUID,
+    payload: DriverReturnToStoreRequest,
+    current_user: User = Depends(require_store_bound_driver),
+    db: Session = Depends(get_db),
+) -> DriverDeliveryReturnRead:
+    """Record operational return-to-store custody progress (Dr.1.2.G).
+
+    `action=start` requires operational state delivery_failed: it creates a
+    `DriverDeliveryReturn` (return_state `returning`) and advances the state to
+    returning_to_store. `action=arrive` requires returning_to_store: it updates
+    that row to `returned_pending_confirmation` and advances the state to
+    returned_to_store. Operational-only: the assignment stays started, and
+    Order.status, OrderAuditLog, and inventory are never touched; the driver
+    never confirms receipt (confirmed_* stay null — Dr.1.2.H). Idempotent: a
+    repeat of the current step returns the existing custody row. `start` after
+    arrive is a 409; `start` from a non-failed state or `arrive` before start is
+    a 422; a terminal non-return state or missing state row is a 422; a
+    state/record inconsistency is a 409; a non-own / foreign / missing
+    assignment is a 404. Returns the custody record (redaction-safe).
+    """
+    return return_to_store_driver_assignment(
         db, current_user, assignment_id, payload
     )

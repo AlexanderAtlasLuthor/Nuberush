@@ -389,3 +389,63 @@ class DriverDeliveryFailureRead(BaseModel):
     note: str | None
     created_at: datetime
     updated_at: datetime
+
+
+# --------------------------------------------------------------------- #
+# Return to store (Dr.1.2.G)
+# --------------------------------------------------------------------- #
+#
+# POST /driver/assignments/{id}/return-to-store records the driver's
+# operational return-to-store custody progress after a failed delivery:
+# `start` (delivery_failed -> returning_to_store, return_state `returning`) and
+# `arrive` (returning_to_store -> returned_to_store, return_state
+# `returned_pending_confirmation`). It is operational-only — it NEVER mutates
+# Order.status, OrderAuditLog, the assignment status, or inventory, and the
+# driver NEVER confirms receipt (`return_state=confirmed` / confirmed_at /
+# confirmed_by_user_id are reserved for the store-confirmation runtime, Dr.1.2.H).
+# The request and response carry ONLY redaction-safe metadata: the action, a
+# safe note, timestamps, and association IDs — never a photo, signature,
+# artifact path/URL, ID/OCR/barcode/biometric data, customer name/address, or
+# any other PII or exact sensitive location detail.
+
+
+class DriverReturnToStoreAction(str, enum.Enum):
+    """The two driver-side return-to-store custody steps (Dr.1.2.G)."""
+
+    start = "start"
+    arrive = "arrive"
+
+
+class DriverReturnToStoreRequest(BaseModel):
+    """Body for POST /driver/assignments/{id}/return-to-store.
+
+    `action` is required and must be `start` or `arrive`. `note` is an optional
+    safe note capped at 500 chars. No sensitive field is accepted.
+    """
+
+    action: DriverReturnToStoreAction
+    note: str | None = Field(default=None, max_length=500)
+
+
+class DriverDeliveryReturnRead(BaseModel):
+    """Redaction-safe view of a return-to-store custody record (Dr.1.2.G).
+
+    The `confirmed_*` fields are exposed for forward-compatibility with the
+    store-confirmation runtime (Dr.1.2.H) but are always null in G — the driver
+    never confirms receipt.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    assignment_id: UUID
+    order_id: UUID
+    driver_profile_id: UUID
+    store_id: UUID
+    driver_user_id: UUID | None
+    confirmed_by_user_id: UUID | None
+    return_state: str
+    confirmed_at: datetime | None
+    note: str | None
+    created_at: datetime
+    updated_at: datetime

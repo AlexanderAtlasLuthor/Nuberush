@@ -27,6 +27,8 @@ from app.db.models import DriverDeliveryOperationalState
 from app.db.models import DriverDeliveryOperationalStateValue
 from app.db.models import DriverDeliveryProof
 from app.db.models import DriverDeliveryProofMethod
+from app.db.models import DriverDeliveryReturn
+from app.db.models import DriverDeliveryReturnState
 from app.db.models import DriverDeliveryVerification
 from app.db.models import DriverDeliveryVerificationMethod
 from app.db.models import DriverDeliveryVerificationOutcome
@@ -44,8 +46,11 @@ from app.schemas.driver import DriverAssignmentRead
 from app.schemas.driver import DriverDeliveryFailureRead
 from app.schemas.driver import DriverDeliveryOperationalStateRead
 from app.schemas.driver import DriverDeliveryProofRead
+from app.schemas.driver import DriverDeliveryReturnRead
 from app.schemas.driver import DriverDeliveryVerificationRead
 from app.schemas.driver import DriverFailDeliveryRequest
+from app.schemas.driver import DriverReturnToStoreAction
+from app.schemas.driver import DriverReturnToStoreRequest
 from app.schemas.driver import DriverEligibilityBlocker
 from app.schemas.driver import DriverEligibilityBlockerCode
 from app.schemas.driver import DriverEligibilityBlockerSeverity
@@ -2203,4 +2208,244 @@ def fail_delivery_driver_assignment(
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail="Delivery cannot be failed from its current state",
+    )
+
+
+# ===================================================================== #
+# Dr.1.2.G — return-to-store foundation
+# ===================================================================== #
+#
+# POST /driver/assignments/{id}/return-to-store records the driver's
+# operational return-to-store custody progress after a failed delivery:
+#   action=start:  delivery_failed     -> returning_to_store
+#                  (creates DriverDeliveryReturn, return_state `returning`)
+#   action=arrive: returning_to_store  -> returned_to_store
+#                  (updates the row to `returned_pending_confirmation`)
+#
+# It is operational-only: the assignment stays `started`, and Order.status,
+# OrderAuditLog, and inventory are NEVER touched (the held reservation stays
+# held). The driver NEVER confirms receipt — `return_state=confirmed`,
+# `confirmed_at`, and `confirmed_by_user_id` are reserved for the
+# store-confirmation runtime (Dr.1.2.H). The DriverDeliveryReturn row is 1:1 per
+# assignment (UNIQUE), so `start` inserts it and `arrive` updates that same row.
+# The driver layer never writes Order.status, never imports/calls the orders or
+# inventory services. `delivery_failed` is a generic terminal state for other
+# actions, but it is the VALID ENTRY state for action=start here.
+
+
+def _existing_return_for_assignment(
+    db: Session, assignment_id: UUID
+) -> DriverDeliveryReturn | None:
+    """The single (UNIQUE) return-to-store custody row for an assignment."""
+    return db.scalar(
+        select(DriverDeliveryReturn).where(
+            DriverDeliveryReturn.assignment_id == assignment_id
+        )
+    )
+
+
+def return_to_store_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+    payload: DriverReturnToStoreRequest,
+) -> DriverDeliveryReturnRead:
+    """Record operational return-to-store custody progress (Dr.1.2.G).
+
+    `action=start` requires operational state `delivery_failed`: it creates the
+    `DriverDeliveryReturn` (return_state `returning`) and advances the state to
+    `returning_to_store`. `action=arrive` requires `returning_to_store`: it
+    updates that row to `returned_pending_confirmation` and advances the state
+    to `returned_to_store`. The assignment stays `started`; Order.status,
+    OrderAuditLog, and inventory are never touched.
+
+    Idempotent: re-issuing `start` at `returning_to_store`, or `arrive` at
+    `returned_to_store`, returns the existing custody row without a duplicate or
+    timestamp rewrite. `start` at `returned_to_store` is a 409 (no regress).
+    `start` from a non-failed state is a 422 ("no failed delivery to return");
+    `arrive` from `delivery_failed` is a 422 ("return not started"). A terminal
+    non-return state (delivery_completed / canceled), or a missing state row, is
+    a 422. A state/return-record inconsistency is a 409. Self-scoped +
+    store-bound; a non-own / foreign / missing assignment is a 404. Returns the
+    custody record (redaction-safe; confirmed_* always null in G).
+    """
+    delivery_failed = (
+        DriverDeliveryOperationalStateValue.delivery_failed.value
+    )
+    returning_to_store = (
+        DriverDeliveryOperationalStateValue.returning_to_store.value
+    )
+    returned_to_store = (
+        DriverDeliveryOperationalStateValue.returned_to_store.value
+    )
+    is_start = payload.action == DriverReturnToStoreAction.start
+
+    driver_profile = get_driver_profile_for_user(db, current_user)
+    assignment = _resolve_locked_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState)
+        .where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id
+        )
+        .with_for_update()
+    )
+    if operational_state is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery has no return-to-store state",
+        )
+
+    current_state = operational_state.state
+
+    if is_start:
+        return _return_to_store_start(
+            db,
+            current_user,
+            assignment,
+            operational_state,
+            current_state,
+            payload,
+            delivery_failed,
+            returning_to_store,
+            returned_to_store,
+        )
+    return _return_to_store_arrive(
+        db,
+        assignment,
+        operational_state,
+        current_state,
+        payload,
+        delivery_failed,
+        returning_to_store,
+        returned_to_store,
+    )
+
+
+def _return_to_store_start(
+    db: Session,
+    current_user: User,
+    assignment: OrderDriverAssignment,
+    operational_state: DriverDeliveryOperationalState,
+    current_state: str,
+    payload: DriverReturnToStoreRequest,
+    delivery_failed: str,
+    returning_to_store: str,
+    returned_to_store: str,
+) -> DriverDeliveryReturnRead:
+    """Handle action=start (delivery_failed -> returning_to_store)."""
+    if current_state == returning_to_store:
+        existing = _existing_return_for_assignment(db, assignment.id)
+        if existing is not None:
+            # Idempotent: never insert a duplicate or rewrite timestamps.
+            result = DriverDeliveryReturnRead.model_validate(existing)
+            db.rollback()
+            return result
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Return-to-store is in an inconsistent state",
+        )
+
+    if current_state == delivery_failed:
+        record = DriverDeliveryReturn(
+            assignment_id=assignment.id,
+            order_id=assignment.order_id,
+            driver_profile_id=assignment.driver_profile_id,
+            store_id=assignment.store_id,
+            driver_user_id=current_user.id,
+            return_state=DriverDeliveryReturnState.returning.value,
+            note=payload.note,
+        )
+        db.add(record)
+        now = datetime.now(timezone.utc)
+        operational_state.state = returning_to_store
+        operational_state.state_started_at = now
+        operational_state.last_transition_at = now
+        # assignment.status stays `started`; Order.status, OrderAuditLog, and
+        # inventory are intentionally untouched.
+        db.commit()
+        db.refresh(record)
+        return DriverDeliveryReturnRead.model_validate(record)
+
+    if current_state == returned_to_store:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Return-to-store already arrived",
+        )
+
+    # Any other state (pre-failure operational states, delivery_completed,
+    # canceled, or a missing failure): there is no failed delivery to return.
+    db.rollback()
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="No failed delivery to return to store",
+    )
+
+
+def _return_to_store_arrive(
+    db: Session,
+    assignment: OrderDriverAssignment,
+    operational_state: DriverDeliveryOperationalState,
+    current_state: str,
+    payload: DriverReturnToStoreRequest,
+    delivery_failed: str,
+    returning_to_store: str,
+    returned_to_store: str,
+) -> DriverDeliveryReturnRead:
+    """Handle action=arrive (returning_to_store -> returned_to_store)."""
+    if current_state == returned_to_store:
+        existing = _existing_return_for_assignment(db, assignment.id)
+        if existing is not None:
+            # Idempotent: never insert a duplicate or rewrite timestamps.
+            result = DriverDeliveryReturnRead.model_validate(existing)
+            db.rollback()
+            return result
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Return-to-store is in an inconsistent state",
+        )
+
+    if current_state == returning_to_store:
+        record = _existing_return_for_assignment(db, assignment.id)
+        if record is None:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Return-to-store is in an inconsistent state",
+            )
+        record.return_state = (
+            DriverDeliveryReturnState.returned_pending_confirmation.value
+        )
+        if payload.note is not None:
+            record.note = payload.note
+        now = datetime.now(timezone.utc)
+        operational_state.state = returned_to_store
+        operational_state.state_started_at = now
+        operational_state.last_transition_at = now
+        # The driver NEVER sets return_state=confirmed / confirmed_at /
+        # confirmed_by_user_id — those are the store-confirmation runtime (H).
+        # assignment.status stays `started`; Order.status, OrderAuditLog, and
+        # inventory are intentionally untouched.
+        db.commit()
+        db.refresh(record)
+        return DriverDeliveryReturnRead.model_validate(record)
+
+    if current_state == delivery_failed:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Return-to-store not started",
+        )
+
+    # Any other state (pre-failure, delivery_completed, canceled): cannot arrive.
+    db.rollback()
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="Return-to-store not started",
     )
