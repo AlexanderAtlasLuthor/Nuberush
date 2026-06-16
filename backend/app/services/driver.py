@@ -30,10 +30,13 @@ from app.db.models import DriverDeliveryVerificationMethod
 from app.db.models import DriverDeliveryVerificationOutcome
 from app.db.models import DriverProfile
 from app.db.models import DriverProfileStatus
+from app.db.models import Order
 from app.db.models import OrderDriverAssignment
 from app.db.models import OrderDriverAssignmentStatus
+from app.db.models import OrderStatus
 from app.db.models import User
 from app.db.models import UserRole
+from app.services.orders import complete_order_via_driver
 from app.schemas.driver import DriverAssignmentListResponse
 from app.schemas.driver import DriverAssignmentRead
 from app.schemas.driver import DriverDeliveryOperationalStateRead
@@ -1812,4 +1815,198 @@ def submit_proof_driver_assignment(
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail="Delivery past proof of delivery",
+    )
+
+
+# ===================================================================== #
+# Dr.1.2.E — complete delivery gate
+# ===================================================================== #
+#
+# POST /driver/assignments/{id}/complete promotes a fully-verified, proven
+# delivery to completion. The gate requires: assignment.status == started,
+# operational state == id_verified, a passed DriverDeliveryVerification, a
+# recorded DriverDeliveryProof, and an order in ready / out_for_delivery.
+#
+# The driver layer NEVER writes Order.status: the commercial promotion to
+# `delivered` (and its inventory consume + OrderAuditLog) goes exclusively
+# through the orders authority bridge `complete_order_via_driver`, invoked
+# inside the SAME transaction so the operational-state advance
+# (id_verified -> delivery_completed), the assignment closure
+# (started -> completed), the commercial change, the consume, and the audit
+# all commit atomically.
+
+# Operational states strictly before id_verified (incl. arrived_at_customer /
+# id_verification_pending): the delivery is not yet ready to complete (422).
+_BEFORE_COMPLETE_STATES: frozenset[str] = frozenset(
+    {
+        DriverDeliveryOperationalStateValue.not_started.value,
+        DriverDeliveryOperationalStateValue.en_route_to_store.value,
+        DriverDeliveryOperationalStateValue.arrived_at_store.value,
+        DriverDeliveryOperationalStateValue.pickup_started.value,
+        DriverDeliveryOperationalStateValue.picked_up.value,
+        DriverDeliveryOperationalStateValue.en_route_to_customer.value,
+        DriverDeliveryOperationalStateValue.arrived_at_customer.value,
+        DriverDeliveryOperationalStateValue.id_verification_pending.value,
+    }
+)
+
+
+def _has_passed_verification(db: Session, assignment_id: UUID) -> bool:
+    return (
+        db.scalar(
+            select(DriverDeliveryVerification.id).where(
+                DriverDeliveryVerification.assignment_id == assignment_id,
+                DriverDeliveryVerification.outcome
+                == DriverDeliveryVerificationOutcome.pass_.value,
+            )
+        )
+        is not None
+    )
+
+
+def _has_proof(db: Session, assignment_id: UUID) -> bool:
+    return (
+        db.scalar(
+            select(DriverDeliveryProof.id).where(
+                DriverDeliveryProof.assignment_id == assignment_id
+            )
+        )
+        is not None
+    )
+
+
+def complete_delivery_driver_assignment(
+    db: Session,
+    current_user: User,
+    assignment_id: UUID,
+) -> DriverDeliveryOperationalStateRead:
+    """Complete a fully-verified, proven delivery (Dr.1.2.E).
+
+    Requires `assignment.status == started`, operational state `id_verified`, a
+    passed verification, a recorded proof, and an order in ready /
+    out_for_delivery. On success: the orders authority bridge promotes
+    Order.status to `delivered` (consuming inventory + writing OrderAuditLog),
+    the operational state advances `id_verified -> delivery_completed`, and the
+    assignment closes `started -> completed` — all in one transaction.
+
+    Idempotent once completed (operational state `delivery_completed`, order
+    `delivered`, assignment `completed`): returns the state without
+    re-consuming inventory or duplicating audit. A `delivery_completed` state
+    with an inconsistent order/assignment is a 409. A state before `id_verified`
+    (incl. arrived_at_customer / id_verification_pending) or a missing state row
+    is a 422; `id_verified` without a passed verification or without proof is a
+    422; a terminal state (delivery_failed / returned_to_store / canceled) is a
+    422; `returning_to_store` is a 409; an assignment status other than started
+    (excluding the idempotent completed case) is a 422. Self-scoped +
+    store-bound; a non-own / foreign / missing assignment is a 404. The driver
+    layer never writes Order.status or touches inventory directly.
+    """
+    id_verified = DriverDeliveryOperationalStateValue.id_verified.value
+    delivery_completed = (
+        DriverDeliveryOperationalStateValue.delivery_completed.value
+    )
+    started = OrderDriverAssignmentStatus.started.value
+    completed = OrderDriverAssignmentStatus.completed.value
+
+    driver_profile = get_driver_profile_for_user(db, current_user)
+    assignment = _resolve_locked_owned_assignment(
+        db, driver_profile, current_user, assignment_id
+    )
+
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState)
+        .where(
+            DriverDeliveryOperationalState.assignment_id == assignment.id
+        )
+        .with_for_update()
+    )
+    if operational_state is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery not yet ready to complete",
+        )
+
+    current_state = operational_state.state
+
+    # Idempotent completion is checked BEFORE the started-status guard, because
+    # a successful complete closes the assignment to `completed`.
+    if current_state == delivery_completed:
+        order = db.get(Order, assignment.order_id)
+        if (
+            order is not None
+            and order.status == OrderStatus.delivered
+            and assignment.status == completed
+        ):
+            result = DriverDeliveryOperationalStateRead.model_validate(
+                operational_state
+            )
+            db.rollback()
+            return result
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery completion is in an inconsistent state",
+        )
+
+    if assignment.status != started:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Assignment cannot complete from status "
+                f"'{assignment.status}'"
+            ),
+        )
+
+    if current_state != id_verified:
+        if current_state in _BEFORE_COMPLETE_STATES:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Delivery not yet ready to complete",
+            )
+        if current_state in _TERMINAL_OPERATIONAL_STATES:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Delivery already ended",
+            )
+        # returning_to_store and any other unexpected non-terminal state.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery cannot be completed from its current state",
+        )
+
+    # State is id_verified: enforce the compliance gate.
+    if not _has_passed_verification(db, assignment.id):
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery has no passed age verification",
+        )
+    if not _has_proof(db, assignment.id):
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery has no proof of delivery",
+        )
+
+    # Commercial promotion goes through the orders authority bridge — the
+    # driver layer never writes Order.status or touches inventory. The bridge
+    # does not commit; this transaction owns the single commit below.
+    complete_order_via_driver(db, assignment.order_id, current_user.id)
+
+    now = datetime.now(timezone.utc)
+    operational_state.state = delivery_completed
+    operational_state.state_started_at = now
+    operational_state.last_transition_at = now
+    assignment.status = completed
+    assignment.completed_at = now
+
+    db.commit()
+    db.refresh(operational_state)
+    return DriverDeliveryOperationalStateRead.model_validate(
+        operational_state
     )

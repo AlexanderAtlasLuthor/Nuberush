@@ -441,6 +441,7 @@ def test_driver_route_surface_is_reads_plus_accept_decline_start() -> None:
         ("POST", "/driver/assignments/{assignment_id}/arrive-customer"),
         ("POST", "/driver/assignments/{assignment_id}/verify-age"),
         ("POST", "/driver/assignments/{assignment_id}/proof"),
+        ("POST", "/driver/assignments/{assignment_id}/complete"),
     }
 
     # No PATCH/PUT/DELETE anywhere on the /driver surface.
@@ -460,8 +461,8 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         if getattr(route, "path", "").startswith("/driver")
     }
     # accept/decline/start/arrive-store/pickup/depart-to-customer/
-    # arrive-customer/verify-age/proof may appear ONLY in their nine approved
-    # exact paths.
+    # arrive-customer/verify-age/proof/complete may appear ONLY in their ten
+    # approved exact paths.
     approved_actions = {
         "/driver/assignments/{assignment_id}/accept",
         "/driver/assignments/{assignment_id}/decline",
@@ -472,6 +473,7 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "/driver/assignments/{assignment_id}/arrive-customer",
         "/driver/assignments/{assignment_id}/verify-age",
         "/driver/assignments/{assignment_id}/proof",
+        "/driver/assignments/{assignment_id}/complete",
     }
     for p in driver_paths:
         if (
@@ -483,12 +485,14 @@ def test_no_mutative_or_operational_driver_routes() -> None:
             or "depart" in p
             or "verify" in p
             or "proof" in p
+            or "complete" in p
         ):
             assert p in approved_actions, p
     # None of the deferred operational / mutative surfaces exist yet.
-    # Proof (Dr.1.2.D, record-only on id_verified) is approved, but complete /
-    # fail / return-to-store, store confirmation and any vendor/scan
-    # ID-verification surface downstream of it remain banned.
+    # Complete (Dr.1.2.E, id_verified -> delivery_completed via the orders
+    # authority bridge) is approved, but fail / return-to-store, store
+    # confirmation and any vendor/scan ID-verification surface downstream of it
+    # remain banned.
     for banned_substr in (
         "online",
         "offline",
@@ -503,7 +507,6 @@ def test_no_mutative_or_operational_driver_routes() -> None:
         "id-verification",
         "id_verification",
         "dropoff",
-        "complete",
         "fail",
         "return-to-store",
         "returned-to-store",

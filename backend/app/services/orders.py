@@ -891,3 +891,84 @@ def return_order(
 
     _commit_or_translate(db)
     return _load_order(db, order.id)
+
+
+# --------------------------------------------------------------------- #
+# Driver completion bridge (Dr.1.2.E)
+# --------------------------------------------------------------------- #
+
+
+def complete_order_via_driver(
+    db: Session,
+    order_id: UUID,
+    actor_user_id: UUID | None,
+) -> Order:
+    """Driver-originated commercial completion: ready/out_for_delivery ->
+    delivered (Dr.1.2.E bridge).
+
+    This is the ONLY sanctioned way for the driver layer to promote an order to
+    ``delivered``: the driver service proposes the outcome and this orders
+    authority validates and applies the commercial change. It reuses the
+    existing delivered machinery unchanged — the same ``_assert_valid_transition``
+    gate, the same ``_consume_order_reservations`` inventory path (so stock is
+    consumed exactly as the staff-driven ``transition_order_status`` does), and
+    the same ``_write_order_audit_log`` (action ``order_delivered``, carrying the
+    driver's ``actor_user_id``). It does NOT relax ``_ALLOWED_TRANSITIONS`` and
+    NEVER permits pending/accepted/preparing -> delivered.
+
+    Atomicity: this bridge does NOT commit. The caller (the driver service)
+    owns the transaction so the operational-state advance, the assignment
+    closure, this commercial change, the inventory consume, and the audit row
+    all land or roll back together.
+
+    The order row is locked FOR UPDATE. An already-``delivered`` order is
+    idempotent (returned unchanged, never re-consumed or re-audited). Any status
+    other than ready / out_for_delivery / delivered is a 409 (the order is not
+    commercially completable yet). A missing order is a 404.
+    """
+    order = db.scalar(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(_order_read_load_options())
+        .with_for_update()
+    )
+    if order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found.",
+        )
+
+    previous_status = order.status
+    if previous_status == OrderStatus.delivered:
+        # Idempotent: already delivered — never re-consume inventory or write a
+        # duplicate audit row.
+        return order
+
+    if previous_status not in (
+        OrderStatus.ready,
+        OrderStatus.out_for_delivery,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Order cannot be completed by the driver from status "
+                f"'{previous_status.value}'."
+            ),
+        )
+
+    # Reuse the exact delivered machinery (no behavioural change): assert the
+    # transition, consume the reservation, set delivered_at, flip status, audit.
+    _assert_valid_transition(previous_status, OrderStatus.delivered)
+    _consume_order_reservations(db, order, actor_user_id)
+    order.delivered_at = _utcnow()
+    order.status = OrderStatus.delivered
+    _write_order_audit_log(
+        db,
+        order,
+        previous_status=previous_status,
+        new_status=OrderStatus.delivered,
+        action=ACTION_ORDER_DELIVERED,
+        reason="completed by driver",
+        actor_user_id=actor_user_id,
+    )
+    return order

@@ -22,6 +22,7 @@ arrive-customer):
   - POST /driver/assignments/{id}/arrive-customer         (Dr.1.1.N)
   - POST /driver/assignments/{id}/verify-age              (Dr.1.2.C)
   - POST /driver/assignments/{id}/proof                   (Dr.1.2.D)
+  - POST /driver/assignments/{id}/complete                (Dr.1.2.E)
 
 accept/decline mutate ONLY the assignment's status + accepted_at/declined_at
 (offered -> accepted/declined). start moves the assignment accepted -> started
@@ -47,12 +48,18 @@ an id_verified assignment (record-only: state stays id_verified; assignment
 stays started; no Order.status, no Order.age_verified_at, no OrderAuditLog, no
 inventory). It is idempotent per assignment and never stores a photo,
 signature, or uploaded artifact.
-complete/fail/return-to-store, store return confirmation, id-verification
+complete (Dr.1.2.E) promotes a fully-verified, proven delivery: it advances the
+operational state id_verified -> delivery_completed, closes the assignment
+started -> completed, and promotes Order.status ready/out_for_delivery ->
+delivered EXCLUSIVELY through the orders authority bridge (which owns the
+inventory consume and the OrderAuditLog). The driver layer never writes
+Order.status or touches inventory directly.
+fail/return-to-store, store return confirmation, id-verification
 (vendor/scan/OCR), go-online/go-offline, dispatch, GPS, and location are later
 subphases and must not be added here. There is no PATCH/PUT/DELETE on the
 /driver surface, and no POST beyond accept/decline/start/arrive-store/pickup/
-depart-to-customer/arrive-customer/verify-age/proof. The delivery-state read
-(Dr.1.1.H) never materializes state.
+depart-to-customer/arrive-customer/verify-age/proof/complete. The
+delivery-state read (Dr.1.1.H) never materializes state.
 """
 
 from __future__ import annotations
@@ -88,6 +95,7 @@ from app.services.driver import get_driver_delivery_operational_state
 from app.services.driver import get_driver_profile_for_user
 from app.services.driver import list_driver_assignments
 from app.services.driver import pickup_driver_assignment
+from app.services.driver import complete_delivery_driver_assignment
 from app.services.driver import start_driver_assignment
 from app.services.driver import submit_proof_driver_assignment
 from app.services.driver import verify_age_driver_assignment
@@ -404,4 +412,34 @@ def submit_proof_current_driver_assignment(
     """
     return submit_proof_driver_assignment(
         db, current_user, assignment_id, payload
+    )
+
+
+@router.post(
+    "/assignments/{assignment_id}/complete",
+    response_model=DriverDeliveryOperationalStateRead,
+)
+def complete_current_driver_assignment(
+    assignment_id: UUID,
+    current_user: User = Depends(require_store_bound_driver),
+    db: Session = Depends(get_db),
+) -> DriverDeliveryOperationalStateRead:
+    """Complete a fully-verified, proven delivery (Dr.1.2.E).
+
+    Gated on assignment.status == started, operational state id_verified, a
+    passed verify-age, a recorded proof, and an order in ready /
+    out_for_delivery. On success the operational state advances
+    id_verified -> delivery_completed, the assignment closes started ->
+    completed, and the commercial promotion to Order.status `delivered`
+    (with its inventory consume and OrderAuditLog) goes exclusively through
+    the orders authority bridge — the driver layer never writes Order.status
+    or touches inventory. Idempotent once completed. A state before
+    id_verified / a missing state row / a missing verification pass / a missing
+    proof / a terminal state / an assignment status other than started is a
+    422; returning_to_store or an inconsistent completed state is a 409; a
+    non-own / foreign / missing assignment is a 404. Empty body; returns the
+    operational state (delivery_completed).
+    """
+    return complete_delivery_driver_assignment(
+        db, current_user, assignment_id
     )
