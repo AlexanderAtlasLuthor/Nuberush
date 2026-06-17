@@ -45,6 +45,11 @@ from app.db.models import OperationalAuditLog
 
 TARGET_USER = "user"
 TARGET_STORE = "store"
+# Dr.1.2.I.a — driver delivery compliance trail. A delivery_assignment row
+# records a compliance action against an OrderDriverAssignment (the target_id);
+# `action` stays a varchar (no migration), so the taxonomy below is the only
+# source of truth for what is permitted.
+TARGET_DELIVERY_ASSIGNMENT = "delivery_assignment"
 
 # Action sets per target type. Adding an action means extending the set
 # here (and, for the model, nothing — `action` is a varchar). The union
@@ -67,6 +72,17 @@ _ACTIONS_BY_TARGET: dict[str, frozenset[str]] = {
             "store_updated",
             "store_activated",
             "store_deactivated",
+        }
+    ),
+    TARGET_DELIVERY_ASSIGNMENT: frozenset(
+        {
+            "delivery_verified",
+            "delivery_proof_recorded",
+            "delivery_completed",
+            "delivery_failed",
+            "delivery_return_started",
+            "delivery_return_arrived",
+            "delivery_return_confirmed",
         }
     ),
 }
@@ -96,6 +112,13 @@ _ALLOWED_FIELDS_BY_TARGET: dict[str, frozenset[str]] = {
     # created_at, updated_at. Audited subset (no slug/status/address/
     # phone — those columns do not exist on the model):
     TARGET_STORE: frozenset({"name", "code", "is_active", "timezone"}),
+    # Dr.1.2.I.a — only non-PII lifecycle discriminators of the delivery
+    # compliance flow: the operational-state value, the assignment status,
+    # the return custody state, the failure reason code, and the
+    # verification outcome. NEVER raw ID / proof / photo / location / PII.
+    TARGET_DELIVERY_ASSIGNMENT: frozenset(
+        {"status", "state", "return_state", "reason_code", "outcome"}
+    ),
 }
 
 

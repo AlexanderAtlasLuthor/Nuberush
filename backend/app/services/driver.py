@@ -58,6 +58,8 @@ from app.schemas.driver import DriverEligibilityBlockerSource
 from app.schemas.driver import DriverEligibilityRead
 from app.schemas.driver import DriverProofSubmitRequest
 from app.schemas.driver import DriverVerifyAgeRequest
+from app.services.operational_audit import TARGET_DELIVERY_ASSIGNMENT
+from app.services.operational_audit import write_operational_audit_log
 
 # Assignment statuses that count as "active" for a driver's default list view
 # (Dr.1.1.F). Terminal/dead states (declined, expired, completed, canceled)
@@ -1618,6 +1620,20 @@ def verify_age_driver_assignment(
             operational_state.state = id_verified
             operational_state.state_started_at = now
             operational_state.last_transition_at = now
+        write_operational_audit_log(
+            db,
+            actor_user_id=current_user.id,
+            target_type=TARGET_DELIVERY_ASSIGNMENT,
+            target_id=assignment.id,
+            action="delivery_verified",
+            store_id=assignment.store_id,
+            before={"state": current_state},
+            after={
+                "state": operational_state.state,
+                "outcome": payload.outcome.value,
+            },
+            metadata={"source": "driver_verify_age"},
+        )
         db.commit()
         db.refresh(verification)
         return DriverDeliveryVerificationRead.model_validate(verification)
@@ -1800,6 +1816,17 @@ def submit_proof_driver_assignment(
             payload=payload,
         )
         db.add(proof)
+        write_operational_audit_log(
+            db,
+            actor_user_id=current_user.id,
+            target_type=TARGET_DELIVERY_ASSIGNMENT,
+            target_id=assignment.id,
+            action="delivery_proof_recorded",
+            store_id=assignment.store_id,
+            before={"state": current_state},
+            after={"state": current_state},
+            metadata={"source": "driver_proof"},
+        )
         db.commit()
         db.refresh(proof)
         return DriverDeliveryProofRead.model_validate(proof)
@@ -2014,6 +2041,17 @@ def complete_delivery_driver_assignment(
     assignment.status = completed
     assignment.completed_at = now
 
+    write_operational_audit_log(
+        db,
+        actor_user_id=current_user.id,
+        target_type=TARGET_DELIVERY_ASSIGNMENT,
+        target_id=assignment.id,
+        action="delivery_completed",
+        store_id=assignment.store_id,
+        before={"state": id_verified, "status": started},
+        after={"state": delivery_completed, "status": completed},
+        metadata={"source": "driver_complete"},
+    )
     db.commit()
     db.refresh(operational_state)
     return DriverDeliveryOperationalStateRead.model_validate(
@@ -2184,6 +2222,23 @@ def fail_delivery_driver_assignment(
         operational_state.last_transition_at = now
         # assignment.status intentionally stays `started`; Order.status,
         # OrderAuditLog, and inventory are intentionally untouched.
+        write_operational_audit_log(
+            db,
+            actor_user_id=current_user.id,
+            target_type=TARGET_DELIVERY_ASSIGNMENT,
+            target_id=assignment.id,
+            action="delivery_failed",
+            store_id=assignment.store_id,
+            before={"state": current_state},
+            after={
+                "state": delivery_failed,
+                "reason_code": payload.reason_code.value,
+            },
+            metadata={
+                "source": "driver_fail",
+                "reason_code": payload.reason_code.value,
+            },
+        )
         db.commit()
         db.refresh(failure)
         return DriverDeliveryFailureRead.model_validate(failure)
@@ -2315,6 +2370,7 @@ def return_to_store_driver_assignment(
         )
     return _return_to_store_arrive(
         db,
+        current_user,
         assignment,
         operational_state,
         current_state,
@@ -2367,6 +2423,20 @@ def _return_to_store_start(
         operational_state.last_transition_at = now
         # assignment.status stays `started`; Order.status, OrderAuditLog, and
         # inventory are intentionally untouched.
+        write_operational_audit_log(
+            db,
+            actor_user_id=current_user.id,
+            target_type=TARGET_DELIVERY_ASSIGNMENT,
+            target_id=assignment.id,
+            action="delivery_return_started",
+            store_id=assignment.store_id,
+            before={"state": current_state},
+            after={
+                "state": returning_to_store,
+                "return_state": DriverDeliveryReturnState.returning.value,
+            },
+            metadata={"source": "driver_return_to_store"},
+        )
         db.commit()
         db.refresh(record)
         return DriverDeliveryReturnRead.model_validate(record)
@@ -2389,6 +2459,7 @@ def _return_to_store_start(
 
 def _return_to_store_arrive(
     db: Session,
+    current_user: User,
     assignment: OrderDriverAssignment,
     operational_state: DriverDeliveryOperationalState,
     current_state: str,
@@ -2432,6 +2503,25 @@ def _return_to_store_arrive(
         # confirmed_by_user_id — those are the store-confirmation runtime (H).
         # assignment.status stays `started`; Order.status, OrderAuditLog, and
         # inventory are intentionally untouched.
+        write_operational_audit_log(
+            db,
+            actor_user_id=current_user.id,
+            target_type=TARGET_DELIVERY_ASSIGNMENT,
+            target_id=assignment.id,
+            action="delivery_return_arrived",
+            store_id=assignment.store_id,
+            before={
+                "state": returning_to_store,
+                "return_state": DriverDeliveryReturnState.returning.value,
+            },
+            after={
+                "state": returned_to_store,
+                "return_state": (
+                    DriverDeliveryReturnState.returned_pending_confirmation.value
+                ),
+            },
+            metadata={"source": "driver_return_to_store"},
+        )
         db.commit()
         db.refresh(record)
         return DriverDeliveryReturnRead.model_validate(record)

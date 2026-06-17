@@ -239,7 +239,7 @@ class DriverVerifyAgeRequest(BaseModel):
     age_over_21_confirmed: bool | None = None
     id_expiration_checked: bool | None = None
     id_not_expired: bool | None = None
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
     def _validate_failure_reason(self) -> "DriverVerifyAgeRequest":
@@ -310,7 +310,7 @@ class DriverProofSubmitRequest(BaseModel):
     recipient_present_confirmed: bool
     handoff_confirmed: bool
     restricted_not_left_unattended: bool
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
     def _require_all_confirmations_true(self) -> "DriverProofSubmitRequest":

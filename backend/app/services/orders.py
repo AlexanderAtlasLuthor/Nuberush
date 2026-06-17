@@ -85,6 +85,8 @@ from app.schemas.orders import OrderReturnRequest
 from app.schemas.orders import OrderStatusUpdate
 from app.schemas.orders import StoreConfirmDriverReturnRequest
 from app.services import inventory as inv
+from app.services.operational_audit import TARGET_DELIVERY_ASSIGNMENT
+from app.services.operational_audit import write_operational_audit_log
 
 
 # Action strings written to OrderAuditLog.action. Kept here so callers
@@ -1157,6 +1159,10 @@ def confirm_driver_return_for_store(
             ),
         )
 
+    # Snapshot pre-mutation discriminators for the audit before/after.
+    prev_order_status = order.status.value
+    prev_return_state = driver_return.return_state
+
     # Stamp the custody record as confirmed (the only place this is allowed).
     now = _utcnow()
     driver_return.return_state = confirmed
@@ -1174,6 +1180,28 @@ def confirm_driver_return_for_store(
 
     # Close the assignment; the operational state stays returned_to_store.
     assignment.status = assignment_canceled
+
+    # Redacted operational audit (Dr.1.2.I.a) — same transaction, non-committing.
+    write_operational_audit_log(
+        db,
+        actor_user_id=current_user.id,
+        target_type=TARGET_DELIVERY_ASSIGNMENT,
+        target_id=assignment.id,
+        action="delivery_return_confirmed",
+        store_id=order.store_id,
+        before={
+            "status": prev_order_status,
+            "return_state": prev_return_state,
+        },
+        after={
+            "status": OrderStatus.canceled.value,
+            "return_state": confirmed,
+        },
+        metadata={
+            "source": "confirm_driver_return",
+            "reason": "store_confirmed_return",
+        },
+    )
 
     _commit_or_translate(db)
     db.refresh(driver_return)
