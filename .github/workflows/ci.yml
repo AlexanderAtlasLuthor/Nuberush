@@ -6,10 +6,90 @@ on:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Path-filter gate (Dr.1.3.B). Detects which top-level trees changed so the
+  # heavier jobs below run only when relevant. Mobile-only (mobile/**) and
+  # docs-only commits no longer trigger frontend/backend/RLS.
+  #
+  # FAIL-SAFE: if the diff base cannot be determined (first push, new branch,
+  # force-push, shallow clone) the gate runs every downstream job. A change to
+  # the CI workflow itself also runs everything. This protects the compliance/
+  # RLS gates from ever being skipped on uncertainty.
+  #
+  # Dr.1.3.J adds a `mobile` output + downstream Flutter job (pub get / analyze /
+  # test). This gate job itself still uses only first-party actions + git (no
+  # third-party); the Flutter setup action lives in the `mobile` job below.
+  # ---------------------------------------------------------------------------
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      rls: ${{ steps.filter.outputs.rls }}
+      mobile: ${{ steps.filter.outputs.mobile }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          run_all() {
+            {
+              echo "frontend=true"
+              echo "backend=true"
+              echo "rls=true"
+              echo "mobile=true"
+            } >> "$GITHUB_OUTPUT"
+          }
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE_SHA"
+          else
+            base="$PUSH_BEFORE"
+          fi
+          zero="0000000000000000000000000000000000000000"
+          if [ -z "$base" ] || [ "$base" = "$zero" ] \
+             || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "Diff base unavailable; running all jobs (fail-safe)."
+            run_all
+            exit 0
+          fi
+          changed="$(git diff --name-only "$base" "$HEAD_SHA")"
+          echo "Changed files:"
+          echo "$changed"
+          match() { echo "$changed" | grep -qE "$1"; }
+          # A change to the CI workflow itself runs everything (conservative).
+          if match '^\.github/workflows/'; then
+            echo "CI workflow changed; running all jobs."
+            run_all
+            exit 0
+          fi
+          frontend=false
+          backend=false
+          rls=false
+          mobile=false
+          match '^web/' && frontend=true || true
+          match '^backend/' && { backend=true; rls=true; } || true
+          match '^supabase/' && rls=true || true
+          match '^mobile/' && mobile=true || true
+          {
+            echo "frontend=$frontend"
+            echo "backend=$backend"
+            echo "rls=$rls"
+            echo "mobile=$mobile"
+          } >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
   # Frontend validation — lint, typecheck, unit/component tests. No backend,
   # no database, no feature-code changes.
   # ---------------------------------------------------------------------------
   frontend:
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -33,6 +113,8 @@ jobs:
   # local "alembic only" state (detection + helper checks SKIP).
   # ---------------------------------------------------------------------------
   backend-unit:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -78,6 +160,8 @@ jobs:
   # `storage` schema and is out of scope for F2.27.1.
   # ---------------------------------------------------------------------------
   rls-active:
+    needs: changes
+    if: ${{ needs.changes.outputs.rls == 'true' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -146,3 +230,37 @@ jobs:
           DATABASE_URL_TEST: postgresql+psycopg://nuberush_app:nuberush_app@localhost:5432/nuberush_test
           RLS_ACTIVE_CI: "1"
         run: python -m pytest tests/test_rls_bypass.py -q
+
+  # ---------------------------------------------------------------------------
+  # Mobile (Flutter) validation — Dr.1.3.J. Runs the same checks proven locally:
+  # pub get / analyze / test. Triggered by the path-filter gate on mobile/**
+  # changes (and on any CI-workflow change, via the run_all fail-safe).
+  #
+  # SCOPE: analyze + unit/widget tests only. No platform builds in CI —
+  #   * iOS build needs a macOS runner (validated locally with
+  #     `flutter build ios --debug --no-codesign`).
+  #   * Android build needs the Android SDK and is deferred (see mobile/README).
+  # No signing, no deployment. Tests use fakes, so no runtime --dart-define
+  # config (and therefore no secrets) is required.
+  #
+  # Flutter is pinned to the toolchain in mobile/README.md (3.38.5 / stable) for
+  # reproducibility. subosito/flutter-action is the only third-party action and
+  # is confined to this job.
+  # ---------------------------------------------------------------------------
+  mobile:
+    needs: changes
+    if: ${{ needs.changes.outputs.mobile == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.5"
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
