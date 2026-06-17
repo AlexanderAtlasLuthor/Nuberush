@@ -36,6 +36,7 @@ from pydantic import field_validator
 from pydantic import model_validator
 
 from app.db.models import OrderStatus
+from app.schemas.driver import DriverDeliveryReturnRead
 from app.schemas.inventory import InventoryVariantSummary
 
 
@@ -297,3 +298,50 @@ class OrderAuditLogRead(BaseModel):
     action: str
     reason: str | None
     created_at: datetime
+
+
+# --------------------------------------------------------------------- #
+# Store return confirmation (Dr.1.2.H)
+# --------------------------------------------------------------------- #
+#
+# POST /orders/{order_id}/confirm-driver-return lets an authorized store actor
+# (manager-or-above) confirm physical receipt of a failed-delivery return after
+# the driver has reached returned_to_store / returned_pending_confirmation. The
+# confirmation stamps the DriverDeliveryReturn as confirmed and cancels the
+# order (releasing the held reservation without touching quantity_on_hand) via
+# orders authority. The request carries ONLY a confirmation flag and a safe note
+# — never customer PII, ID/proof/photo/signature/OCR/barcode, or location.
+
+
+class StoreConfirmDriverReturnRequest(BaseModel):
+    """Body for ``POST /orders/{id}/confirm-driver-return``.
+
+    ``received_confirmed`` is required and must be ``True`` — it is the store
+    actor's explicit assertion that the returned product was physically
+    received. ``note`` is an optional safe note capped at 500 chars. No
+    sensitive field is accepted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    received_confirmed: bool
+    note: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _require_received_confirmed(
+        self,
+    ) -> "StoreConfirmDriverReturnRequest":
+        if not self.received_confirmed:
+            raise ValueError("received_confirmed must be true")
+        return self
+
+
+class StoreConfirmDriverReturnResponse(BaseModel):
+    """Composite response for the store return confirmation (Dr.1.2.H).
+
+    Surfaces both the now-canceled order and the confirmed return custody
+    record so the store sees the full commercial + custody outcome in one call.
+    """
+
+    order: OrderRead
+    driver_return: DriverDeliveryReturnRead

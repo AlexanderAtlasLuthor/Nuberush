@@ -60,9 +60,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
+from app.db.models import DriverDeliveryOperationalState
+from app.db.models import DriverDeliveryOperationalStateValue
+from app.db.models import DriverDeliveryReturn
+from app.db.models import DriverDeliveryReturnState
 from app.db.models import InventoryItem
 from app.db.models import Order
 from app.db.models import OrderAuditLog
+from app.db.models import OrderDriverAssignment
+from app.db.models import OrderDriverAssignmentStatus
 from app.db.models import OrderItem
 from app.db.models import OrderStatus
 from app.db.models import ProductVariant
@@ -77,6 +83,7 @@ from app.schemas.orders import OrderCreate
 from app.schemas.orders import OrderListResponse
 from app.schemas.orders import OrderReturnRequest
 from app.schemas.orders import OrderStatusUpdate
+from app.schemas.orders import StoreConfirmDriverReturnRequest
 from app.services import inventory as inv
 
 
@@ -803,19 +810,22 @@ def transition_order_status(
     return _load_order(db, order.id)
 
 
-def cancel_order(
+def _cancel_order_core(
     db: Session,
-    order_id: UUID,
-    payload: OrderCancelRequest,
+    order: Order,
+    reason: str,
     actor_user_id: UUID | None,
-) -> Order:
-    """Cancel an order from any pre-delivered status.
+) -> None:
+    """Non-committing cancel mechanics for a loaded order.
 
-    Releases the reservation on every line item, sets
-    ``status = canceled``, ``canceled_at`` and ``cancel_reason``,
-    writes the audit log row and commits once.
+    Validates the transition, releases every line reservation (no
+    ``quantity_on_hand`` change), sets ``status = canceled`` /
+    ``canceled_at`` / ``cancel_reason`` and writes the audit row. The CALLER
+    owns the transaction and commits exactly once — this lets the store
+    return-confirmation bridge (Dr.1.2.H) cancel the order atomically alongside
+    its DriverDeliveryReturn confirmation. Behaviour is identical to the
+    pre-existing inline cancel mechanics; no new inventory code.
     """
-    order = _load_order(db, order_id)
     previous_status = order.status
     if previous_status not in _CANCELABLE_STATUSES:
         raise HTTPException(
@@ -831,7 +841,7 @@ def cancel_order(
 
     order.status = OrderStatus.canceled
     order.canceled_at = _utcnow()
-    order.cancel_reason = payload.reason
+    order.cancel_reason = reason
 
     _write_order_audit_log(
         db,
@@ -839,10 +849,25 @@ def cancel_order(
         previous_status=previous_status,
         new_status=OrderStatus.canceled,
         action=ACTION_ORDER_CANCELED,
-        reason=payload.reason,
+        reason=reason,
         actor_user_id=actor_user_id,
     )
 
+
+def cancel_order(
+    db: Session,
+    order_id: UUID,
+    payload: OrderCancelRequest,
+    actor_user_id: UUID | None,
+) -> Order:
+    """Cancel an order from any pre-delivered status.
+
+    Releases the reservation on every line item, sets
+    ``status = canceled``, ``canceled_at`` and ``cancel_reason``,
+    writes the audit log row and commits once.
+    """
+    order = _load_order(db, order_id)
+    _cancel_order_core(db, order, payload.reason, actor_user_id)
     _commit_or_translate(db)
     return _load_order(db, order.id)
 
@@ -972,3 +997,184 @@ def complete_order_via_driver(
         actor_user_id=actor_user_id,
     )
     return order
+
+
+# --------------------------------------------------------------------- #
+# Store return confirmation (Dr.1.2.H)
+# --------------------------------------------------------------------- #
+#
+# An authorized store actor (manager-or-above; tenancy enforced at the route)
+# confirms physical receipt of a failed-delivery return after the driver has
+# reached returned_to_store / returned_pending_confirmation. In one transaction
+# this stamps the DriverDeliveryReturn as confirmed and cancels the order
+# (releasing the held reservation via the existing cancel core — quantity_on_hand
+# is never touched, no restock, no consume). The operational state is left at
+# returned_to_store, and the OrderAuditLog is written by the cancel core.
+
+_CANCEL_REASON_DRIVER_RETURN = "driver return confirmed by store"
+
+
+def _load_locked_order_for_confirm(db: Session, order_id: UUID) -> Order:
+    order = db.scalar(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(_order_read_load_options())
+        .with_for_update()
+    )
+    if order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found.",
+        )
+    return order
+
+
+def confirm_driver_return_for_store(
+    db: Session,
+    order_id: UUID,
+    payload: StoreConfirmDriverReturnRequest,
+    current_user: User,
+) -> tuple[Order, DriverDeliveryReturn]:
+    """Confirm store receipt of a returned failed delivery (Dr.1.2.H).
+
+    Stamps the order's DriverDeliveryReturn as ``confirmed`` (with
+    ``confirmed_at`` / ``confirmed_by_user_id``) and cancels the order via the
+    non-committing cancel core (releasing the held reservation, no
+    quantity_on_hand change), then closes the assignment to ``canceled`` — all
+    in a single transaction. The operational state stays ``returned_to_store``.
+
+    Gates: the order must exist; a DriverDeliveryReturn must exist for it; its
+    ``return_state`` must be ``returned_pending_confirmation`` (else 409); the
+    assignment's operational state must be ``returned_to_store`` (else 409); the
+    assignment must still be ``started`` (else 409); the order must be cancelable
+    (else 422). Idempotent: an already-``confirmed`` return whose order is
+    ``canceled`` and assignment ``canceled`` returns the existing pair without a
+    second release or duplicate audit; any inconsistent confirmed state is a 409.
+    A missing order or return record is a 404. Tenancy is enforced by the route.
+    """
+    order = _load_locked_order_for_confirm(db, order_id)
+
+    driver_return = db.scalars(
+        select(DriverDeliveryReturn)
+        .where(DriverDeliveryReturn.order_id == order_id)
+        .order_by(DriverDeliveryReturn.created_at.desc())
+        .with_for_update()
+    ).first()
+    if driver_return is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No driver return to confirm for this order.",
+        )
+
+    assignment = db.scalar(
+        select(OrderDriverAssignment)
+        .where(OrderDriverAssignment.id == driver_return.assignment_id)
+        .with_for_update()
+    )
+    operational_state = db.scalar(
+        select(DriverDeliveryOperationalState)
+        .where(
+            DriverDeliveryOperationalState.assignment_id
+            == driver_return.assignment_id
+        )
+        .with_for_update()
+    )
+
+    confirmed = DriverDeliveryReturnState.confirmed.value
+    returned_pending = (
+        DriverDeliveryReturnState.returned_pending_confirmation.value
+    )
+    returned_to_store = (
+        DriverDeliveryOperationalStateValue.returned_to_store.value
+    )
+    assignment_canceled = OrderDriverAssignmentStatus.canceled.value
+    assignment_started = OrderDriverAssignmentStatus.started.value
+
+    # Idempotent replay: an already-confirmed, fully-consistent return.
+    if driver_return.return_state == confirmed:
+        consistent = (
+            order.status == OrderStatus.canceled
+            and assignment is not None
+            and assignment.status == assignment_canceled
+            and driver_return.confirmed_at is not None
+            and driver_return.confirmed_by_user_id is not None
+        )
+        if consistent:
+            db.rollback()
+            return order, driver_return
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Driver return confirmation is in an inconsistent state.",
+        )
+
+    if driver_return.return_state != returned_pending:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Driver return is not awaiting confirmation "
+                f"(return_state '{driver_return.return_state}')."
+            ),
+        )
+
+    if assignment is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No driver return to confirm for this order.",
+        )
+
+    if (
+        operational_state is None
+        or operational_state.state != returned_to_store
+    ):
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery is not in returned_to_store state.",
+        )
+
+    if assignment.status != assignment_started:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Assignment cannot confirm return from status "
+                f"'{assignment.status}'."
+            ),
+        )
+
+    # Cancelability is gated BEFORE any mutation so a non-cancelable order
+    # leaves the return record untouched (no partial confirm).
+    if order.status not in _CANCELABLE_STATUSES:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Cannot confirm a driver return for an order in status "
+                f"'{order.status.value}'."
+            ),
+        )
+
+    # Stamp the custody record as confirmed (the only place this is allowed).
+    now = _utcnow()
+    driver_return.return_state = confirmed
+    driver_return.confirmed_at = now
+    driver_return.confirmed_by_user_id = current_user.id
+    if payload.note is not None:
+        driver_return.note = payload.note
+
+    # Cancel the order through the shared, non-committing cancel core: releases
+    # the held reservation (no quantity_on_hand change) and writes the audit row.
+    # Raises 422 if the order is not cancelable (e.g. delivered).
+    _cancel_order_core(
+        db, order, _CANCEL_REASON_DRIVER_RETURN, current_user.id
+    )
+
+    # Close the assignment; the operational state stays returned_to_store.
+    assignment.status = assignment_canceled
+
+    _commit_or_translate(db)
+    db.refresh(driver_return)
+    return _load_order(db, order_id), driver_return

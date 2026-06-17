@@ -42,6 +42,7 @@ from app.db.models import OrderStatus
 from app.db.models import User
 from app.db.models import UserRole
 from app.db.session import get_db
+from app.schemas.driver import DriverDeliveryReturnRead
 from app.schemas.orders import OrderAuditLogRead
 from app.schemas.orders import OrderCancelRequest
 from app.schemas.orders import OrderCreate
@@ -49,6 +50,8 @@ from app.schemas.orders import OrderListResponse
 from app.schemas.orders import OrderRead
 from app.schemas.orders import OrderReturnRequest
 from app.schemas.orders import OrderStatusUpdate
+from app.schemas.orders import StoreConfirmDriverReturnRequest
+from app.schemas.orders import StoreConfirmDriverReturnResponse
 from app.services import orders as svc
 
 
@@ -239,6 +242,37 @@ def post_return_order(
     _assert_can_access_store(current_user, order.store_id)
     return svc.return_order(
         db, order_id, payload, actor_user_id=current_user.id
+    )
+
+
+@router.post(
+    "/orders/{order_id}/confirm-driver-return",
+    response_model=StoreConfirmDriverReturnResponse,
+)
+def post_confirm_driver_return(
+    order_id: UUID,
+    payload: StoreConfirmDriverReturnRequest,
+    current_user: User = Depends(require_manager_or_above),
+    db: Session = Depends(get_db),
+) -> StoreConfirmDriverReturnResponse:
+    """Confirm store receipt of a returned failed delivery (Dr.1.2.H).
+
+    Manager-or-above, store-scoped (admin cross-store). Stamps the order's
+    DriverDeliveryReturn as confirmed and cancels the order (releasing the held
+    reservation, no quantity_on_hand change) atomically, closing the assignment
+    to canceled; the operational state stays returned_to_store. Idempotent once
+    confirmed. A missing order/return is a 404; a wrong return_state /
+    operational state / assignment status, or an inconsistent confirmed state,
+    is a 409; an order that is not cancelable is a 422.
+    """
+    order = svc.get_order(db, order_id)
+    _assert_can_access_store(current_user, order.store_id)
+    confirmed_order, driver_return = svc.confirm_driver_return_for_store(
+        db, order_id, payload, current_user
+    )
+    return StoreConfirmDriverReturnResponse(
+        order=OrderRead.model_validate(confirmed_order),
+        driver_return=DriverDeliveryReturnRead.model_validate(driver_return),
     )
 
 
