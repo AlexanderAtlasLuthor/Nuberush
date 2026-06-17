@@ -79,6 +79,7 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import Header
 from fastapi import Query
 from sqlalchemy.orm import Session
 
@@ -377,6 +378,9 @@ def verify_age_current_driver_assignment(
     payload: DriverVerifyAgeRequest,
     current_user: User = Depends(require_store_bound_driver),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key"
+    ),
 ) -> DriverDeliveryVerificationRead:
     """Record a delivery-time 21+ / age verification result (Dr.1.2.C).
 
@@ -396,7 +400,7 @@ def verify_age_current_driver_assignment(
     operational state.
     """
     return verify_age_driver_assignment(
-        db, current_user, assignment_id, payload
+        db, current_user, assignment_id, payload, idempotency_key
     )
 
 
@@ -409,6 +413,9 @@ def submit_proof_current_driver_assignment(
     payload: DriverProofSubmitRequest,
     current_user: User = Depends(require_store_bound_driver),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key"
+    ),
 ) -> DriverDeliveryProofRead:
     """Record a redaction-safe proof of delivery (Dr.1.2.D).
 
@@ -428,7 +435,7 @@ def submit_proof_current_driver_assignment(
     operational state.
     """
     return submit_proof_driver_assignment(
-        db, current_user, assignment_id, payload
+        db, current_user, assignment_id, payload, idempotency_key
     )
 
 
@@ -440,6 +447,9 @@ def complete_current_driver_assignment(
     assignment_id: UUID,
     current_user: User = Depends(require_store_bound_driver),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key"
+    ),
 ) -> DriverDeliveryOperationalStateRead:
     """Complete a fully-verified, proven delivery (Dr.1.2.E).
 
@@ -458,7 +468,7 @@ def complete_current_driver_assignment(
     operational state (delivery_completed).
     """
     return complete_delivery_driver_assignment(
-        db, current_user, assignment_id
+        db, current_user, assignment_id, idempotency_key
     )
 
 
@@ -471,6 +481,9 @@ def fail_current_driver_assignment(
     payload: DriverFailDeliveryRequest,
     current_user: User = Depends(require_store_bound_driver),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key"
+    ),
 ) -> DriverDeliveryFailureRead:
     """Record an operational-only failed delivery (Dr.1.2.F).
 
@@ -489,7 +502,7 @@ def fail_current_driver_assignment(
     no inventory).
     """
     return fail_delivery_driver_assignment(
-        db, current_user, assignment_id, payload
+        db, current_user, assignment_id, payload, idempotency_key
     )
 
 
@@ -502,6 +515,9 @@ def return_to_store_current_driver_assignment(
     payload: DriverReturnToStoreRequest,
     current_user: User = Depends(require_store_bound_driver),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key"
+    ),
 ) -> DriverDeliveryReturnRead:
     """Record operational return-to-store custody progress (Dr.1.2.G).
 
@@ -519,5 +535,5 @@ def return_to_store_current_driver_assignment(
     assignment is a 404. Returns the custody record (redaction-safe).
     """
     return return_to_store_driver_assignment(
-        db, current_user, assignment_id, payload
+        db, current_user, assignment_id, payload, idempotency_key
     )

@@ -58,6 +58,12 @@ from app.schemas.driver import DriverEligibilityBlockerSource
 from app.schemas.driver import DriverEligibilityRead
 from app.schemas.driver import DriverProofSubmitRequest
 from app.schemas.driver import DriverVerifyAgeRequest
+from app.services.compliance_idempotency import claim_or_replay
+from app.services.compliance_idempotency import complete_claim
+from app.services.compliance_idempotency import (
+    compute_compliance_request_hash,
+)
+from app.services.compliance_idempotency import validate_idempotency_key
 from app.services.operational_audit import TARGET_DELIVERY_ASSIGNMENT
 from app.services.operational_audit import write_operational_audit_log
 
@@ -1550,11 +1556,111 @@ def _latest_verification_for_assignment(
     )
 
 
+# ===================================================================== #
+# Dr.1.2.I.c — compliance idempotency ledger rollout (driver actions)
+# ===================================================================== #
+#
+# The five Dr.1.2 driver compliance actions accept an OPTIONAL Idempotency-Key.
+# These thin wrappers reuse the I.b ledger helper
+# (app.services.compliance_idempotency) — no helper logic is duplicated. A
+# present key claims a ledger row in the SAME transaction as the business
+# mutation and completes it just before the existing commit; a repeat replays
+# the recorded record by reloading from response_ref_id. A missing key
+# preserves the exact state-inferred behavior and writes no ledger row. The
+# driver layer still never writes Order.status or mutates inventory directly.
+
+
+def _validate_key_and_hash(
+    idempotency_key: str | None,
+    action: str,
+    payload_body: object,
+) -> tuple[str | None, str | None]:
+    """Validate the key (400) and hash action+body; (None, None) for no key.
+
+    Runs before any DB work so a malformed key fails fast and identically
+    regardless of assignment state. ``payload_body`` is the validated request
+    model (or ``{}`` for a body-less action).
+    """
+    if idempotency_key is None:
+        return None, None
+    key = validate_idempotency_key(idempotency_key)
+    return key, compute_compliance_request_hash(action, payload_body)
+
+
+def _claim_compliance_idempotency(
+    db: Session,
+    *,
+    idempotency_key: str | None,
+    request_hash: str | None,
+    action: str,
+    assignment: OrderDriverAssignment,
+    current_user: User,
+):
+    """Claim the ledger for a driver compliance action (None if no key).
+
+    Returns the helper ``ClaimResult`` (caller checks ``.replayed``) or ``None``
+    when no key was supplied. Scope is the assignment's store/order/assignment
+    plus the acting user. Conflicts (different payload/scope, pending) raise 409.
+    """
+    if idempotency_key is None or request_hash is None:
+        return None
+    return claim_or_replay(
+        db,
+        idempotency_key=idempotency_key,
+        action=action,
+        actor_user_id=current_user.id,
+        store_id=assignment.store_id,
+        order_id=assignment.order_id,
+        assignment_id=assignment.id,
+        request_hash=request_hash,
+    )
+
+
+def _replay_reload(db: Session, model, read_cls, ref_id):
+    """Reload a recorded compliance row for an idempotent ledger replay.
+
+    The transaction is rolled back first (replay never mutates), then the row is
+    reloaded by its id (the ledger ``response_ref_id``) and serialized through
+    the same current read model. A missing reference is a corrupt-ledger edge
+    and surfaces as a 404 (genuinely impossible in normal flow).
+    """
+    db.rollback()
+    obj = db.get(model, ref_id)
+    if obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Idempotent replay reference no longer exists.",
+        )
+    return read_cls.model_validate(obj)
+
+
+def _complete_compliance_idempotency(
+    db: Session, claim_result, response_ref_id
+) -> None:
+    """Complete a driver compliance ledger claim (no commit). No-op if no key.
+
+    ``claim_result`` is the fresh-claim ``ClaimResult`` (or ``None``). Must be
+    called after the new record is flushed so ``response_ref_id`` is populated;
+    the caller's existing commit lands the claim atomically with the business
+    mutation. Stores only the reference id + 200, never a response body.
+    """
+    if claim_result is None:
+        return
+    complete_claim(
+        db,
+        claim=claim_result.claim,
+        response_ref_id=response_ref_id,
+        response_status_code=200,
+        completed_at=datetime.now(timezone.utc),
+    )
+
+
 def verify_age_driver_assignment(
     db: Session,
     current_user: User,
     assignment_id: UUID,
     payload: DriverVerifyAgeRequest,
+    idempotency_key: str | None = None,
 ) -> DriverDeliveryVerificationRead:
     """Record a delivery-time 21+ verification for a started assignment (C).
 
@@ -1578,10 +1684,29 @@ def verify_age_driver_assignment(
     started = OrderDriverAssignmentStatus.started.value
     is_pass = payload.outcome == DriverDeliveryVerificationOutcome.pass_
 
+    idempotency_key, request_hash = _validate_key_and_hash(
+        idempotency_key, "delivery_verified", payload
+    )
+
     driver_profile = get_driver_profile_for_user(db, current_user)
     assignment = _resolve_locked_owned_assignment(
         db, driver_profile, current_user, assignment_id
     )
+    claim = _claim_compliance_idempotency(
+        db,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        action="delivery_verified",
+        assignment=assignment,
+        current_user=current_user,
+    )
+    if claim is not None and claim.replayed:
+        return _replay_reload(
+            db,
+            DriverDeliveryVerification,
+            DriverDeliveryVerificationRead,
+            claim.claim.response_ref_id,
+        )
     if assignment.status != started:
         db.rollback()
         raise HTTPException(
@@ -1634,6 +1759,9 @@ def verify_age_driver_assignment(
             },
             metadata={"source": "driver_verify_age"},
         )
+        if claim is not None:
+            db.flush()
+            _complete_compliance_idempotency(db, claim, verification.id)
         db.commit()
         db.refresh(verification)
         return DriverDeliveryVerificationRead.model_validate(verification)
@@ -1755,6 +1883,7 @@ def submit_proof_driver_assignment(
     current_user: User,
     assignment_id: UUID,
     payload: DriverProofSubmitRequest,
+    idempotency_key: str | None = None,
 ) -> DriverDeliveryProofRead:
     """Record a proof of delivery for an id_verified assignment (D).
 
@@ -1774,10 +1903,29 @@ def submit_proof_driver_assignment(
     id_verified = DriverDeliveryOperationalStateValue.id_verified.value
     started = OrderDriverAssignmentStatus.started.value
 
+    idempotency_key, request_hash = _validate_key_and_hash(
+        idempotency_key, "delivery_proof_recorded", payload
+    )
+
     driver_profile = get_driver_profile_for_user(db, current_user)
     assignment = _resolve_locked_owned_assignment(
         db, driver_profile, current_user, assignment_id
     )
+    claim = _claim_compliance_idempotency(
+        db,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        action="delivery_proof_recorded",
+        assignment=assignment,
+        current_user=current_user,
+    )
+    if claim is not None and claim.replayed:
+        return _replay_reload(
+            db,
+            DriverDeliveryProof,
+            DriverDeliveryProofRead,
+            claim.claim.response_ref_id,
+        )
     if assignment.status != started:
         db.rollback()
         raise HTTPException(
@@ -1827,6 +1975,9 @@ def submit_proof_driver_assignment(
             after={"state": current_state},
             metadata={"source": "driver_proof"},
         )
+        if claim is not None:
+            db.flush()
+            _complete_compliance_idempotency(db, claim, proof.id)
         db.commit()
         db.refresh(proof)
         return DriverDeliveryProofRead.model_validate(proof)
@@ -1915,6 +2066,7 @@ def complete_delivery_driver_assignment(
     db: Session,
     current_user: User,
     assignment_id: UUID,
+    idempotency_key: str | None = None,
 ) -> DriverDeliveryOperationalStateRead:
     """Complete a fully-verified, proven delivery (Dr.1.2.E).
 
@@ -1944,10 +2096,30 @@ def complete_delivery_driver_assignment(
     started = OrderDriverAssignmentStatus.started.value
     completed = OrderDriverAssignmentStatus.completed.value
 
+    # Body-less action: hash a stable empty canonical body.
+    idempotency_key, request_hash = _validate_key_and_hash(
+        idempotency_key, "delivery_completed", {}
+    )
+
     driver_profile = get_driver_profile_for_user(db, current_user)
     assignment = _resolve_locked_owned_assignment(
         db, driver_profile, current_user, assignment_id
     )
+    claim = _claim_compliance_idempotency(
+        db,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        action="delivery_completed",
+        assignment=assignment,
+        current_user=current_user,
+    )
+    if claim is not None and claim.replayed:
+        return _replay_reload(
+            db,
+            DriverDeliveryOperationalState,
+            DriverDeliveryOperationalStateRead,
+            claim.claim.response_ref_id,
+        )
 
     operational_state = db.scalar(
         select(DriverDeliveryOperationalState)
@@ -2052,6 +2224,8 @@ def complete_delivery_driver_assignment(
         after={"state": delivery_completed, "status": completed},
         metadata={"source": "driver_complete"},
     )
+    # Stable replay reference: the operational-state row (the response object).
+    _complete_compliance_idempotency(db, claim, operational_state.id)
     db.commit()
     db.refresh(operational_state)
     return DriverDeliveryOperationalStateRead.model_validate(
@@ -2137,6 +2311,7 @@ def fail_delivery_driver_assignment(
     current_user: User,
     assignment_id: UUID,
     payload: DriverFailDeliveryRequest,
+    idempotency_key: str | None = None,
 ) -> DriverDeliveryFailureRead:
     """Record an operational-only failed delivery (Dr.1.2.F).
 
@@ -2161,10 +2336,29 @@ def fail_delivery_driver_assignment(
     )
     started = OrderDriverAssignmentStatus.started.value
 
+    idempotency_key, request_hash = _validate_key_and_hash(
+        idempotency_key, "delivery_failed", payload
+    )
+
     driver_profile = get_driver_profile_for_user(db, current_user)
     assignment = _resolve_locked_owned_assignment(
         db, driver_profile, current_user, assignment_id
     )
+    claim = _claim_compliance_idempotency(
+        db,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        action="delivery_failed",
+        assignment=assignment,
+        current_user=current_user,
+    )
+    if claim is not None and claim.replayed:
+        return _replay_reload(
+            db,
+            DriverDeliveryFailure,
+            DriverDeliveryFailureRead,
+            claim.claim.response_ref_id,
+        )
 
     operational_state = db.scalar(
         select(DriverDeliveryOperationalState)
@@ -2239,6 +2433,9 @@ def fail_delivery_driver_assignment(
                 "reason_code": payload.reason_code.value,
             },
         )
+        if claim is not None:
+            db.flush()
+            _complete_compliance_idempotency(db, claim, failure.id)
         db.commit()
         db.refresh(failure)
         return DriverDeliveryFailureRead.model_validate(failure)
@@ -2304,6 +2501,7 @@ def return_to_store_driver_assignment(
     current_user: User,
     assignment_id: UUID,
     payload: DriverReturnToStoreRequest,
+    idempotency_key: str | None = None,
 ) -> DriverDeliveryReturnRead:
     """Record operational return-to-store custody progress (Dr.1.2.G).
 
@@ -2334,11 +2532,36 @@ def return_to_store_driver_assignment(
         DriverDeliveryOperationalStateValue.returned_to_store.value
     )
     is_start = payload.action == DriverReturnToStoreAction.start
+    # The ledger action mirrors the operational step requested.
+    ledger_action = (
+        "delivery_return_started"
+        if is_start
+        else "delivery_return_arrived"
+    )
+
+    idempotency_key, request_hash = _validate_key_and_hash(
+        idempotency_key, ledger_action, payload
+    )
 
     driver_profile = get_driver_profile_for_user(db, current_user)
     assignment = _resolve_locked_owned_assignment(
         db, driver_profile, current_user, assignment_id
     )
+    claim = _claim_compliance_idempotency(
+        db,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        action=ledger_action,
+        assignment=assignment,
+        current_user=current_user,
+    )
+    if claim is not None and claim.replayed:
+        return _replay_reload(
+            db,
+            DriverDeliveryReturn,
+            DriverDeliveryReturnRead,
+            claim.claim.response_ref_id,
+        )
 
     operational_state = db.scalar(
         select(DriverDeliveryOperationalState)
@@ -2367,6 +2590,7 @@ def return_to_store_driver_assignment(
             delivery_failed,
             returning_to_store,
             returned_to_store,
+            claim,
         )
     return _return_to_store_arrive(
         db,
@@ -2378,6 +2602,7 @@ def return_to_store_driver_assignment(
         delivery_failed,
         returning_to_store,
         returned_to_store,
+        claim,
     )
 
 
@@ -2391,6 +2616,7 @@ def _return_to_store_start(
     delivery_failed: str,
     returning_to_store: str,
     returned_to_store: str,
+    claim=None,
 ) -> DriverDeliveryReturnRead:
     """Handle action=start (delivery_failed -> returning_to_store)."""
     if current_state == returning_to_store:
@@ -2437,6 +2663,9 @@ def _return_to_store_start(
             },
             metadata={"source": "driver_return_to_store"},
         )
+        if claim is not None:
+            db.flush()
+            _complete_compliance_idempotency(db, claim, record.id)
         db.commit()
         db.refresh(record)
         return DriverDeliveryReturnRead.model_validate(record)
@@ -2467,6 +2696,7 @@ def _return_to_store_arrive(
     delivery_failed: str,
     returning_to_store: str,
     returned_to_store: str,
+    claim=None,
 ) -> DriverDeliveryReturnRead:
     """Handle action=arrive (returning_to_store -> returned_to_store)."""
     if current_state == returned_to_store:
@@ -2522,6 +2752,9 @@ def _return_to_store_arrive(
             },
             metadata={"source": "driver_return_to_store"},
         )
+        if claim is not None:
+            db.flush()
+            _complete_compliance_idempotency(db, claim, record.id)
         db.commit()
         db.refresh(record)
         return DriverDeliveryReturnRead.model_validate(record)
