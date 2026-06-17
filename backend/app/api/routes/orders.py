@@ -29,6 +29,7 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import Header
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi import status
@@ -254,6 +255,9 @@ def post_confirm_driver_return(
     payload: StoreConfirmDriverReturnRequest,
     current_user: User = Depends(require_manager_or_above),
     db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key"
+    ),
 ) -> StoreConfirmDriverReturnResponse:
     """Confirm store receipt of a returned failed delivery (Dr.1.2.H).
 
@@ -264,11 +268,17 @@ def post_confirm_driver_return(
     confirmed. A missing order/return is a 404; a wrong return_state /
     operational state / assignment status, or an inconsistent confirmed state,
     is a 409; an order that is not cancelable is a 422.
+
+    ``Idempotency-Key`` is OPTIONAL (Dr.1.2.I.b). Without it, behavior is the
+    current state-inferred idempotency. With it, the compliance ledger claims
+    the key: a repeat with the same key + payload + scope replays the same
+    200 outcome; a reused key with a different payload or scope, or one still
+    in progress, is a 409; a malformed key is a 400.
     """
     order = svc.get_order(db, order_id)
     _assert_can_access_store(current_user, order.store_id)
     confirmed_order, driver_return = svc.confirm_driver_return_for_store(
-        db, order_id, payload, current_user
+        db, order_id, payload, current_user, idempotency_key=idempotency_key
     )
     return StoreConfirmDriverReturnResponse(
         order=OrderRead.model_validate(confirmed_order),

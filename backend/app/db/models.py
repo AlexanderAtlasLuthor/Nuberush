@@ -3284,3 +3284,135 @@ class DriverDeliveryReturn(Base):
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = timestamp_created_at()
     updated_at: Mapped[datetime] = timestamp_updated_at()
+
+
+# The closed set of compliance actions an idempotency ledger row may claim
+# (Dr.1.2.I.b). Future-ready for all seven Dr.1.2 compliance actions even
+# though I.b only wires `delivery_return_confirmed`. Kept as a string CHECK
+# (not a PG enum) so adding/removing an action needs no ALTER TYPE — it
+# mirrors the operational-audit taxonomy which is the authority.
+_COMPLIANCE_IDEMPOTENCY_ACTIONS: tuple[str, ...] = (
+    "delivery_verified",
+    "delivery_proof_recorded",
+    "delivery_completed",
+    "delivery_failed",
+    "delivery_return_started",
+    "delivery_return_arrived",
+    "delivery_return_confirmed",
+)
+_COMPLIANCE_IDEMPOTENCY_ACTIONS_SQL = ", ".join(
+    f"'{action}'" for action in _COMPLIANCE_IDEMPOTENCY_ACTIONS
+)
+# State machine for a ledger row: a claim is `pending` while its business
+# action runs and `completed` once the mutation committed.
+_COMPLIANCE_IDEMPOTENCY_STATES_SQL = "'pending', 'completed'"
+
+
+class DriverComplianceIdempotencyKey(Base):
+    """Strong idempotency ledger for Dr.1.2 compliance actions (Dr.1.2.I.b).
+
+    One row per ``(store_id, action, idempotency_key)`` claim. A claim is
+    inserted ``pending`` in the SAME transaction as the business mutation and
+    flipped to ``completed`` (with ``response_ref_id`` / ``response_status_code``
+    / ``completed_at``) before that transaction commits, so a claim and its
+    business effect land or roll back atomically. Replay reloads the canonical
+    object from ``response_ref_id`` — no raw request payload or response body is
+    ever stored, only a sha256 ``request_hash`` for same-key/same-payload
+    detection.
+
+    I.b only wires the orders-side ``delivery_return_confirmed`` pilot; the
+    action CHECK is future-ready for the remaining six driver actions (I.c).
+    """
+
+    __tablename__ = "driver_compliance_idempotency_keys"
+    __table_args__ = (
+        UniqueConstraint(
+            "store_id",
+            "action",
+            "idempotency_key",
+            name="uq_driver_compliance_idempotency_keys_scope",
+        ),
+        CheckConstraint(
+            f"state IN ({_COMPLIANCE_IDEMPOTENCY_STATES_SQL})",
+            name="ck_driver_compliance_idempotency_keys_state_valid",
+        ),
+        CheckConstraint(
+            f"action IN ({_COMPLIANCE_IDEMPOTENCY_ACTIONS_SQL})",
+            name="ck_driver_compliance_idempotency_keys_action_valid",
+        ),
+        CheckConstraint(
+            "idempotency_key <> ''",
+            name="ck_driver_compliance_idempotency_keys_key_non_empty",
+        ),
+        CheckConstraint(
+            "char_length(request_hash) = 64",
+            name="ck_driver_compliance_idempotency_keys_request_hash_len",
+        ),
+        Index(
+            "ix_driver_compliance_idempotency_keys_created_at",
+            "created_at",
+        ),
+        Index(
+            "ix_driver_compliance_idempotency_keys_expires_at",
+            "expires_at",
+        ),
+        Index(
+            "ix_driver_compliance_idempotency_keys_store_action",
+            "store_id",
+            "action",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_driver_compliance_idempotency_keys_actor_user_id",
+            ondelete="SET NULL",
+        ),
+    )
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "stores.id",
+            name="fk_driver_compliance_idempotency_keys_store_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "orders.id",
+            name="fk_driver_compliance_idempotency_keys_order_id",
+            ondelete="CASCADE",
+        ),
+    )
+    assignment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "order_driver_assignments.id",
+            name="fk_driver_compliance_idempotency_keys_assignment_id",
+            ondelete="CASCADE",
+        ),
+    )
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_status_code: Mapped[int | None] = mapped_column(Integer)
+    response_ref_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True)
+    )
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = timestamp_created_at()
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )

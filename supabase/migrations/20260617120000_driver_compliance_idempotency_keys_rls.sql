@@ -1,0 +1,44 @@
+-- =============================================================================
+-- Dr.1.2.I.b — driver compliance idempotency ledger RLS deny-all
+-- =============================================================================
+--
+-- Extends the F2.22.3.D RLS deny-all baseline to the new public.* table
+-- created by Alembic revision d4e8b2c1f3a7 (Dr.1.2.I.b):
+--   * public.driver_compliance_idempotency_keys
+--
+-- This file ONLY toggles RLS flags on the already-created table; the schema
+-- itself stays in Alembic (see ./README.md "What does NOT go here").
+--
+-- ----- Architecture (locked, see docs/f2.22-contract-lock.md §7) ------------
+--
+-- Mirrors every other public.* application table: RLS is enabled, FORCED so
+-- the table owner is also subject to policies, and NO positive policies are
+-- created. With RLS on and no permissive policy, the anon and authenticated
+-- roles get zero rows on SELECT and every write raises — exactly the F2.22
+-- hybrid boundary. The compliance ledger is internal infrastructure and is
+-- never read or written by anon/authenticated; it flows only through FastAPI.
+--
+-- FastAPI continues to connect with the dedicated nuberush_app role
+-- (LOGIN + BYPASSRLS) and remains the only reader/writer of this table. RLS is
+-- defense-in-depth, never the primary gate.
+--
+-- ----- Scope of this migration ---------------------------------------------
+--
+-- IN scope (this file does this):
+--   * ALTER TABLE public.driver_compliance_idempotency_keys ENABLE + FORCE.
+--
+-- OUT of scope (deferred or banned outright):
+--   * No CREATE POLICY of any kind (banned by the F2.22 contract §7).
+--   * No CREATE TABLE / ALTER TABLE on columns (Alembic d4e8b2c1f3a7 owns it).
+--   * No CREATE PUBLICATION (the ledger is never realtime).
+--   * No storage.* changes, no RPCs, no triggers, no business logic SQL.
+--   * No cluster-level operations: no CREATE ROLE, no GRANT/REVOKE.
+--
+-- ----- Rollback notes (informational; forward-only migration tree) ----------
+--
+--   ALTER TABLE public.driver_compliance_idempotency_keys DISABLE ROW LEVEL SECURITY;
+--
+-- =============================================================================
+
+ALTER TABLE public.driver_compliance_idempotency_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.driver_compliance_idempotency_keys FORCE  ROW LEVEL SECURITY;

@@ -85,6 +85,12 @@ from app.schemas.orders import OrderReturnRequest
 from app.schemas.orders import OrderStatusUpdate
 from app.schemas.orders import StoreConfirmDriverReturnRequest
 from app.services import inventory as inv
+from app.services.compliance_idempotency import claim_or_replay
+from app.services.compliance_idempotency import complete_claim
+from app.services.compliance_idempotency import (
+    compute_compliance_request_hash,
+)
+from app.services.compliance_idempotency import validate_idempotency_key
 from app.services.operational_audit import TARGET_DELIVERY_ASSIGNMENT
 from app.services.operational_audit import write_operational_audit_log
 
@@ -96,6 +102,10 @@ ACTION_STATUS_CHANGED = "status_changed"
 ACTION_ORDER_CANCELED = "order_canceled"
 ACTION_ORDER_DELIVERED = "order_delivered"
 ACTION_ORDER_RETURNED = "order_returned"
+
+# Compliance idempotency ledger action for the confirm-driver-return pilot
+# (Dr.1.2.I.b). Matches the operational-audit action of the same name.
+_CONFIRM_DRIVER_RETURN_ACTION = "delivery_return_confirmed"
 
 
 # Allowed lifecycle transitions (orders_rules §3, §6). Mapping
@@ -1036,6 +1046,7 @@ def confirm_driver_return_for_store(
     order_id: UUID,
     payload: StoreConfirmDriverReturnRequest,
     current_user: User,
+    idempotency_key: str | None = None,
 ) -> tuple[Order, DriverDeliveryReturn]:
     """Confirm store receipt of a returned failed delivery (Dr.1.2.H).
 
@@ -1053,7 +1064,27 @@ def confirm_driver_return_for_store(
     ``canceled`` and assignment ``canceled`` returns the existing pair without a
     second release or duplicate audit; any inconsistent confirmed state is a 409.
     A missing order or return record is a 404. Tenancy is enforced by the route.
+
+    Dr.1.2.I.b — ``idempotency_key`` is OPTIONAL. ``None`` preserves the exact
+    H/I.a state-inferred behavior. When present, the compliance ledger claims
+    ``(store_id, 'delivery_return_confirmed', key)`` in the SAME transaction as
+    the business mutation: a fresh key executes and completes the claim; a
+    repeat with the same key + payload + scope replays the recorded 200 by
+    reloading the order/return from reference (no second release, no duplicate
+    OrderAuditLog or operational_audit row); a reused key with a different
+    payload or scope, or one still in progress, is a 409; a malformed key is a
+    400. The ledger stores only a sha256 request hash and the order id as the
+    replay reference — never the raw request body or response body.
     """
+    # Validate the key (400) and hash the body BEFORE any DB work so a
+    # malformed key fails fast and identically whether or not the order exists.
+    request_hash: str | None = None
+    if idempotency_key is not None:
+        idempotency_key = validate_idempotency_key(idempotency_key)
+        request_hash = compute_compliance_request_hash(
+            _CONFIRM_DRIVER_RETURN_ACTION, payload
+        )
+
     order = _load_locked_order_for_confirm(db, order_id)
 
     driver_return = db.scalars(
@@ -1091,6 +1122,42 @@ def confirm_driver_return_for_store(
     )
     assignment_canceled = OrderDriverAssignmentStatus.canceled.value
     assignment_started = OrderDriverAssignmentStatus.started.value
+
+    # Compliance idempotency ledger (Dr.1.2.I.b). Resolved BEFORE the
+    # state-inferred replay below so a reused key with a different payload or
+    # scope is a 409 even when the return is already confirmed. A fresh key
+    # inserts a `pending` claim in THIS transaction; it is completed just
+    # before commit, or discarded by any rollback on a downstream gate.
+    claim = None
+    if idempotency_key is not None and request_hash is not None:
+        claim_result = claim_or_replay(
+            db,
+            idempotency_key=idempotency_key,
+            action=_CONFIRM_DRIVER_RETURN_ACTION,
+            actor_user_id=current_user.id,
+            store_id=order.store_id,
+            order_id=order.id,
+            assignment_id=(
+                assignment.id if assignment is not None else None
+            ),
+            request_hash=request_hash,
+        )
+        if claim_result.replayed:
+            # Replay: reload the canonical pair from reference — no mutation,
+            # no second release, no duplicate OrderAuditLog/operational_audit.
+            db.rollback()
+            replay_return = db.scalars(
+                select(DriverDeliveryReturn)
+                .where(DriverDeliveryReturn.order_id == order_id)
+                .order_by(DriverDeliveryReturn.created_at.desc())
+            ).first()
+            if replay_return is None:  # pragma: no cover - defensive
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="No driver return to confirm for this order.",
+                )
+            return _load_order(db, order_id), replay_return
+        claim = claim_result.claim
 
     # Idempotent replay: an already-confirmed, fully-consistent return.
     if driver_return.return_state == confirmed:
@@ -1202,6 +1269,18 @@ def confirm_driver_return_for_store(
             "reason": "store_confirmed_return",
         },
     )
+
+    # Complete the idempotency claim in THIS transaction (Dr.1.2.I.b). The
+    # replay reference is the order id (the response is order/return based);
+    # only the digest + reference are stored, never the response body.
+    if claim is not None:
+        complete_claim(
+            db,
+            claim=claim,
+            response_ref_id=order.id,
+            response_status_code=200,
+            completed_at=now,
+        )
 
     _commit_or_translate(db)
     db.refresh(driver_return)
