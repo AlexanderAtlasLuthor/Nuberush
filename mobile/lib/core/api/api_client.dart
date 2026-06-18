@@ -34,6 +34,12 @@ import 'api_error.dart';
 /// Dr.1.3.C defines only the type; Dr.1.3.D wires it to the Supabase session.
 typedef AccessTokenProvider = Future<String?> Function();
 
+/// Invoked when the backend returns 401 (auth expired/invalid). Dr.1.4.F wires
+/// this to the app's auth-expired handler (sign out → back to login). It is
+/// fired once per 401, is never auto-retried, and the normalized 401 still
+/// bubbles out so the UI can render a safe state.
+typedef UnauthorizedCallback = Future<void> Function();
+
 /// Supported HTTP methods for the core client.
 enum ApiMethod { get, post, patch, delete }
 
@@ -44,13 +50,16 @@ class ApiClient {
     required ApiConfig config,
     required http.Client httpClient,
     AccessTokenProvider? accessTokenProvider,
+    UnauthorizedCallback? onUnauthorized,
   })  : _config = config,
         _httpClient = httpClient,
-        _accessTokenProvider = accessTokenProvider;
+        _accessTokenProvider = accessTokenProvider,
+        _onUnauthorized = onUnauthorized;
 
   final ApiConfig _config;
   final http.Client _httpClient;
   final AccessTokenProvider? _accessTokenProvider;
+  final UnauthorizedCallback? _onUnauthorized;
 
   Future<dynamic> get(
     String path, {
@@ -140,6 +149,19 @@ class ApiClient {
     }
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (response.statusCode == 401) {
+        // Auth expired/invalid: fire the auth-expired handler (sign out) once.
+        // Never auto-retry — the normalized 401 still bubbles below so the UI
+        // renders a safe state. The token is never logged or surfaced.
+        final UnauthorizedCallback? handler = _onUnauthorized;
+        if (handler != null) {
+          try {
+            await handler();
+          } catch (_) {
+            // Swallow handler failures; the 401 below is the source of truth.
+          }
+        }
+      }
       throw ApiError.fromResponse(
         status: response.statusCode,
         body: response.body,

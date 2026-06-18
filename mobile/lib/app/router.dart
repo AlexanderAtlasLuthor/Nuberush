@@ -24,7 +24,22 @@ import '../features/driver/presentation/driver_home_screen.dart';
 import 'app.dart';
 
 class DriverHomeBootstrap extends StatefulWidget {
-  const DriverHomeBootstrap({super.key});
+  const DriverHomeBootstrap({
+    super.key,
+    this.appBarActions = const <Widget>[],
+    this.repository,
+  });
+
+  /// Extra trailing app-bar actions forwarded to the Driver Home (and the
+  /// config-error fallback) — e.g. the authenticated shell's logout button.
+  final List<Widget> appBarActions;
+
+  /// Live, token-wired repository injected by the authenticated shell
+  /// (Dr.1.4.F). When provided it is used as-is (its ApiClient already carries
+  /// the Bearer token provider + 401 handler); the shell owns its lifecycle.
+  /// When null, the legacy env-built read-only repository is used (preserving
+  /// the prior default and tests).
+  final DriverReadRepository? repository;
 
   @override
   State<DriverHomeBootstrap> createState() => _DriverHomeBootstrapState();
@@ -39,6 +54,14 @@ class _DriverHomeBootstrapState extends State<DriverHomeBootstrap> {
   @override
   void initState() {
     super.initState();
+    // Injected (authenticated, token-wired) repository: use as-is. The shell
+    // owns the underlying http.Client, so this widget does not create/close it.
+    final injected = widget.repository;
+    if (injected != null) {
+      _repository = injected;
+      _homeController = DriverHomeController(injected);
+      return;
+    }
     try {
       final config = ApiConfig.fromEnvironment();
       final client = http.Client();
@@ -97,7 +120,10 @@ class _DriverHomeBootstrapState extends State<DriverHomeBootstrap> {
     final controller = _homeController;
     if (controller == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text(kAppTitle)),
+        appBar: AppBar(
+          title: const Text(kAppTitle),
+          actions: widget.appBarActions,
+        ),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -112,6 +138,7 @@ class _DriverHomeBootstrapState extends State<DriverHomeBootstrap> {
     return DriverHomeScreen(
       controller: controller,
       onViewAssignments: _openAssignments,
+      appBarActions: widget.appBarActions,
     );
   }
 }

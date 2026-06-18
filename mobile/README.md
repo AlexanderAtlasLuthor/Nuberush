@@ -82,8 +82,55 @@ or any server-only material.
   `DATABASE_URL`, no server-only secrets.** Real login UI is **not** implemented
   in Dr.1.3.D.
 
+## Live auth & running on a device (Dr.1.4)
+
+Dr.1.4 makes the app driver-usable: public config validation, `Supabase.initialize`,
+login/logout, session restore, an authenticated app shell, Bearer-token API
+wiring, 401 recovery, and 403 no-access handling — all in the NubeRush theme.
+
+### Run with live public config
+
+Pass the three **public** values via `--dart-define` (placeholders shown — use
+your **test** project values; see [.env.example](.env.example)):
+
+```sh
+cd mobile
+flutter run \
+  --dart-define=NUBERUSH_API_BASE_URL=https://example-api.example.com \
+  --dart-define=NUBERUSH_SUPABASE_URL=https://example-project.supabase.co \
+  --dart-define=NUBERUSH_SUPABASE_ANON_KEY=example-anon-key
+```
+
+Or keep values in a git-ignored file and run
+`flutter run --dart-define-from-file=dart_defines.local.json`.
+
+- Running with **no** `--dart-define`s shows `ConfigRequiredScreen` (no crash,
+  no localhost fallback, no network call).
+- iOS device: select with `-d <device-id>`. **Signing/deployment and App Store
+  release are out of scope for Dr.1.4.**
+- Android build is **deferred/skipped** when the Android SDK is absent (not a
+  Dr.1.4 blocker).
+
+### Smoke testing
+
+Follow the full manual checklist (config-missing, login, session restore, Driver
+Home, profile/eligibility, assignments, 401, 403, logout, optional POST actions):
+[../docs/dr.1.4-real-device-smoke-checklist.md](../docs/dr.1.4-real-device-smoke-checklist.md).
+
+### Local validation
+
+```sh
+cd mobile
+flutter pub get
+flutter analyze
+flutter test
+flutter build ios --debug --no-codesign   # if iOS toolchain available
+```
+
 ## Status
 
-Dr.1.3 foundation in progress: app shell + identity (B), core API transport
-(C), and auth/session + secure-storage foundation (D). No driver screens or
-endpoint wrappers yet — those arrive in later Dr.1.3 subphases.
+Dr.1.3 foundation complete (app shell + identity, core API transport,
+auth/session + secure-storage, driver screens). Dr.1.4 adds live auth/bootstrap:
+config validation with `Supabase.initialize` (C), login/logout (D), session
+restore with the authenticated shell (E), live token wiring with 401/403 policy
+(F), and real-device smoke docs (G). Phase commit/CI happens at Dr.1.4.H.

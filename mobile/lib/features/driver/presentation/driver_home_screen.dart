@@ -19,6 +19,7 @@ class DriverHomeScreen extends StatefulWidget {
     super.key,
     required this.controller,
     this.onViewAssignments,
+    this.appBarActions = const <Widget>[],
   });
 
   final DriverHomeController controller;
@@ -26,6 +27,11 @@ class DriverHomeScreen extends StatefulWidget {
   /// Optional read-only navigation to the assignments list (wired by the app
   /// shell). When null, no assignments entry is shown.
   final void Function(BuildContext context)? onViewAssignments;
+
+  /// Extra trailing app-bar actions injected by the app shell (e.g. the
+  /// authenticated shell's logout button). Default empty preserves the prior
+  /// read-only home. Presentation only — no business logic.
+  final List<Widget> appBarActions;
 
   @override
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
@@ -54,6 +60,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               icon: const Icon(Icons.list_alt),
               onPressed: () => widget.onViewAssignments!(context),
             ),
+          ...widget.appBarActions,
         ],
       ),
       body: SafeArea(
