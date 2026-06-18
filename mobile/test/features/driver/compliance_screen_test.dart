@@ -48,6 +48,8 @@ void main() {
     await tester.pumpWidget(app(c));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('compliance-verify-age')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('compliance-verify-age')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('verify-age-dialog')), findsOneWidget);
@@ -66,6 +68,8 @@ void main() {
     await tester.pumpWidget(app(c));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('compliance-proof')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('compliance-proof')));
     await tester.pumpAndSettle();
 
@@ -91,6 +95,8 @@ void main() {
     await tester.pumpWidget(app(c));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('compliance-complete')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('compliance-complete')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('complete-confirm')));
@@ -105,6 +111,8 @@ void main() {
     await tester.pumpWidget(app(c));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('compliance-fail')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('compliance-fail')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('fail-submit')));
@@ -123,6 +131,8 @@ void main() {
     await tester.pumpWidget(app(c));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('compliance-return-to-store')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('compliance-return-to-store')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('return-confirm')));
@@ -141,6 +151,8 @@ void main() {
     await tester.pumpAndSettle();
 
     repo.actionError = const ApiError(status: 500, message: 'Boom');
+    await tester.ensureVisible(find.byKey(const Key('compliance-verify-age')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('compliance-verify-age')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('verify-age-submit')));

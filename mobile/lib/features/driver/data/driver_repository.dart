@@ -22,8 +22,12 @@ abstract class DriverReadRepository {
   /// `GET /driver/eligibility`.
   Future<DriverEligibility> fetchDriverEligibility();
 
-  /// `GET /driver/assignments`.
-  Future<List<DriverAssignmentSummary>> fetchAssignments();
+  /// `GET /driver/assignments` (optionally `?status=<terminal>` for history).
+  ///
+  /// [status] is appended as a query param ONLY when non-null/non-empty; the
+  /// default (no-status) call is byte-for-byte the active-assignments list
+  /// behavior. No new endpoint, no path change.
+  Future<List<DriverAssignmentSummary>> fetchAssignments({String? status});
 
   /// `GET /driver/assignments/{assignment_id}`.
   Future<DriverAssignmentDetail> fetchAssignmentDetail(String assignmentId);
@@ -102,8 +106,13 @@ class ApiDriverRepository implements DriverReadRepository {
   }
 
   @override
-  Future<List<DriverAssignmentSummary>> fetchAssignments() async {
-    final dynamic body = await _client.get('/driver/assignments');
+  Future<List<DriverAssignmentSummary>> fetchAssignments({String? status}) async {
+    // Append `?status=` only for a real terminal filter (Dr.1.5.K history).
+    // When null/empty the URL is identical to the prior no-status call, so the
+    // active-assignments and offers flows are unchanged.
+    final Map<String, dynamic>? query =
+        (status != null && status.isNotEmpty) ? {'status': status} : null;
+    final dynamic body = await _client.get('/driver/assignments', query: query);
     return parseAssignmentList(_asMap(body));
   }
 

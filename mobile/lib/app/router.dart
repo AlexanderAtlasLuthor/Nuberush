@@ -19,6 +19,10 @@ import '../features/driver/presentation/assignment_detail_controller.dart';
 import '../features/driver/presentation/assignment_detail_screen.dart';
 import '../features/driver/presentation/assignment_list_controller.dart';
 import '../features/driver/presentation/assignment_list_screen.dart';
+import '../features/driver/presentation/delivery_history_controller.dart';
+import '../features/driver/presentation/delivery_history_screen.dart';
+import '../features/driver/presentation/delivery_offer_controller.dart';
+import '../features/driver/presentation/delivery_offer_screen.dart';
 import '../features/driver/presentation/driver_home_controller.dart';
 import '../features/driver/presentation/driver_home_screen.dart';
 import 'app.dart';
@@ -99,6 +103,37 @@ class _DriverHomeBootstrapState extends State<DriverHomeBootstrap> {
     );
   }
 
+  void _openOffers(BuildContext context) {
+    final repository = _repository;
+    if (repository == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _DisposingScreen(
+          controller: DeliveryOfferController(repository),
+          builder: (controller) =>
+              DeliveryOfferScreen(controller: controller),
+        ),
+      ),
+    );
+  }
+
+  void _openHistory(BuildContext context) {
+    final repository = _repository;
+    if (repository == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _DisposingScreen(
+          controller: DeliveryHistoryController(repository),
+          builder: (controller) => DeliveryHistoryScreen(
+            controller: controller,
+            onOpenAssignment: (ctx, assignment) =>
+                _openAssignmentDetail(ctx, repository, assignment),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _openAssignmentDetail(
     BuildContext context,
     DriverReadRepository repository,
@@ -138,6 +173,8 @@ class _DriverHomeBootstrapState extends State<DriverHomeBootstrap> {
     return DriverHomeScreen(
       controller: controller,
       onViewAssignments: _openAssignments,
+      onViewOffers: _openOffers,
+      onViewHistory: _openHistory,
       appBarActions: widget.appBarActions,
     );
   }

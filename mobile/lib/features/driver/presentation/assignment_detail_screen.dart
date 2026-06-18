@@ -19,14 +19,24 @@
 
 import 'package:flutter/material.dart';
 
+import '../../../core/theme/nuberush_colors.dart';
+import '../../../core/theme/nuberush_spacing.dart';
+import '../../../core/ui/ui.dart';
 import '../domain/compliance_requests.dart';
 import '../domain/driver_assignment.dart';
-import '../domain/driver_delivery_state.dart';
+import 'active_delivery_summary_card.dart';
 import 'assignment_detail_controller.dart';
 import 'assignment_detail_state.dart';
 import 'compliance_dialogs.dart';
+import 'compliance_status_card.dart';
+import 'delivery_timeline.dart';
 import 'driver_compliance_action.dart';
 import 'driver_operational_action.dart';
+import 'dropoff_support_screen.dart';
+import 'failed_return_flow.dart';
+import 'failed_return_flow_screen.dart';
+import 'next_action_panel.dart';
+import 'pickup_support_screen.dart';
 
 class AssignmentDetailScreen extends StatefulWidget {
   const AssignmentDetailScreen({super.key, required this.controller});
@@ -105,13 +115,13 @@ class _AssignmentDetailScreenState extends State<AssignmentDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Assignment')),
-      body: SafeArea(
-        child: ListenableBuilder(
-          listenable: widget.controller,
-          builder: (context, _) => _body(context, widget.controller.state),
-        ),
+    // Dr.1.5.L: align the Active Delivery surface with the brand scaffold used
+    // by the other Dr.1.5 screens (NubeRushScaffold already wraps a SafeArea).
+    return NubeRushScaffold(
+      appBar: AppBar(title: const Text('Active delivery')),
+      body: ListenableBuilder(
+        listenable: widget.controller,
+        builder: (context, _) => _body(context, widget.controller.state),
       ),
     );
   }
@@ -122,7 +132,7 @@ class _AssignmentDetailScreenState extends State<AssignmentDetailScreen> {
       case AssignmentDetailStatus.loading:
         return const Center(
           key: Key('assignment-detail-loading'),
-          child: CircularProgressIndicator(),
+          child: NubeRushLoadingState(),
         );
       case AssignmentDetailStatus.unauthenticated:
         return const _Message(
@@ -165,19 +175,66 @@ class _AssignmentDetailScreenState extends State<AssignmentDetailScreen> {
             deliveryState: deliveryState?.state,
           );
 
-    return ListView(
+    // Eager Column (not a lazy ListView): the Active Delivery Overview adds
+    // several cards above the action groups, and an eager scroll view keeps
+    // every card built so tests/scrolling can always reach the actions below.
+    return SingleChildScrollView(
       key: const Key('assignment-detail-loaded'),
       padding: const EdgeInsets.all(16),
-      children: [
-        // Dr.1.3.I: non-destructive inline action error. The loaded detail
-        // below stays visible; reload re-fetches GET data, dismiss clears it.
-        if (state.actionErrorMessage != null) ...[
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Dr.1.3.I: non-destructive inline action error. The loaded detail
+          // below stays visible; reload re-fetches GET data, dismiss clears it.
+          if (state.actionErrorMessage != null) ...[
           _actionErrorCard(context, state),
           const SizedBox(height: 16),
         ],
-        if (detail != null) _assignmentCard(context, detail),
-        const SizedBox(height: 16),
-        if (deliveryState != null) _deliveryStateCard(context, deliveryState),
+        // Dr.1.5.E: Active Delivery Overview — mission summary, timeline, next
+        // action, and compliance status (all display-only from existing data).
+        if (detail != null) ...[
+          ActiveDeliverySummaryCard(
+            detail: detail,
+            deliveryState: deliveryState,
+          ),
+          const SizedBox(height: 16),
+          // Dr.1.5.F: contextual entry into the dedicated pickup support flow,
+          // shown only while a pickup-stage action (arrive-store / pickup) is
+          // available. It never replaces the action groups below.
+          if (_isPickupStage(actions)) ...[
+            _pickupEntryCard(context),
+            const SizedBox(height: 16),
+          ],
+          // Dr.1.5.G: contextual entry into the dedicated dropoff/compliance
+          // flow, shown during the customer-dropoff stage. It never replaces
+          // the action/compliance groups below.
+          if (_isDropoffStage(detail, actions, complianceActions)) ...[
+            _dropoffEntryCard(context),
+            const SizedBox(height: 16),
+          ],
+          // Dr.1.5.H: contextual entry into the dedicated failed-delivery /
+          // return flow, shown only when fail / return-to-store actions or a
+          // returned/pending state are relevant. It never replaces the
+          // operational/compliance action groups below.
+          if (failedReturnRelevant(
+            compliance: complianceActions,
+            detail: detail,
+            deliveryState: deliveryState,
+          )) ...[
+            _failedReturnEntryCard(context, complianceActions),
+            const SizedBox(height: 16),
+          ],
+          DeliveryTimeline(state: deliveryState?.state),
+          const SizedBox(height: 16),
+          NextActionPanel(
+            operationalActions: actions,
+            complianceActions: complianceActions,
+          ),
+          const SizedBox(height: 16),
+          ComplianceStatusCard(complianceActions: complianceActions),
+        ],
+        // Existing operational/compliance action groups (Dr.1.3.G/.H/.I) are
+        // preserved unchanged — the backend remains the authority.
         if (actions.isNotEmpty) ...[
           const SizedBox(height: 16),
           _actionsCard(context, state, actions),
@@ -191,102 +248,234 @@ class _AssignmentDetailScreenState extends State<AssignmentDetailScreen> {
             deliveryState?.state,
           ),
         ],
-      ],
+        ],
+      ),
     );
   }
 
-  Widget _actionErrorCard(BuildContext context, AssignmentDetailState state) {
-    final scheme = Theme.of(context).colorScheme;
-    // Disable the reload/dismiss controls while another action is running so we
-    // never reload or clear mid-flight.
-    final inFlight = state.isActionInFlight;
-    return Card(
-      key: const Key('assignment-detail-action-error'),
-      color: scheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+  /// True while a store-pickup action (arrive-store / pickup) is available.
+  bool _isPickupStage(List<DriverOperationalAction> actions) =>
+      actions.contains(DriverOperationalAction.arriveStore) ||
+      actions.contains(DriverOperationalAction.pickup);
+
+  /// Contextual entry into the dedicated pickup support flow. Reuses the same
+  /// controller so the pickup surface shares the loaded detail/delivery-state.
+  Widget _pickupEntryCard(BuildContext context) {
+    return NubeRushCard(
+      key: const Key('pickup-support-entry'),
+      onTap: () => _openPickupSupport(context),
+      child: Row(
+        children: [
+          const Icon(Icons.store_mall_directory_outlined,
+              color: NubeRushColors.primary),
+          const SizedBox(width: NubeRushSpacing.md),
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  state.actionErrorIsOffline
-                      ? Icons.wifi_off
-                      : Icons.error_outline,
-                  color: scheme.onErrorContainer,
+                const Text(
+                  'Store pickup',
+                  style: TextStyle(
+                    color: NubeRushColors.textPrimary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    state.actionErrorMessage ?? '',
-                    style: TextStyle(color: scheme.onErrorContainer),
+                const SizedBox(height: 2),
+                const Text(
+                  'Open the guided pickup steps.',
+                  style: TextStyle(
+                    color: NubeRushColors.textSecondary,
+                    fontSize: 13,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+          ),
+          const Icon(Icons.chevron_right, color: NubeRushColors.textSecondary),
+        ],
+      ),
+    );
+  }
+
+  void _openPickupSupport(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PickupSupportScreen(controller: widget.controller),
+      ),
+    );
+  }
+
+  /// True during the customer-dropoff stage: arrive-customer is offered, a
+  /// dropoff compliance step (verify-age / proof / complete / fail) is offered,
+  /// or the delivery is already completed.
+  bool _isDropoffStage(
+    DriverAssignmentDetail? detail,
+    List<DriverOperationalAction> actions,
+    List<DriverComplianceAction> compliance,
+  ) {
+    if (actions.contains(DriverOperationalAction.arriveCustomer)) return true;
+    const dropoff = <DriverComplianceAction>{
+      DriverComplianceAction.verifyAge,
+      DriverComplianceAction.submitProof,
+      DriverComplianceAction.completeDelivery,
+      DriverComplianceAction.reportFailedDelivery,
+    };
+    if (compliance.any(dropoff.contains)) return true;
+    return detail?.status == 'completed';
+  }
+
+  Widget _dropoffEntryCard(BuildContext context) {
+    return NubeRushCard(
+      key: const Key('dropoff-support-entry'),
+      onTap: () => _openDropoffSupport(context),
+      child: Row(
+        children: [
+          const Icon(Icons.handshake_outlined, color: NubeRushColors.primary),
+          const SizedBox(width: NubeRushSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextButton(
-                  key: const Key('action-error-dismiss'),
-                  onPressed: inFlight
-                      ? null
-                      : widget.controller.clearActionError,
-                  child: const Text('Dismiss'),
+                const Text(
+                  'Customer dropoff',
+                  style: TextStyle(
+                    color: NubeRushColors.textPrimary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
                 ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  key: const Key('action-error-reload'),
-                  onPressed: inFlight ? null : () => widget.controller.reload(),
-                  child: const Text('Reload'),
+                const SizedBox(height: 2),
+                const Text(
+                  'Open the guided dropoff & compliance steps.',
+                  style: TextStyle(
+                    color: NubeRushColors.textSecondary,
+                    fontSize: 13,
+                  ),
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+          const Icon(Icons.chevron_right, color: NubeRushColors.textSecondary),
+        ],
       ),
     );
   }
 
-  Widget _assignmentCard(BuildContext context, DriverAssignmentDetail detail) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Assignment', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text('Status: ${detail.status}'),
-            if (detail.store != null) Text('Store: ${detail.store!.name}'),
-            if (detail.order != null)
-              Text('Order status: ${detail.order!.status}'),
-          ],
-        ),
+  void _openDropoffSupport(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DropoffSupportScreen(controller: widget.controller),
       ),
     );
   }
 
-  Widget _deliveryStateCard(
+  /// Contextual entry into the dedicated failed-delivery / return flow. Reuses
+  /// the same controller so the flow shares the loaded detail/delivery-state.
+  Widget _failedReturnEntryCard(
     BuildContext context,
-    DriverDeliveryState deliveryState,
+    List<DriverComplianceAction> complianceActions,
   ) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    final stage = failedReturnStage(
+      compliance: complianceActions,
+      detail: widget.controller.state.detail,
+      deliveryState: widget.controller.state.deliveryState,
+    );
+    final (title, subtitle) = switch (stage) {
+      FailedReturnStage.reportFail => (
+          'Failed delivery',
+          'Report a delivery you can’t complete.',
+        ),
+      FailedReturnStage.returnToStore => (
+          'Return to store',
+          'This order needs to go back to the store.',
+        ),
+      FailedReturnStage.returnPending => (
+          'Return pending',
+          'Awaiting store / NubeRush confirmation.',
+        ),
+      FailedReturnStage.notRelevant => (
+          'Failed delivery / Return',
+          'Open the failed-delivery & return steps.',
+        ),
+    };
+    return NubeRushCard(
+      key: const Key('failed-return-entry'),
+      onTap: () => _openFailedReturn(context),
+      child: Row(
+        children: [
+          const Icon(Icons.assignment_return_outlined,
+              color: NubeRushColors.primary),
+          const SizedBox(width: NubeRushSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: NubeRushColors.textPrimary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: NubeRushColors.textSecondary,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right, color: NubeRushColors.textSecondary),
+        ],
+      ),
+    );
+  }
+
+  void _openFailedReturn(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => FailedReturnFlowScreen(controller: widget.controller),
+      ),
+    );
+  }
+
+  Widget _actionErrorCard(BuildContext context, AssignmentDetailState state) {
+    // Disable the reload/dismiss controls while another action is running so we
+    // never reload or clear mid-flight.
+    final inFlight = state.isActionInFlight;
+    // Dr.1.5.L: use the shared brand inline-error primitive (matches the
+    // dropoff / failed-return surfaces) instead of an ad-hoc Material Card +
+    // colorScheme.errorContainer. Behavior is unchanged: non-destructive, with
+    // a GET-only reload and a dismiss, both disabled while an action runs.
+    return Column(
+      key: const Key('assignment-detail-action-error'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        NubeRushInlineError(message: state.actionErrorMessage ?? ''),
+        const SizedBox(height: NubeRushSpacing.sm),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            Text('Delivery state',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text('State: ${deliveryState.state}'),
+            TextButton(
+              key: const Key('action-error-dismiss'),
+              onPressed:
+                  inFlight ? null : widget.controller.clearActionError,
+              child: const Text('Dismiss'),
+            ),
+            const SizedBox(width: NubeRushSpacing.sm),
+            FilledButton(
+              key: const Key('action-error-reload'),
+              onPressed: inFlight ? null : () => widget.controller.reload(),
+              child: const Text('Reload'),
+            ),
           ],
         ),
-      ),
+      ],
     );
   }
 
@@ -296,33 +485,30 @@ class _AssignmentDetailScreenState extends State<AssignmentDetailScreen> {
     List<DriverOperationalAction> actions,
   ) {
     final inFlight = state.isActionInFlight;
-    return Card(
+    return NubeRushCard(
       key: const Key('assignment-detail-actions'),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Actions', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            for (final action in actions)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: FilledButton(
-                  key: Key('action-${action.id}'),
-                  // Disable every button while any action is in flight.
-                  onPressed: inFlight ? null : () => _onAction(context, action),
-                  child: state.runningAction == action
-                      ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Text(action.label),
-                ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Actions', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: NubeRushSpacing.sm),
+          for (final action in actions)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: NubeRushSpacing.xs),
+              child: FilledButton(
+                key: Key('action-${action.id}'),
+                // Disable every button while any action is in flight.
+                onPressed: inFlight ? null : () => _onAction(context, action),
+                child: state.runningAction == action
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(action.label),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }
@@ -334,18 +520,17 @@ class _AssignmentDetailScreenState extends State<AssignmentDetailScreen> {
     String? deliveryState,
   ) {
     final inFlight = state.isActionInFlight;
-    return Card(
+    return NubeRushCard(
       key: const Key('assignment-detail-compliance'),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text('Compliance', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
+            const SizedBox(height: NubeRushSpacing.sm),
             for (final action in actions)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(vertical: NubeRushSpacing.xs),
                 child: FilledButton.tonal(
                   key: Key('compliance-${action.id}'),
                   onPressed: inFlight
@@ -361,7 +546,6 @@ class _AssignmentDetailScreenState extends State<AssignmentDetailScreen> {
                 ),
               ),
           ],
-        ),
       ),
     );
   }
@@ -381,17 +565,19 @@ class _Message extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Dr.1.5.L: brand-consistent message view (matches the other Dr.1.5
+    // full-screen states — muted icon/spacing tokens).
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(NubeRushSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 48),
-            const SizedBox(height: 16),
+            Icon(icon, size: 48, color: NubeRushColors.textSecondary),
+            const SizedBox(height: NubeRushSpacing.lg),
             Text(message, textAlign: TextAlign.center),
             if (onRetry != null) ...[
-              const SizedBox(height: 16),
+              const SizedBox(height: NubeRushSpacing.lg),
               FilledButton(
                 key: const Key('assignment-detail-retry'),
                 onPressed: () => onRetry!(),

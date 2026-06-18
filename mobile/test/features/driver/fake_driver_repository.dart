@@ -99,6 +99,11 @@ class FakeDriverRepository implements DriverReadRepository {
   /// Operational action calls (Dr.1.3.G): action id -> call count.
   final Map<String, int> actionCalls = <String, int>{};
 
+  /// Per-action assignment ids passed (action id -> ordered ids). Used by
+  /// Dr.1.5.D offer tests to assert an action targeted a specific assignment.
+  final Map<String, List<String>> actionAssignmentIds =
+      <String, List<String>>{};
+
   /// If set, the next matching action throws this error.
   Object? actionError;
 
@@ -122,11 +127,25 @@ class FakeDriverRepository implements DriverReadRepository {
     return eligibility;
   }
 
+  /// Ordered list of `status` filters passed to [fetchAssignments]. A `null`
+  /// entry means the default (no-status) active-assignments list call. Used by
+  /// Dr.1.5.K history tests to assert the exact query sent.
+  final List<String?> assignmentsStatusFilters = <String?>[];
+
+  /// Optional per-status results for history. When a requested status has an
+  /// entry here it is returned; otherwise [assignments] is used.
+  final Map<String, List<DriverAssignmentSummary>> assignmentsByStatus =
+      <String, List<DriverAssignmentSummary>>{};
+
   @override
-  Future<List<DriverAssignmentSummary>> fetchAssignments() async {
+  Future<List<DriverAssignmentSummary>> fetchAssignments({String? status}) async {
     assignmentsCalls++;
+    assignmentsStatusFilters.add(status);
     final err = assignmentsError;
     if (err != null) throw err;
+    if (status != null && assignmentsByStatus.containsKey(status)) {
+      return assignmentsByStatus[status]!;
+    }
     return assignments;
   }
 
@@ -148,8 +167,11 @@ class FakeDriverRepository implements DriverReadRepository {
     return deliveryState;
   }
 
-  Future<void> _recordAction(String id) async {
+  Future<void> _recordAction(String id, [String? assignmentId]) async {
     actionCalls[id] = (actionCalls[id] ?? 0) + 1;
+    if (assignmentId != null) {
+      (actionAssignmentIds[id] ??= <String>[]).add(assignmentId);
+    }
     final gate = actionGate;
     if (gate != null) await gate.future;
     final err = actionError;
@@ -157,11 +179,12 @@ class FakeDriverRepository implements DriverReadRepository {
   }
 
   @override
-  Future<void> acceptAssignment(String assignmentId) => _recordAction('accept');
+  Future<void> acceptAssignment(String assignmentId) =>
+      _recordAction('accept', assignmentId);
 
   @override
   Future<void> declineAssignment(String assignmentId) =>
-      _recordAction('decline');
+      _recordAction('decline', assignmentId);
 
   @override
   Future<void> startAssignment(String assignmentId) => _recordAction('start');

@@ -71,6 +71,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final detailCallsBefore = repo.detailCalls;
+    await tester.ensureVisible(find.byKey(const Key('action-accept')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('action-accept')));
     await tester.pumpAndSettle();
 
@@ -85,6 +87,8 @@ void main() {
     await tester.pumpWidget(app(c));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('action-decline')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('action-decline')));
     await tester.pumpAndSettle();
     // Dialog visible.
@@ -101,6 +105,8 @@ void main() {
     await tester.pumpWidget(app(c));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('action-decline')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('action-decline')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Cancel'));
@@ -117,6 +123,8 @@ void main() {
     await tester.pumpAndSettle();
 
     repo.actionError = const ApiError(status: 409, message: 'Already accepted');
+    await tester.ensureVisible(find.byKey(const Key('action-accept')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('action-accept')));
     await tester.pumpAndSettle();
 
@@ -139,11 +147,15 @@ void main() {
     await tester.pumpAndSettle();
 
     repo.actionError = const ApiError(status: 409, message: 'Already accepted');
+    await tester.ensureVisible(find.byKey(const Key('action-accept')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('action-accept')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('assignment-detail-action-error')),
         findsOneWidget);
 
+    await tester.ensureVisible(find.byKey(const Key('action-error-dismiss')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('action-error-dismiss')));
     await tester.pumpAndSettle();
     expect(
@@ -159,6 +171,8 @@ void main() {
     await tester.pumpAndSettle();
 
     repo.actionError = const ApiError(status: 409, message: 'Already accepted');
+    await tester.ensureVisible(find.byKey(const Key('action-accept')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('action-accept')));
     await tester.pumpAndSettle();
 
@@ -166,6 +180,8 @@ void main() {
     final detailBefore = repo.detailCalls;
     repo.actionError = null;
 
+    await tester.ensureVisible(find.byKey(const Key('action-error-reload')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('action-error-reload')));
     await tester.pumpAndSettle();
 
@@ -184,6 +200,8 @@ void main() {
     await tester.pumpWidget(app(c));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('action-accept')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('action-accept')));
     await tester.pump(); // start the action; gate keeps it in flight
 

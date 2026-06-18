@@ -51,6 +51,30 @@ void main() {
     expect(list.single.id, 'a-1');
   });
 
+  test('fetchAssignments default sends NO status query (Dr.1.5.K)', () async {
+    final h = makeRepo((_) => json({'items': [], 'total': 0}));
+    await h.repo.fetchAssignments();
+    final url = h.captured.single.url;
+    expect(url.toString(), 'https://api.example.com/driver/assignments');
+    expect(url.queryParameters.containsKey('status'), isFalse);
+  });
+
+  test('fetchAssignments(status:) appends ?status=<terminal> (Dr.1.5.K)',
+      () async {
+    final h = makeRepo((_) => json({'items': [], 'total': 0}));
+    await h.repo.fetchAssignments(status: 'completed');
+    final url = h.captured.single.url;
+    expect(url.path, '/driver/assignments');
+    expect(url.queryParameters['status'], 'completed');
+  });
+
+  test('fetchAssignments(status: empty) sends no status query (Dr.1.5.K)',
+      () async {
+    final h = makeRepo((_) => json({'items': [], 'total': 0}));
+    await h.repo.fetchAssignments(status: '');
+    expect(h.captured.single.url.queryParameters.containsKey('status'), isFalse);
+  });
+
   test('fetchAssignmentDetail calls GET /driver/assignments/{id}', () async {
     final h = makeRepo((_) => json({
           'id': 'a-9',
